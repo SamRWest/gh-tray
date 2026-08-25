@@ -1,0 +1,139 @@
+# gh-tray
+
+A system tray icon that watches your GitHub pull requests, tells you when something changes, and opens a terminal
+dashboard when you want the full picture.
+
+The icon carries a count of changes you have not seen yet. Hovering shows a short status summary. Double-clicking opens
+[gh-dash](https://github.com/dlvhdr/gh-dash). Right-clicking reaches the recent changes, the review queue, the
+login-start switch and the settings window.
+
+## What counts as a change
+
+Only transitions raise a notification, never standing state. A pull request that was already failing when the last poll
+ran is not reported again, so a large backlog of red pull requests does not become a wall of notifications.
+
+| Change            | Meaning                                          | Notified by default |
+| ----------------- | ------------------------------------------------ | ------------------- |
+| Review requested  | A pull request joined your review queue          | yes                 |
+| Checks broke      | One of yours went from passing to failing        | yes                 |
+| Changes requested | A reviewer asked for changes on one of yours     | yes                 |
+| Mentioned         | Someone mentioned you or a team you belong to    | yes                 |
+| Ready to merge    | Approved, passing, conflict free and not a draft | yes                 |
+| Conflict appeared | A pull request now needs a rebase                | no                  |
+| New comment       | The comment count went up                        | no                  |
+
+The icon is red when an unread change is blocking someone or something of yours is broken, amber for anything else
+unread, green when there is nothing to look at, and grey when the last poll failed.
+
+Notifications are collapsed into one per poll. Clicking a notification about a single change opens that pull request;
+clicking one that covers several opens the dashboard instead.
+
+## Requirements
+
+- [GitHub CLI](https://cli.github.com/) (`gh`), signed in
+- `bash` and `jq`, which the collector script uses. On Windows both ship with Git for Windows
+- [uv](https://docs.astral.sh/uv/), which fetches Python and the dependencies
+- [gh-dash](https://github.com/dlvhdr/gh-dash) for the dashboard: `gh extension install dlvhdr/gh-dash`
+
+## Running it
+
+Install the dependencies once:
+
+```bash
+uv sync
+```
+
+Start the tray:
+
+```bash
+uv run gh-tray
+```
+
+Poll once and print the result, without the tray. This is the quickest way to check the collector and the sign-in:
+
+```bash
+uv run gh-tray once
+```
+
+Open the settings window on its own:
+
+```bash
+uv run gh-tray settings
+```
+
+Only one tray can run at a time. A second one exits immediately rather than polling twice and raising duplicate
+notifications.
+
+## Starting at login
+
+Turn on **Start at login** in the tray menu, or **Start automatically at login** in the settings window. This writes a
+small launcher for your platform: a hidden-window script in the Startup folder on Windows, a desktop entry under
+`~/.config/autostart` on Linux, and a launch agent under `~/Library/LaunchAgents` on macOS. Turning it off removes the
+file.
+
+## Settings
+
+The settings window covers the poll interval, which organisations to sweep for newly opened pull requests, how old a
+pull request has to be before it is ignored, which changes raise a notification, whether to start at login, and the
+paths to the collector, `bash` and the dashboard command. Every path field may be left blank, in which case the
+application works it out at runtime.
+
+The organisation list is filled in from your account's memberships the first time the application runs, and the **Detect
+organisations** button refills it later.
+
+Settings are re-read on every poll, so a change takes effect without restarting the tray.
+
+## Where things are kept
+
+Settings and history live in the platform's standard application data directory, which
+[platformdirs](https://pypi.org/project/platformdirs/) resolves: `%LOCALAPPDATA%\gh-tray` on Windows,
+`~/.local/share/gh-tray` on Linux, `~/Library/Application Support/gh-tray` on macOS.
+
+| File             | Contents                                                        |
+| ---------------- | --------------------------------------------------------------- |
+| `config.json`    | Settings, written by the settings window                        |
+| `state.json`     | The collector's own baseline                                    |
+| `snapshot.json`  | Last poll's pull request fields, used to detect the next change |
+| `events.jsonl`   | Every change detected, kept until you have seen it              |
+| `seen.json`      | When you last looked, which is what clears the unread count     |
+| `gh-tray.log`    | Rotating diagnostics                                            |
+| `last_error.log` | Everything the collector wrote when it last failed              |
+
+Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
+against the last time you opened the dashboard or chose **Mark all seen**, so nothing is lost between the moment a
+change lands and the moment you read it.
+
+## How the code is arranged
+
+| Module               | Responsibility                                                            |
+| -------------------- | ------------------------------------------------------------------------- |
+| `config.py`          | Settings, defaults, repair of hand-edited files, data locations           |
+| `environment.py`     | Everything platform-specific: bash, terminals, login start, instance lock |
+| `collector.py`       | Running the collector script and reading its output                       |
+| `events.py`          | Detecting changes between polls, and the event history                    |
+| `service.py`         | One polling cycle: collect, diff, record, summarise                       |
+| `status.py`          | Turning a poll result into a colour, a count and hover text               |
+| `notifier.py`        | Desktop notifications and their click actions                             |
+| `tray.py`            | The icon, its menu, and the polling timer                                 |
+| `settings_window.py` | The settings window                                                       |
+
+Notifications run on a long-lived event loop of their own. The platform backend calls back into the sending loop when a
+notification is clicked, which can happen long after the send returns, so a loop closed straight after sending would
+raise on that callback and no click could ever be handled.
+
+## The collector
+
+`src/gh_tray/data/digest.sh` gathers everything in one pass and prints a single JSON document: your open pull requests,
+the ones awaiting your review, newly opened pull requests across your organisations, mentions, and check status
+transitions. It runs against a baseline file passed as its first argument, so several callers can poll on their own
+schedules without consuming each other's changes.
+
+## Development
+
+```bash
+uv run pytest
+```
+
+```bash
+uv run ruff check .
+```

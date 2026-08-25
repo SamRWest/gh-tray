@@ -1,0 +1,46 @@
+[project]
+name = "gh-tray"
+version = "0.1.0"
+description = "System tray watcher for GitHub pull request activity, with desktop notifications and a terminal dashboard"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "cyclopts>=3.0",
+    "desktop-notifier>=6.0",
+    "loguru>=0.7",
+    "pillow>=10.1",
+    "platformdirs>=4.2",
+    "pystray>=0.19.5",
+]
+
+[project.scripts]
+gh-tray = "gh_tray.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gh_tray"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D103"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
