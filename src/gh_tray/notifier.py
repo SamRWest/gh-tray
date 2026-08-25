@@ -30,20 +30,27 @@ class Notifier:
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._backend = None
+        self._stopped = False
 
-    def _ready(self):
+    def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, object]:
         """Return the running loop and backend, starting them on first use.
 
-        :return: the event loop and the desktop notifier bound to it
+        Both are read inside the lock and returned as locals, so a concurrent stop cannot leave the caller holding a
+        half-torn-down pair. Once stopped, nothing is started again: a notification after shutdown would otherwise
+        raise a fresh loop and thread that nobody would ever stop.
+
+        :return: the event loop and the desktop notifier bound to it, or a pair of None once stopped
         """
         from desktop_notifier import DesktopNotifier
 
         with self._lock:
+            if self._stopped:
+                return None, None
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
                 threading.Thread(target=self._loop.run_forever, daemon=True, name=f"{self.app_name}-notify").start()
                 self._backend = DesktopNotifier(app_name=self.app_name)
-        return self._loop, self._backend
+            return self._loop, self._backend
 
     def wanted(self, events: list[dict], toast_settings: dict) -> list[dict]:
         """Return the events the user has enabled a notification for.
@@ -87,6 +94,9 @@ class Notifier:
                 on_many()
 
         loop, backend = self._ready()
+        if loop is None or backend is None:
+            logger.debug("not notifying, the notifier has been stopped")
+            return False
         try:
             asyncio.run_coroutine_threadsafe(
                 backend.send(title=title, message=body, on_clicked=clicked),
@@ -99,8 +109,10 @@ class Notifier:
         return True
 
     def stop(self) -> None:
-        """Stop the notification loop, if one was started."""
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
-            self._loop = None
-            self._backend = None
+        """Stop the notification loop, if one was started, and refuse to start another."""
+        with self._lock:
+            self._stopped = True
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+                self._loop = None
+                self._backend = None

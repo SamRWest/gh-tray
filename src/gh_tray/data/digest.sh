@@ -29,6 +29,13 @@ mkdir -p "$(dirname "$STATE_FILE")"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# GNU and BSD date take different arguments for relative times, and macOS ships the BSD one, so both are tried.
+days_ago() {
+  local days="$1"
+  date -u -d "$days days ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -v"-${days}d" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
+}
+
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PREV_CI='{}'
 SINCE=''
@@ -40,8 +47,12 @@ fi
 # No prior run means no baseline, so fall back to a one-day window.
 FIRST_RUN=false
 if [[ -z "$SINCE" ]]; then
-  SINCE="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+  SINCE="$(days_ago 1)"
   FIRST_RUN=true
+fi
+if [[ -z "$SINCE" ]]; then
+  echo '{"error":"neither GNU nor BSD date accepted a relative time, so the reporting window cannot be worked out"}'
+  exit 1
 fi
 
 # Fetching check-rollup state alongside a search is expensive enough that GitHub intermittently returns HTTP 502,
@@ -111,7 +122,11 @@ PRS="$(jq -c --argjson a "$(normalise_prs <<<"$AUTHORED_RAW")" \
 # earlier still; filtering on creation as well would only discard old branches that are still being worked on.
 STALE='{"maxAgeDays": 0, "hiddenAuthored": 0, "hiddenReviewing": 0}'
 if [[ "$MAX_AGE_DAYS" != "0" ]]; then
-  CUTOFF="$(date -u -d "$MAX_AGE_DAYS days ago" +%Y-%m-%dT%H:%M:%SZ)"
+  CUTOFF="$(days_ago "$MAX_AGE_DAYS")"
+  if [[ -z "$CUTOFF" ]]; then
+    echo '{"error":"neither GNU nor BSD date accepted a relative time, so the age cutoff cannot be worked out"}'
+    exit 1
+  fi
   STALE="$(jq -c --arg cutoff "$CUTOFF" --argjson days "$MAX_AGE_DAYS" '{
     maxAgeDays: $days,
     hiddenAuthored: ([.authored[] | select(.updatedAt < $cutoff)] | length),

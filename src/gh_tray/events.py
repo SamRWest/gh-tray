@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from loguru import logger
 
 from .config import EVENTS_PATH, SEEN_PATH
+from .storage import read_json, write_json_atomic, write_text_atomic
 
 # Each rule names the change it detects, the wording used in menus and notifications, and whether it should turn the
 # icon red rather than amber. Red means someone is blocked, or something the user owns is broken.
@@ -44,10 +45,19 @@ SNAPSHOT_DEFAULTS: dict = {
     "isDraft": False,
 }
 SNAPSHOT_FIELDS = tuple(SNAPSHOT_DEFAULTS)
-EVENT_HISTORY_LIMIT = 500
 
 # Microsecond precision, so a change detected in the same second as a manual refresh still sorts after it.
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+# How many polls a pull request may be missing from the collector's results before it is treated as gone. The
+# collector's GitHub queries fail and truncate intermittently, and without this a pull request that blinks out of
+# one result would be reported as newly arrived when it came back.
+ABSENCE_GRACE_POLLS = 3
+
+# The event log is trimmed to the tail whenever the user marks everything seen, and capped regardless so that never
+# looking cannot grow the file without limit.
+EVENT_TAIL_KEPT = 200
+EVENT_HARD_LIMIT = 2000
 
 
 def label_for(kind: str) -> str:
@@ -69,19 +79,73 @@ def utc_now() -> str:
     return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
 
+def moment(stamp: str) -> datetime:
+    """Parse a stored timestamp into a comparable moment.
+
+    Timestamps are compared as moments rather than as text because text comparison is only sound while every stamp
+    shares one format, and a stamp written by an older version would otherwise sort the wrong way round.
+
+    :param stamp: a timestamp as written into the event log or the seen marker
+    :return: the moment it names, or the earliest representable moment when it cannot be read
+    """
+    try:
+        return datetime.strptime(stamp, TIMESTAMP_FORMAT).replace(tzinfo=UTC)
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("could not read the timestamp {}, treating it as the distant past", stamp)
+        return datetime.min.replace(tzinfo=UTC)
+
+
+def snapshot_key(side: str, key: str) -> str:
+    """Return the snapshot key for one pull request on one side of the digest.
+
+    The side is part of the key because the same pull request can appear both as the user's own and as one awaiting
+    their review, and collapsing the two would discard whichever arrived first along with its change history.
+
+    :param side: ``authored`` or ``reviewing``
+    :param key: the collector's own key, being repository and number
+    """
+    return f"{side}:{key}"
+
+
 def snapshot_of(digest: dict) -> dict:
     """Reduce a digest to the per-pull-request fields worth diffing on the next poll.
 
     :param digest: a full collector result
-    :return: pull requests keyed by repository and number
+    :return: pull requests keyed by side, repository and number
     """
     snapshot = {}
     for side in ("authored", "reviewing"):
         for pull_request in digest.get(side, []):
             record = {field: default if pull_request.get(field) is None else pull_request[field] for field, default in SNAPSHOT_DEFAULTS.items()}
             record["side"] = side
-            snapshot[pull_request["key"]] = record
+            record["absent_polls"] = 0
+            snapshot[snapshot_key(side, pull_request["key"])] = record
     return snapshot
+
+
+def carry_forward(previous: dict, current: dict, grace: int = ABSENCE_GRACE_POLLS) -> dict:
+    """Return the snapshot to store, keeping recently vanished pull requests for a few polls.
+
+    A pull request missing from one collector result is usually a transient GitHub failure rather than a merge, so
+    its record is held briefly. Without this it would be reported as newly arrived the moment it came back.
+
+    :param previous: the snapshot stored by the last poll
+    :param current: the snapshot just built from a fresh result
+    :param grace: how many consecutive polls a pull request may be missing before it is dropped
+    :return: the merged snapshot
+    """
+    merged = dict(current)
+    for key, record in previous.items():
+        if key in current:
+            continue
+        absent = record.get("absent_polls", 0) + 1
+        if absent <= grace:
+            merged[key] = {**record, "absent_polls": absent}
+    return merged
 
 
 def mergeable_now(pull_request: dict) -> bool:
@@ -121,8 +185,6 @@ def detect_pull_request_events(previous: dict, current: dict, at: str) -> list[d
             if pull_request["side"] == "reviewing":
                 events.append(_event("review_requested", pull_request, "added to your review queue", at))
             continue
-        if pull_request["side"] == "reviewing" and was.get("side") != "reviewing":
-            events.append(_event("review_requested", pull_request, "added to your review queue", at))
         if pull_request["side"] == "authored":
             if pull_request["ci"] in BROKEN_CI and was.get("ci") not in BROKEN_CI:
                 events.append(_event("ci_broken", pull_request, f"{str(was.get('ci', '')).lower()} to {pull_request['ci'].lower()}", at))
@@ -176,15 +238,19 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
     return detect_pull_request_events(previous, current, at) + detect_mention_events(digest, seen_urls or set(), at)
 
 
-def read_events(limit: int = EVENT_HISTORY_LIMIT) -> list[dict]:
-    """Return the most recent events from the log, oldest first.
+def read_events(limit: int | None = None) -> list[dict]:
+    """Return events from the log, oldest first.
 
-    :param limit: how many trailing entries to read
+    The whole log is read by default, because the unread count must cover everything the user has not seen and the
+    log is kept small by trimming rather than by reading only part of it.
+
+    :param limit: when given, read only this many trailing entries
     """
     if not EVENTS_PATH.exists():
         return []
+    lines = EVENTS_PATH.read_text(encoding="utf-8").splitlines()
     events = []
-    for line in EVENTS_PATH.read_text(encoding="utf-8").splitlines()[-limit:]:
+    for line in lines[-limit:] if limit else lines:
         if not line.strip():
             continue
         try:
@@ -192,6 +258,20 @@ def read_events(limit: int = EVENT_HISTORY_LIMIT) -> list[dict]:
         except json.JSONDecodeError:
             logger.warning("skipping an unreadable line in the event log")
     return events
+
+
+def trim_events(keep: int) -> None:
+    """Shorten the event log to its most recent entries.
+
+    :param keep: how many entries to leave behind
+    """
+    if not EVENTS_PATH.exists():
+        return
+    lines = [line for line in EVENTS_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(lines) <= keep:
+        return
+    write_text_atomic(EVENTS_PATH, "\n".join(lines[-keep:]) + "\n")
+    logger.info("trimmed the event log from {} to {} entries", len(lines), keep)
 
 
 def mention_urls(events: list[dict]) -> set[str]:
@@ -207,30 +287,30 @@ def append_events(events: list[dict]) -> None:
     with EVENTS_PATH.open("a", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event) + "\n")
+    trim_events(EVENT_HARD_LIMIT)
 
 
 def last_seen() -> str:
     """Return the timestamp at which the user last looked, or an empty string if they never have."""
-    if not SEEN_PATH.exists():
-        return ""
-    try:
-        return json.loads(SEEN_PATH.read_text(encoding="utf-8")).get("lastSeenAt", "")
-    except json.JSONDecodeError:
-        return ""
+    stored, _damaged = read_json(SEEN_PATH)
+    return stored.get("lastSeenAt", "") if isinstance(stored, dict) else ""
 
 
 def mark_seen() -> None:
-    """Record that the user has looked, clearing the unread count without discarding the event history."""
-    SEEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SEEN_PATH.write_text(json.dumps({"lastSeenAt": utc_now()}) + "\n", encoding="utf-8")
+    """Record that the user has looked, and shorten the log now that nothing in it is unread."""
+    write_json_atomic(SEEN_PATH, {"lastSeenAt": utc_now()})
+    trim_events(EVENT_TAIL_KEPT)
 
 
 def unread_events() -> list[dict]:
     """Return the events that have arrived since the user last looked, newest first."""
     since = last_seen()
-    return [event for event in reversed(read_events()) if event["at"] > since]
+    if not since:
+        return list(reversed(read_events()))
+    marker = moment(since)
+    return [event for event in reversed(read_events()) if moment(event["at"]) > marker]
 
 
 def recent_events(count: int = 10) -> list[dict]:
     """Return the newest events regardless of whether they have been seen."""
-    return list(reversed(read_events()))[:count]
+    return list(reversed(read_events(limit=count)))

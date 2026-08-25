@@ -6,7 +6,7 @@ is written into the code.
 
 from __future__ import annotations
 
-import json
+import copy
 from pathlib import Path
 
 from loguru import logger
@@ -14,6 +14,7 @@ from platformdirs import user_data_path
 
 from . import APP_NAME
 from .environment import detect_orgs
+from .storage import read_json, write_json_atomic
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 BUNDLED_COLLECTOR = PACKAGE_ROOT / "data" / "digest.sh"
@@ -70,24 +71,44 @@ def normalise(config: dict) -> dict:
     return config
 
 
+def merge_stored(config: dict, stored: object) -> dict:
+    """Fold a settings document read from disk into the defaults, ignoring anything of the wrong shape.
+
+    A settings file is hand-editable, so it can hold valid JSON that is nonetheless the wrong type. Every such value
+    is dropped with a warning rather than raised, because the settings window is the way to repair the file and a
+    settings error that stops the application starting also stops that window opening.
+
+    :param config: the defaults, modified in place
+    :param stored: whatever was parsed out of the settings file
+    :return: the merged settings
+    """
+    if not isinstance(stored, dict):
+        logger.error("settings file does not hold a set of settings, falling back to defaults")
+        return config
+    for key, value in stored.items():
+        if key == "toasts" or key not in config:
+            continue
+        config[key] = value
+    toasts = stored.get("toasts")
+    if isinstance(toasts, dict):
+        config["toasts"].update(toasts)
+    elif toasts is not None:
+        logger.warning("the notification settings are not a set of switches, falling back to defaults")
+    return config
+
+
 def load_config() -> dict:
-    """Return the stored settings, filling in any key the settings file does not carry."""
-    config = json.loads(json.dumps(DEFAULT_CONFIG))
-    if CONFIG_PATH.exists():
-        try:
-            stored = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            logger.error("settings file is not readable JSON, falling back to defaults: {}", CONFIG_PATH)
-            return normalise(config)
-        config.update({key: value for key, value in stored.items() if key != "toasts"})
-        config["toasts"].update(stored.get("toasts", {}))
+    """Return the stored settings, filling in any key the settings file does not carry or carries wrongly."""
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    stored, _damaged = read_json(CONFIG_PATH)
+    if stored is not None:
+        config = merge_stored(config, stored)
     return normalise(config)
 
 
 def save_config(config: dict) -> None:
     """Write settings back to disk, creating the application directory if needed."""
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(normalise(config), indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(CONFIG_PATH, normalise(config), indent=2)
 
 
 def collector_path(config: dict) -> Path:

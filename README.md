@@ -61,8 +61,9 @@ Open the settings window on its own:
 uv run gh-tray settings
 ```
 
-Only one tray can run at a time. A second one exits immediately rather than polling twice and raising duplicate
-notifications.
+Only one of these can poll at a time. A second tray, or `once` while the tray is running, exits immediately rather than
+polling twice. Both would compare against the same stored starting point, so whichever ran first would consume the
+changes and the other would never report them. Use the tray's **Refresh now** entry instead.
 
 ## Starting at login
 
@@ -89,25 +90,33 @@ Settings and history live in the platform's standard application data directory,
 [platformdirs](https://pypi.org/project/platformdirs/) resolves: `%LOCALAPPDATA%\gh-tray` on Windows,
 `~/.local/share/gh-tray` on Linux, `~/Library/Application Support/gh-tray` on macOS.
 
-| File             | Contents                                                        |
-| ---------------- | --------------------------------------------------------------- |
-| `config.json`    | Settings, written by the settings window                        |
-| `state.json`     | The collector's own baseline                                    |
-| `snapshot.json`  | Last poll's pull request fields, used to detect the next change |
-| `events.jsonl`   | Every change detected, kept until you have seen it              |
-| `seen.json`      | When you last looked, which is what clears the unread count     |
-| `gh-tray.log`    | Rotating diagnostics                                            |
-| `last_error.log` | Everything the collector wrote when it last failed              |
+| File             | Contents                                                                    |
+| ---------------- | --------------------------------------------------------------------------- |
+| `config.json`    | Settings, written by the settings window                                    |
+| `state.json`     | The collector's own baseline                                                |
+| `snapshot.json`  | Last poll's pull request fields, used to detect the next change             |
+| `events.jsonl`   | Changes detected, kept until you have seen them and trimmed to a tail after |
+| `seen.json`      | When you last looked, which is what clears the unread count                 |
+| `latest.json`    | The last full collector result, written by the collector itself             |
+| `summary.json`   | A compact tally of that result, written by the collector itself             |
+| `gh-tray.log`    | Rotating diagnostics                                                        |
+| `last_error.log` | Everything written when the last collection failed                          |
+| `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
 against the last time you opened the dashboard or chose **Mark all seen**, so nothing is lost between the moment a
 change lands and the moment you read it.
+
+Every state file is written to a temporary file and then moved into place. A process stopped part way through a plain
+write would leave a truncated file, and a truncated state file is worse than a missing one: it reads as valid but
+incomplete, so the change history it describes would be silently wrong.
 
 ## How the code is arranged
 
 | Module               | Responsibility                                                            |
 | -------------------- | ------------------------------------------------------------------------- |
 | `config.py`          | Settings, defaults, repair of hand-edited files, data locations           |
+| `storage.py`         | Reading state files, and writing them so a reader never sees half a file  |
 | `environment.py`     | Everything platform-specific: bash, terminals, login start, instance lock |
 | `collector.py`       | Running the collector script and reading its output                       |
 | `events.py`          | Detecting changes between polls, and the event history                    |
@@ -125,8 +134,12 @@ raise on that callback and no click could ever be handled.
 
 `src/gh_tray/data/digest.sh` gathers everything in one pass and prints a single JSON document: your open pull requests,
 the ones awaiting your review, newly opened pull requests across your organisations, mentions, and check status
-transitions. It runs against a baseline file passed as its first argument, so several callers can poll on their own
-schedules without consuming each other's changes.
+transitions. It takes its baseline file as an argument, so it can be pointed at a different one to run without
+disturbing this application's.
+
+Its GitHub queries fail and truncate intermittently, which is why a pull request missing from a single result is held
+for a few polls before being treated as gone: without that, one transient failure would report everything that came back
+as newly arrived.
 
 ## Development
 

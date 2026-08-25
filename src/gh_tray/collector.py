@@ -14,6 +14,7 @@ from loguru import logger
 
 from .config import APP_DIR, ERROR_LOG_PATH, STATE_PATH, collector_path
 from .environment import find_bash, hidden_window_flags
+from .storage import write_text_atomic
 
 COLLECTOR_TIMEOUT_SECONDS = 180
 
@@ -33,6 +34,21 @@ def describe_failure(stderr: str) -> str:
     return described[:120]
 
 
+def record_failure(description: str, detail: str = "") -> tuple[None, str]:
+    """Log a failed collection and keep the full detail for diagnosis.
+
+    The record is written on every failure, including those detected before the collector runs, so it can never be
+    mistaken for a stale record of some earlier and unrelated problem.
+
+    :param description: the single line shown to the user
+    :param detail: everything worth keeping, defaulting to the description itself
+    :return: the failure in the shape :func:`run_digest` returns
+    """
+    logger.error("collection failed: {}", description)
+    write_text_atomic(ERROR_LOG_PATH, detail or description)
+    return None, description[:120]
+
+
 def run_digest(config: dict) -> tuple[dict | None, str]:
     """Run the collector and return its digest.
 
@@ -41,29 +57,27 @@ def run_digest(config: dict) -> tuple[dict | None, str]:
     """
     bash = find_bash(config.get("bash_path", ""))
     if not bash:
-        return None, "bash not found - set its path in Settings"
+        return record_failure("bash not found - set its path in Settings")
     script = collector_path(config)
     if not script.exists():
-        return None, f"collector missing: {script.name}"
+        return record_failure(f"collector missing: {script.name}", f"no collector script at {script}")
     APP_DIR.mkdir(parents=True, exist_ok=True)
     command = [bash, str(script), str(STATE_PATH), config["orgs"], str(config["max_age_days"])]
     try:
         done = subprocess.run(command, capture_output=True, text=True, timeout=COLLECTOR_TIMEOUT_SECONDS, check=False, **hidden_window_flags())
     except subprocess.TimeoutExpired:
-        logger.error("collector timed out after {}s", COLLECTOR_TIMEOUT_SECONDS)
-        return None, f"collector timed out after {COLLECTOR_TIMEOUT_SECONDS}s"
+        return record_failure(f"collector timed out after {COLLECTOR_TIMEOUT_SECONDS}s")
+    except OSError as error:
+        return record_failure(f"could not run the collector: {error.strerror or error}", str(error))
     if done.returncode != 0:
-        # GitHub queries fail transiently, so the whole error is kept for diagnosis while the caller shows one line.
-        ERROR_LOG_PATH.write_text(done.stderr, encoding="utf-8")
-        described = describe_failure(done.stderr)
-        logger.error("collector exited {}: {}", done.returncode, described)
-        return None, described
+        # GitHub queries fail transiently, so the whole error is kept while the caller shows one line.
+        return record_failure(describe_failure(done.stderr), done.stderr)
     try:
         digest = json.loads(done.stdout)
     except json.JSONDecodeError:
-        ERROR_LOG_PATH.write_text(done.stdout, encoding="utf-8")
-        logger.error("collector output was not readable JSON")
-        return None, "collector returned unreadable output"
+        return record_failure("collector returned unreadable output", done.stdout)
+    if not isinstance(digest, dict):
+        return record_failure("collector returned unreadable output", done.stdout)
     if "error" in digest:
-        return None, str(digest["error"])[:120]
+        return record_failure(str(digest["error"]), done.stdout)
     return digest, ""

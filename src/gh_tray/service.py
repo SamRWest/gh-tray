@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 
 from loguru import logger
@@ -11,6 +10,7 @@ from .collector import run_digest
 from .config import SNAPSHOT_PATH
 from .events import (
     append_events,
+    carry_forward,
     detect_events,
     mark_seen,
     mention_urls,
@@ -19,6 +19,11 @@ from .events import (
     unread_events,
 )
 from .status import Status, status_from
+from .storage import read_json, write_json_atomic
+
+# Bumped whenever the snapshot's shape changes. A snapshot written by an older version cannot be compared against,
+# so it is replaced without reporting the whole of it as new.
+SNAPSHOT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -31,21 +36,27 @@ class PollResult:
     first_run: bool = False
 
 
-def read_snapshot() -> dict | None:
-    """Return the snapshot written by the previous poll, or None when there has not been one."""
-    if not SNAPSHOT_PATH.exists():
-        return None
-    try:
-        return json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.warning("previous snapshot was unreadable, treating this poll as a fresh baseline")
-        return None
+def read_snapshot() -> tuple[dict | None, bool]:
+    """Return the snapshot written by the previous poll.
+
+    A missing snapshot and an unusable one are reported separately, because only the first is a genuine fresh start.
+    Treating a damaged file as a fresh start would mark every unread change as seen.
+
+    :return: the stored entries, and whether a snapshot existed but could not be used
+    """
+    stored, damaged = read_json(SNAPSHOT_PATH)
+    if stored is None:
+        return None, damaged
+    if not isinstance(stored, dict) or stored.get("version") != SNAPSHOT_VERSION:
+        logger.warning("the stored snapshot is not one this version can compare against, starting a new baseline")
+        return None, True
+    entries = stored.get("entries")
+    return (entries, False) if isinstance(entries, dict) else (None, True)
 
 
 def write_snapshot(snapshot: dict) -> None:
     """Write the snapshot this poll will be compared against next time."""
-    SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT_PATH.write_text(json.dumps(snapshot), encoding="utf-8")
+    write_json_atomic(SNAPSHOT_PATH, {"version": SNAPSHOT_VERSION, "entries": snapshot})
 
 
 def poll(config: dict) -> PollResult:
@@ -61,14 +72,17 @@ def poll(config: dict) -> PollResult:
         return PollResult(status=status_from({}, unread_events(), error), error=error)
 
     current = snapshot_of(digest)
-    previous = read_snapshot()
-    first_run = previous is None
-    events = [] if first_run else detect_events(previous, current, digest, mention_urls(read_events()))
+    previous, damaged = read_snapshot()
+    baseline_only = previous is None
+    events = [] if baseline_only else detect_events(previous, current, digest, mention_urls(read_events()))
     append_events(events)
-    write_snapshot(current)
-    if first_run:
+    write_snapshot(carry_forward(previous or {}, current))
+    if baseline_only and not damaged:
+        # A genuine first run has no history, so there is nothing the user could already have missed.
         mark_seen()
         logger.info("baseline established from {} pull request(s)", len(current))
+    elif baseline_only:
+        logger.warning("re-established the baseline from {} pull request(s), keeping the unread count", len(current))
     elif events:
         logger.info("detected {} change(s)", len(events))
-    return PollResult(status=status_from(digest, unread_events()), events=events, first_run=first_run)
+    return PollResult(status=status_from(digest, unread_events()), events=events, first_run=baseline_only and not damaged)

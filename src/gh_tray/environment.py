@@ -6,6 +6,7 @@ look when behaviour differs between Windows, macOS and Linux.
 
 from __future__ import annotations
 
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -37,11 +38,16 @@ def github_cli() -> str | None:
 def find_bash(configured: str = "") -> str | None:
     """Locate a bash interpreter.
 
-    :param configured: an explicit path from the settings, used unchanged when given
+    A configured path that does not exist is rejected rather than passed on, so a mistyped setting is reported as a
+    missing interpreter instead of surfacing later as an operating system error from the collector.
+
+    :param configured: an explicit path from the settings, preferred when it points at something real
     :return: a path to bash, or None when none can be found
     """
     if configured:
-        return configured
+        if Path(configured).expanduser().exists():
+            return str(Path(configured).expanduser())
+        logger.warning("the configured bash path does not exist, falling back to discovery: {}", configured)
     found = shutil.which("bash")
     if found:
         return found
@@ -139,27 +145,58 @@ def autostart_enabled() -> bool:
     return autostart_path().exists()
 
 
-def _autostart_body(command: list[str]) -> str:
+def desktop_entry_exec(command: list[str]) -> str:
+    """Quote an argument vector for the ``Exec`` line of a desktop entry.
+
+    An unquoted path containing a space is read as two arguments, which makes the entry fail silently at login.
+
+    :param command: the argument vector that starts the tray
+    :return: the value for ``Exec=``
+    """
+    quoted = []
+    for part in command:
+        if any(character in part for character in ' \t"\\$`'):
+            escaped = part
+            for character in ("\\", '"', "$", "`"):
+                escaped = escaped.replace(character, f"\\{character}")
+            quoted.append(f'"{escaped}"')
+        else:
+            quoted.append(part)
+    return " ".join(quoted)
+
+
+def autostart_body(command: list[str]) -> str:
     """Return the contents of the login-start file for this platform.
 
     :param command: the argument vector that starts the tray
     """
     if sys.platform == "win32":
+        # A script is used rather than a shortcut because it can run the command with its window hidden. Doubling
+        # each quote is the VBScript escape, so a path containing spaces survives into the command line quoted.
         quoted = " ".join(f'""{part}""' if " " in part else part for part in command)
-        # A VBS launcher is used rather than a shortcut because it can run the command with the window hidden.
         return f'CreateObject("WScript.Shell").Run "{quoted}", 0, False\n'
     if sys.platform == "darwin":
-        arguments = "".join(f"    <string>{part}</string>\n" for part in command)
-        return (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<plist version="1.0">\n<dict>\n'
-            f"  <key>Label</key><string>com.{APP_NAME}</string>\n"
-            f"  <key>ProgramArguments</key>\n  <array>\n{arguments}  </array>\n"
-            "  <key>RunAtLoad</key><true/>\n"
-            "</dict>\n</plist>\n"
-        )
-    joined = " ".join(command)
-    return f"[Desktop Entry]\nType=Application\nName={APP_NAME}\nExec={joined}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+        # Built by the standard library rather than by hand, so a path containing an ampersand cannot produce XML
+        # that launchd silently refuses to load.
+        plist = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
+        return plistlib.dumps(plist).decode("utf-8")
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={APP_NAME}\n"
+        f"Exec={desktop_entry_exec(command)}\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+
+
+def autostart_encoding() -> str:
+    """Return the encoding the login-start file must use on this platform.
+
+    Windows Script Host reads a script as the system codepage unless it finds a byte order mark, so a path holding
+    any non-ASCII character would otherwise be mangled and the entry would fail at login.
+    """
+    return "utf-16" if sys.platform == "win32" else "utf-8"
 
 
 def set_autostart(enabled: bool) -> None:
@@ -173,7 +210,7 @@ def set_autostart(enabled: bool) -> None:
         logger.info("login start removed")
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(_autostart_body(launch_command()), encoding="utf-8")
+    target.write_text(autostart_body(launch_command()), encoding=autostart_encoding())
     logger.info("login start written to {}", target)
 
 

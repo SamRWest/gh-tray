@@ -98,10 +98,6 @@ def test_a_pull_request_new_to_the_authored_list_is_not_reported():
     assert detect(None, pull_request(side="authored")) == []
 
 
-def test_moving_from_authored_to_reviewing_is_reported():
-    assert detect(pull_request(side="authored"), pull_request(side="reviewing")) == ["review_requested"]
-
-
 def test_several_changes_at_once_are_all_reported():
     kinds = detect(pull_request(), pull_request(ci="FAILURE", mergeable="CONFLICTING", comments=1))
     assert sorted(kinds) == ["ci_broken", "conflict", "new_comment"]
@@ -113,16 +109,16 @@ def test_snapshot_keeps_the_fields_the_rules_read():
         "reviewing": [{"key": "acme/gadget#1", **pull_request(repo="acme/gadget", number=1)}],
     }
     snapshot = events.snapshot_of(digest)
-    assert set(snapshot) == {"acme/widget#7", "acme/gadget#1"}
-    assert snapshot["acme/widget#7"]["side"] == "authored"
-    assert snapshot["acme/gadget#1"]["side"] == "reviewing"
+    assert set(snapshot) == {"authored:acme/widget#7", "reviewing:acme/gadget#1"}
+    assert snapshot["authored:acme/widget#7"]["side"] == "authored"
+    assert snapshot["reviewing:acme/gadget#1"]["side"] == "reviewing"
     for field in events.SNAPSHOT_FIELDS:
-        assert field in snapshot["acme/widget#7"]
+        assert field in snapshot["authored:acme/widget#7"]
 
 
 def test_a_pull_request_without_checks_is_recorded_as_having_none():
     digest = {"authored": [{"key": "acme/widget#7", "repo": "acme/widget", "number": 7}]}
-    assert events.snapshot_of(digest)["acme/widget#7"]["ci"] == "NO_CHECKS"
+    assert events.snapshot_of(digest)["authored:acme/widget#7"]["ci"] == "NO_CHECKS"
 
 
 def test_a_mention_already_recorded_is_not_reported_again():
@@ -179,10 +175,24 @@ def test_mention_addresses_are_collected_from_history():
     assert events.mention_urls(history) == {"https://example.test/1"}
 
 
-def test_every_rule_has_wording_and_an_urgency():
-    for kind in events.RULE_LABELS:
-        assert events.label_for(kind)
-        assert isinstance(events.is_urgent(kind), bool)
+def test_every_rule_a_detector_can_emit_has_wording():
+    # The wording table and the detectors must not drift apart, or a change would be reported under a bare key.
+    emitted = {
+        "review_requested",
+        "ci_broken",
+        "changes_requested",
+        "ready_to_merge",
+        "conflict",
+        "new_comment",
+        "mention",
+    }
+    assert emitted <= set(events.RULE_LABELS)
+    assert all(events.label_for(kind) != kind for kind in emitted)
+
+
+def test_blocking_changes_are_marked_urgent_and_others_are_not():
+    assert [events.is_urgent(kind) for kind in ("review_requested", "ci_broken", "changes_requested", "mention")] == [True] * 4
+    assert [events.is_urgent(kind) for kind in ("ready_to_merge", "conflict", "new_comment")] == [False] * 3
 
 
 def test_an_unknown_kind_falls_back_to_its_own_name():

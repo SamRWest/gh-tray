@@ -62,9 +62,27 @@ def run_tray() -> int:
 def once() -> int:
     """Poll a single time, print the status and any changes, then exit.
 
-    :return: process exit code, non-zero when the poll failed
+    Refuses to run while the tray is up. Both would poll against the same stored comparison point, so whichever ran
+    first would consume the changes and the other would never report them.
+
+    :return: process exit code, non-zero when the poll failed or the tray is already running
     """
     start_logging(to_console=True)
+    lock = SingleInstance(LOCK_PATH)
+    if not lock.acquire():
+        print(f"{APP_NAME} is already running. Use its Refresh now menu entry, or quit it first.", file=sys.stderr)
+        return 1
+    try:
+        return report_one_poll()
+    finally:
+        lock.release()
+
+
+def report_one_poll() -> int:
+    """Poll once and print what it found.
+
+    :return: process exit code, non-zero when the poll failed
+    """
     result = poll(bootstrap())
     if result.error:
         print(f"poll failed: {result.error}", file=sys.stderr)

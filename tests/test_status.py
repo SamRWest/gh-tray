@@ -85,12 +85,29 @@ def test_the_menu_header_reports_the_three_counts():
     assert status.summary_line(Status(authored=25, reviewing=4, red=15)) == "4 to review - 15 red - 25 open"
 
 
-def test_the_icon_is_drawn_at_the_expected_size():
-    image = status.build_image(RED, 3)
-    assert image.size == (status.ICON_SIZE, status.ICON_SIZE)
+def centre_pixel(colour: str, count: int) -> tuple:
+    """Return the colour at the middle of the drawn icon."""
+    return status.build_image(colour, count).getpixel((status.ICON_SIZE // 2, status.ICON_SIZE // 2))
+
+
+def test_the_icon_is_filled_in_the_colour_it_is_given():
+    for colour, expected in ((RED, (209, 36, 47)), (GREEN, (26, 127, 55)), (GREY, (110, 119, 129))):
+        assert centre_pixel(colour, 0)[:3] == expected
+
+
+def test_a_count_is_drawn_over_the_disc():
+    # The count is drawn in white through the middle, so the centre pixel must stop being the fill colour.
+    assert centre_pixel(RED, 3) != centre_pixel(RED, 0)
+
+
+def test_a_large_count_is_still_drawn():
+    # Drawn as "9+", which straddles the middle, so the whole image is compared rather than one pixel.
+    assert status.build_image(RED, 400).tobytes() != status.build_image(RED, 0).tobytes()
 
 
 def test_the_icon_is_drawn_for_every_state():
     for colour in (RED, AMBER, GREEN, GREY):
         for count in (0, 1, 9, 10, 400):
-            assert status.build_image(colour, count).size == (status.ICON_SIZE, status.ICON_SIZE)
+            image = status.build_image(colour, count)
+            assert image.size == (status.ICON_SIZE, status.ICON_SIZE)
+            assert image.getpixel((0, 0))[3] == 0, "the icon's corners must be transparent, not boxed"

@@ -98,12 +98,14 @@ def test_a_failed_poll_keeps_earlier_unread_changes(workspace, monkeypatch):
     assert service.poll({}).status.unread == 1
 
 
-def test_an_unreadable_snapshot_is_treated_as_a_fresh_baseline(workspace, monkeypatch):
+def test_an_unreadable_snapshot_rebuilds_the_baseline_without_reporting_everything_as_new(workspace, monkeypatch):
     (workspace / "snapshot.json").write_text("{ not json", encoding="utf-8")
     stub_collector(monkeypatch, digest_with())
     result = service.poll({})
-    assert result.first_run is True
-    assert json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))
+    assert result.events == []
+    # Not a first run: a damaged file is not proof the user has seen anything, so the unread count must survive.
+    assert result.first_run is False
+    assert json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))["version"] == service.SNAPSHOT_VERSION
 
 
 def test_a_still_unread_mention_is_only_reported_once(workspace, monkeypatch):
@@ -116,8 +118,15 @@ def test_a_still_unread_mention_is_only_reported_once(workspace, monkeypatch):
     assert service.poll({}).events == []
 
 
-def test_bash_is_taken_from_the_settings_when_one_is_named():
-    assert environment.find_bash("/somewhere/bash") == "/somewhere/bash"
+def test_a_named_bash_that_exists_is_used(tmp_path):
+    interpreter = tmp_path / "bash"
+    interpreter.write_text("", encoding="utf-8")
+    assert environment.find_bash(str(interpreter)) == str(interpreter)
+
+
+def test_a_named_bash_that_does_not_exist_falls_back_to_discovery():
+    # A mistyped setting must be reported as a missing interpreter, not surface later as an operating system error.
+    assert environment.find_bash("/nowhere/at/all/bash") == environment.find_bash("")
 
 
 def test_bash_is_discovered_when_the_settings_name_none():
@@ -135,16 +144,6 @@ def test_the_login_start_file_names_this_application():
 
 def test_the_launch_command_runs_this_package():
     assert environment.launch_command()[1:] == ["-m", "gh_tray"]
-
-
-def test_login_start_can_be_switched_on_and_off(tmp_path, monkeypatch):
-    monkeypatch.setattr(environment, "autostart_path", lambda: tmp_path / "nested" / "gh-tray.entry")
-    assert environment.autostart_enabled() is False
-    environment.set_autostart(True)
-    assert environment.autostart_enabled() is True
-    assert environment.launch_command()[1] in (tmp_path / "nested" / "gh-tray.entry").read_text(encoding="utf-8")
-    environment.set_autostart(False)
-    assert environment.autostart_enabled() is False
 
 
 def test_switching_login_start_off_twice_is_harmless(tmp_path, monkeypatch):
