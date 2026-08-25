@@ -79,3 +79,26 @@ def test_a_long_list_is_collapsed_to_a_remainder_count():
 
 def test_notifying_nothing_raises_no_notification():
     assert Notifier().notify([event("ci_broken")], {"ci_broken": False}) is False
+
+
+def test_a_click_opens_the_change_that_was_reported():
+    assert Notifier().target_url([event("ci_broken", url="https://example.test/7")]) == "https://example.test/7"
+
+
+def test_a_click_on_several_changes_opens_the_one_listed_first():
+    # Never the dashboard: a click on a notification should always land on a pull request page.
+    changes = [event("ci_broken", key="a#1", url="https://example.test/1"), event("mention", key="b#2", url="https://example.test/2")]
+    assert Notifier().target_url(changes) == "https://example.test/1"
+
+
+def test_a_change_without_a_page_is_skipped_in_favour_of_one_that_has_one():
+    changes = [event("mention", key="a#1", url=""), event("ci_broken", key="b#2", url="https://example.test/2")]
+    assert Notifier().target_url(changes) == "https://example.test/2"
+
+
+def test_nothing_is_opened_when_no_change_carries_a_page():
+    assert Notifier().target_url([event("mention", url=""), event("ci_broken", url="")]) == ""
+
+
+def test_no_page_at_all_means_no_click_target_rather_than_an_error():
+    assert Notifier().target_url([]) == ""

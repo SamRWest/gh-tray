@@ -134,7 +134,7 @@ class Tray:
             result = poll(self.config)
             self.status = result.status
             if result.events:
-                self.notifier.notify(result.events, self.config["toasts"], on_many=lambda: open_dashboard(self.config))
+                self.notifier.notify(result.events, self.config["toasts"])
             self.repaint()
             return not result.error
 

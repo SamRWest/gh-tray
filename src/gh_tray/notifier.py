@@ -1,5 +1,7 @@
 """Desktop notifications for detected changes.
 
+Clicking a notification opens the pull request it is about in the default browser.
+
 Notifications are raised from a long-lived event loop on its own thread. The platform backend calls back into the
 sending loop when a notification is clicked or dismissed, which can happen long after the send returns, so a loop
 that is closed straight after sending would raise on that callback and no click could ever be handled.
@@ -10,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import threading
 import webbrowser
-from collections.abc import Callable
 
 from loguru import logger
 
@@ -72,26 +73,34 @@ class Notifier:
             body += f"\n+{len(events) - len(shown)} more"
         return f"{len(events)} GitHub change{'s' if len(events) != 1 else ''}", body
 
-    def notify(self, events: list[dict], toast_settings: dict, on_many: Callable[[], None] | None = None) -> bool:
+    def target_url(self, events: list[dict]) -> str:
+        """Return the page a click on the notification should open.
+
+        The notification lists changes in the order they were detected, so the first one carrying a page is the one
+        the reader sees at the top and the one a click most plausibly means.
+
+        :param events: the changes the notification describes
+        :return: the address to open, empty when none of them carries one
+        """
+        return next((event["url"] for event in events if event.get("url")), "")
+
+    def notify(self, events: list[dict], toast_settings: dict) -> bool:
         """Raise one notification covering every enabled change.
 
         :param events: every change detected this poll
         :param toast_settings: the per-kind switches from the settings
-        :param on_many: run when a notification covering several changes is clicked, since no single page fits
         :return: whether a notification was raised
         """
         chosen = self.wanted(events, toast_settings)
         if not chosen:
             return False
         title, body = self.compose(chosen)
-        single = chosen[0].get("url") if len(chosen) == 1 else ""
+        url = self.target_url(chosen)
 
         def clicked() -> None:
-            """Open the change that was reported, or hand back to the caller when several were."""
-            if single:
-                webbrowser.open(single)
-            elif on_many:
-                on_many()
+            """Open the pull request the notification is about, in the default browser."""
+            if url:
+                webbrowser.open(url)
 
         loop, backend = self._ready()
         if loop is None or backend is None:

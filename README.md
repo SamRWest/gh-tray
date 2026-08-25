@@ -25,8 +25,8 @@ ran is not reported again, so a large backlog of red pull requests does not beco
 The icon is red when an unread change is blocking someone or something of yours is broken, amber for anything else
 unread, green when there is nothing to look at, and grey when the last poll failed.
 
-Notifications are collapsed into one per poll. Clicking a notification about a single change opens that pull request;
-clicking one that covers several opens the dashboard instead.
+Notifications are collapsed into one per poll. Clicking one opens the pull request it is about in your default browser,
+and where it covers several changes, the one listed first.
 
 ## Requirements
 
