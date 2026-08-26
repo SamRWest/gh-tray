@@ -24,7 +24,7 @@ from .storage import read_json, write_json_atomic
 
 # Bumped whenever the snapshot's shape changes. A snapshot written by an older version cannot be compared against,
 # so it is replaced without reporting the whole of it as new.
-SNAPSHOT_VERSION = 2
+SNAPSHOT_VERSION = 3
 
 
 @dataclass(frozen=True)

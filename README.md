@@ -9,14 +9,29 @@ The icon carries a count of changes you have not seen yet.
 | ---------------------- | -------------------------------------------------------------------------------- |
 | Hovering               | A short status summary                                                           |
 | Clicking once          | A small window listing the most recent changes; click a row to open it on GitHub |
-| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), filling the screen                 |
+| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), maximised                          |
 | Right-clicking         | The review queue, the login-start switch, the settings window and the rest       |
 
 A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
 waits half a second to see whether a second click follows.
 
-How many changes the click-through window lists is a setting. Press Escape, click the close mark, or click anything else
-on screen to dismiss it.
+The click-through window lists one change per row under column headings:
+
+| Column     | Holds                                                              |
+| ---------- | ------------------------------------------------------------------ |
+| Marker     | Red for a blocking change, amber for a routine one, grey once seen |
+| Change     | What happened, such as "Checks broke"                              |
+| Repository | The repository it happened in                                      |
+| PR         | The pull request number                                            |
+| Title      | The pull request's title                                           |
+| Who        | Whoever did it: the reviewer, the committer, the commenter         |
+| When       | How long ago                                                       |
+
+Who is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of
+somebody else's merge into the branch.
+
+It lists the last 20 changes by default, which is a setting. The window has no frame, so drag its title to move it and
+its corner mark to resize it. Press Escape, click the close mark, or click anything else on screen to dismiss it.
 
 ## What counts as a change
 

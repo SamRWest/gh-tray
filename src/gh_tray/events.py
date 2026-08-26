@@ -46,6 +46,21 @@ SNAPSHOT_DEFAULTS: dict = {
     "mergeable": "UNKNOWN",
     "comments": 0,
     "isDraft": False,
+    "author": "",
+    "lastCommitBy": "",
+    "lastReviewBy": "",
+    "lastCommentBy": "",
+}
+
+# Whose name to show against each kind of change. The collector reports the last person to act in each of these
+# ways, so the rule that fired decides which of them is the one worth naming. A conflict has nobody to name: it is
+# a consequence of somebody else's merge into the branch, which GitHub does not attribute.
+ACTOR_FIELDS: dict[str, str] = {
+    "review_requested": "author",
+    "ci_broken": "lastCommitBy",
+    "changes_requested": "lastReviewBy",
+    "ready_to_merge": "lastReviewBy",
+    "new_comment": "lastCommentBy",
 }
 SNAPSHOT_FIELDS = tuple(SNAPSHOT_DEFAULTS)
 
@@ -206,9 +221,12 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "at": at,
         "kind": kind,
         "key": f"{pull_request['repo']}#{pull_request['number']}",
+        "repo": pull_request.get("repo", ""),
+        "number": pull_request.get("number", ""),
         "title": pull_request.get("title", ""),
         "url": pull_request.get("url", ""),
         "detail": detail,
+        "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
     }
 
 
@@ -260,9 +278,13 @@ def detect_mention_events(digest: dict, seen_urls: set[str], at: str) -> list[di
                 "at": at,
                 "kind": "mention",
                 "key": mention.get("repo", "?"),
+                "repo": mention.get("repo", ""),
+                # The notifications feed names the thread, not the pull request, so there is no number to show.
+                "number": "",
                 "title": mention.get("title", ""),
                 "url": url,
                 "detail": str(mention.get("reason", "mention")).replace("_", " "),
+                "actor": mention.get("actor", ""),
             }
         )
     return events

@@ -67,7 +67,9 @@ GQL='
           repository { nameWithOwner }
           author { login }
           reviewDecision
-          commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+          commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
+          latestReviews(last: 1) { nodes { author { login } } }
+          comments(last: 1) { nodes { author { login } } }
         }
       }
     }
@@ -84,7 +86,12 @@ gql_search() {
       else
         raw="$(gh api graphql -f query="$GQL" -f q="$search" -f cursor="$cursor" 2>/dev/null)"
       fi
-      [[ -n "$raw" ]] && break
+      # An error from GitHub is still well-formed JSON, so a response counts as usable only once it actually
+      # carries results. Accepting one that does not would abort the whole run instead of retrying it.
+      if [[ -n "$raw" ]] && jq -e '.data.search.nodes' >/dev/null 2>&1 <<<"$raw"; then
+        break
+      fi
+      raw=''
       sleep $((attempt * 3))
     done
     [[ -z "$raw" ]] && return 1
@@ -101,6 +108,9 @@ normalise_prs() {
     repo: .repository.nameWithOwner,
     number, title, url, isDraft, createdAt, updatedAt,
     author: (.author.login // "unknown"),
+    lastCommitBy: (.commits.nodes[0].commit.author.user.login // ""),
+    lastReviewBy: (.latestReviews.nodes[0].author.login // ""),
+    lastCommentBy: (.comments.nodes[0].author.login // ""),
     comments: (.totalCommentsCount // 0),
     reviewDecision: (.reviewDecision // "NONE"),
     mergeable: (.mergeable // "UNKNOWN"),
@@ -169,9 +179,29 @@ NOTIFS="$(gh api "notifications?all=false&since=$SINCE&per_page=100" 2>/dev/null
 MENTIONS="$(jq -c '[ .[]
   | select(.reason == "mention" or .reason == "team_mention")
   | { repo: .repository.full_name, title: .subject.title, type: .subject.type,
-      reason: .reason, updatedAt: .updated_at,
+      reason: .reason, updatedAt: .updated_at, commentUrl: (.subject.latest_comment_url // ""),
       url: (.subject.url // "" | sub("api\\.github\\.com/repos"; "github.com") | sub("/pulls/"; "/pull/")) }
 ]' <<<"${NOTIFS:-[]}")"
+
+# The feed names the thread but never the person, so the comment each mention points at is fetched to find out who
+# it was. That is one request each, so only the first few are looked up and the rest are reported without a name.
+MENTION_LOOKUP_LIMIT=10
+ENRICHED='[]'
+looked_up=0
+while IFS= read -r mention; do
+  [[ -z "$mention" ]] && continue
+  actor=''
+  if (( looked_up < MENTION_LOOKUP_LIMIT )); then
+    comment_url="$(jq -r '.commentUrl // empty' <<<"$mention")"
+    if [[ -n "$comment_url" ]]; then
+      actor="$(gh api "$comment_url" --jq '.user.login' 2>/dev/null)" || actor=''
+      looked_up=$((looked_up + 1))
+    fi
+  fi
+  ENRICHED="$(jq -c --argjson mention "$mention" --arg actor "$actor" \
+    '. + [$mention + {actor: $actor} | del(.commentUrl)]' <<<"$ENRICHED")"
+done < <(jq -c '.[]' <<<"$MENTIONS")
+MENTIONS="$ENRICHED"
 
 # Diff the current rollup state against the previous snapshot.
 CUR_CI="$(jq -c '[(.authored + .reviewing)[] | {key: .key, value: .ci}] | from_entries' <<<"$PRS")"

@@ -33,14 +33,14 @@ DOUBLE_CLICK_SECONDS = 0.5
 
 
 def open_dashboard(config: dict) -> None:
-    """Open the terminal dashboard filling the screen, or whichever command the settings name instead.
+    """Open the terminal dashboard maximised, or whichever command the settings name instead.
 
     A command named in the settings is run as given, since how its own window opens is then the user's business.
     """
     if config.get("dashboard_command"):
         subprocess.Popen(config["dashboard_command"], shell=True)
         return
-    open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", fullscreen=True)
+    open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", maximised=True)
 
 
 def open_settings() -> None:

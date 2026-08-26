@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 
 from . import APP_NAME
 from .config import TEXT_KEYS, bootstrap, save_config
-from .environment import autostart_enabled, detect_orgs, github_auth_summary, open_in_terminal, set_autostart
+from .environment import autostart_enabled, detect_orgs, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
@@ -25,10 +25,16 @@ FIELDS = {
 }
 
 
+POINTS_PER_INCH = 72.0
+
+
 def run_settings() -> None:
     """Show the settings window and block until it is closed."""
+    make_dpi_aware()
     config = bootstrap()
     root = tk.Tk()
+    # Points become the right physical size only once Tk knows the real resolution of the screen.
+    root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
     root.title(f"{APP_NAME} settings")
     root.resizable(False, False)
     frame = ttk.Frame(root, padding=12)

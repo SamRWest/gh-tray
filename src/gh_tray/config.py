@@ -38,7 +38,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "orgs": "",
     "max_age_days": 365,
-    "popup_rows": 8,
+    "popup_rows": 20,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,

@@ -16,16 +16,16 @@ from loguru import logger
 
 from . import APP_NAME
 
-# Terminals tried in order on Linux: the name to look for, the flag that makes it fill the screen where it has one,
-# and the arguments it takes before a command. The first one present wins, except that a request to fill the screen
-# prefers a terminal that can.
+# Terminals tried in order on Linux: the name to look for, the flag that opens it maximised where it has one, and
+# the arguments it takes before a command. The first one present wins, except that a request to maximise prefers a
+# terminal that can. Maximised, not full screen: the window keeps its title bar and the desktop keeps its panels.
 LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
     ("x-terminal-emulator", None, ("-e", "sh", "-c")),
-    ("gnome-terminal", "--full-screen", ("--", "sh", "-c")),
-    ("konsole", "--fullscreen", ("-e", "sh", "-c")),
-    ("xfce4-terminal", "--fullscreen", ("-x", "sh", "-c")),
-    ("alacritty", None, ("-e", "sh", "-c")),
-    ("kitty", None, ("sh", "-c")),
+    ("gnome-terminal", "--maximize", ("--", "sh", "-c")),
+    ("xfce4-terminal", "--maximize", ("-x", "sh", "-c")),
+    ("konsole", None, ("-e", "sh", "-c")),
+    ("alacritty", "--option=window.startup_mode=Maximized", ("-e", "sh", "-c")),
+    ("kitty", "--start-as=maximized", ("sh", "-c")),
     ("xterm", None, ("-e", "sh", "-c")),
 )
 
@@ -38,6 +38,26 @@ def hidden_window_flags() -> dict[str, int]:
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}
+
+
+def make_dpi_aware() -> None:
+    """Tell Windows this process draws at the real screen resolution.
+
+    Without this, a window on a display scaled above 100% is drawn small and then stretched by the system, which is
+    what makes its text look soft. Must be called before any window is built.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    for library, function, argument in (("shcore", "SetProcessDpiAwareness", 2), ("user32", "SetProcessDPIAware", None)):
+        try:
+            entry = getattr(ctypes.windll, library)
+            (getattr(entry, function)(argument) if argument is not None else getattr(entry, function)())
+        except (AttributeError, OSError):
+            continue
+        return
+    logger.debug("could not ask Windows for a sharp window, text may look soft")
 
 
 def github_cli() -> str | None:
@@ -103,45 +123,45 @@ def github_auth_summary() -> str:
     return next((line.strip() for line in lines if "Logged in" in line), "Not signed in to GitHub")
 
 
-def terminal_command(command: str, title: str, fullscreen: bool) -> list[str]:
+def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
     """Build the argument vector that runs a command in a new terminal window.
 
-    Filling the screen is best effort. Where the available terminal has no way to do it, the window simply opens at
-    its usual size rather than the command failing to run at all.
+    Maximising is best effort. Where the available terminal has no way to do it, the window simply opens at its
+    usual size rather than the command failing to run at all.
 
     :param command: the shell command to run in the new window
     :param title: window title, honoured only where the terminal supports one
-    :param fullscreen: whether the window should fill the screen
+    :param maximised: whether the window should open filling the desktop, keeping its title bar
     :return: the argument vector to start
     :raises RuntimeError: when no terminal emulator can be found
     """
     if sys.platform == "win32":
         windows_terminal = shutil.which("wt")
         if windows_terminal:
-            return [windows_terminal, *(["--fullscreen"] if fullscreen else []), "--title", title, "cmd", "/c", command]
-        return ["cmd", "/c", "start", *(["/max"] if fullscreen else []), title, "cmd", "/k", command]
+            return [windows_terminal, *(["--maximized"] if maximised else []), "--title", title, "cmd", "/c", command]
+        return ["cmd", "/c", "start", *(["/max"] if maximised else []), title, "cmd", "/k", command]
     if sys.platform == "darwin":
-        zoom = "\nset zoomed of front window to true" if fullscreen else ""
+        zoom = "\nset zoomed of front window to true" if maximised else ""
         return ["osascript", "-e", f'tell application "Terminal"\ndo script "{command}"\nactivate{zoom}\nend tell']
-    # A stable sort, so the usual preference order is kept among terminals that are equally able to fill the screen.
-    candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if fullscreen else LINUX_TERMINALS
+    # A stable sort, so the usual preference order is kept among terminals that are equally able to maximise.
+    candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if maximised else LINUX_TERMINALS
     for name, flag, launch in candidates:
         found = shutil.which(name)
         if not found:
             continue
-        return [found, *([flag] if fullscreen and flag else []), *launch, command]
+        return [found, *([flag] if maximised and flag else []), *launch, command]
     raise RuntimeError("no terminal emulator found")
 
 
-def open_in_terminal(command: str, title: str, fullscreen: bool = False) -> None:
+def open_in_terminal(command: str, title: str, maximised: bool = False) -> None:
     """Run a command in a new terminal window, using the first terminal this platform offers.
 
     :param command: the shell command to run in the new window
     :param title: window title, honoured only where the terminal supports one
-    :param fullscreen: whether the window should fill the screen
+    :param maximised: whether the window should open filling the desktop, keeping its title bar
     :raises RuntimeError: when no terminal emulator can be found
     """
-    subprocess.Popen(terminal_command(command, title, fullscreen))
+    subprocess.Popen(terminal_command(command, title, maximised))
 
 
 def launch_command() -> list[str]:

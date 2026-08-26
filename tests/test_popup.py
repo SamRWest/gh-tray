@@ -93,3 +93,47 @@ def test_a_change_stamped_in_the_future_is_not_described_as_negative():
 
 def test_an_unreadable_timestamp_still_produces_words():
     assert events.age_in_words("whenever").endswith("ago")
+
+
+def test_a_repository_and_number_are_offered_as_separate_values():
+    assert popup.repo_and_number({"repo": "acme/widget", "number": 7}) == ("acme/widget", "#7")
+
+
+def test_an_older_entry_with_only_the_joined_key_is_split():
+    # Entries logged before the two were recorded separately must still fill both columns.
+    assert popup.repo_and_number({"key": "acme/widget#7"}) == ("acme/widget", "#7")
+
+
+def test_a_mention_has_a_repository_but_no_number():
+    assert popup.repo_and_number({"repo": "acme/widget", "number": ""}) == ("acme/widget", "")
+
+
+def test_every_column_has_a_heading_and_a_width():
+    assert all(isinstance(width, int) and width >= 0 for _heading, width in popup.COLUMNS)
+    assert [heading for heading, _width in popup.COLUMNS if heading] == ["Change", "Repository", "PR", "Title", "Who", "When"]
+
+
+def test_one_column_takes_the_space_a_resize_adds():
+    stretching = [heading for heading, width in popup.COLUMNS if not width and heading]
+    assert stretching == [popup.STRETCHING_COLUMN]
+
+
+def test_the_person_behind_each_kind_of_change_is_named():
+    for kind, field in events.ACTOR_FIELDS.items():
+        record = {"repo": "acme/widget", "number": 7, field: "someone"}
+        assert events._event(kind, record, "", events.utc_now())["actor"] == "someone"
+
+
+def test_a_conflict_names_nobody_because_github_attributes_it_to_nobody():
+    record = {"repo": "acme/widget", "number": 7, "author": "someone"}
+    assert events._event("conflict", record, "", events.utc_now())["actor"] == ""
+
+
+def test_a_mention_names_whoever_wrote_it():
+    digest = {"mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "someone", "reason": "mention"}]}
+    assert events.detect_mention_events(digest, set(), events.utc_now())[0]["actor"] == "someone"
+
+
+def test_a_mention_nobody_could_be_found_for_still_appears():
+    digest = {"mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "reason": "mention"}]}
+    assert events.detect_mention_events(digest, set(), events.utc_now())[0]["actor"] == ""
