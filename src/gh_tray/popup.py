@@ -1,34 +1,48 @@
-"""A small frameless window listing the most recent changes, opened by a click on the tray icon.
+"""A small frameless window listing what wants the user's attention, opened by a click on the tray icon.
 
 It runs as its own process, like the settings window, so its user interface loop never shares a thread with the tray
 icon's. That also keeps it working on macOS, where a window may only be built on a process's main thread.
 
+The list is what changed since the user last looked, then what is merely waiting on them. Changes alone would leave
+the window saying "nothing" on a quiet day while three reviews sat in the queue, which is the opposite of useful.
+
 Having no frame means the window has none of the things a frame normally provides, so each is supplied here: it is
-moved by dragging its heading strip, resized by dragging its bottom strip or right edge, scrolled with the wheel,
-and closed by Escape, the close mark, or clicking anything else on screen.
+moved by dragging its heading strip, resized from any edge or corner, and closed by Escape, the close mark, or
+clicking anything else on screen.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
 import webbrowser
+from dataclasses import dataclass
 from tkinter import font as tkfont
+from tkinter import ttk
 
 from . import APP_NAME
 from .config import load_config
 from .environment import make_dpi_aware
-from .events import age_in_words, is_urgent, label_for, last_seen, moment, recent_events
+from .events import BROKEN_CI, age_in_words, is_urgent, label_for, last_seen, mergeable_now, moment, recent_events
+from .snapshot import read_snapshot
 
 EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
 # pointer itself and, when the click was on a tray icon, clear of the taskbar.
 POINTER_OFFSET = 16
-MINIMUM_WIDTH = 420
-MINIMUM_HEIGHT = 120
+MINIMUM_WIDTH = 480
+MINIMUM_HEIGHT = 140
 
 FONT_SIZE = 11
 POINTS_PER_INCH = 72.0
-EDGE_HANDLE_WIDTH = 5
+ROW_PADDING = 8
+# Room for the window's border, the scrollbar and the table's own padding, so no column starts out cut off.
+WIDTH_ALLOWANCE = 60
+MINIMUM_COLUMN = 4
+# A window wide enough for the longest repository name anyone owns would stop being a popup, so it is capped here.
+WIDEST_SHARE_OF_SCREEN = 0.62
+EDGE_HANDLE_WIDTH = 6
+CORNER_HANDLE_SIZE = 14
+TABLE_STYLE = "ghtray.Treeview"
 
 BACKGROUND = "#0d1117"
 BORDER = "#30363d"
@@ -40,21 +54,84 @@ URGENT = "#ff7b72"
 ROUTINE = "#e3b341"
 HOVER = "#21262d"
 
-# Each column: its heading and how many characters wide it is. Widths are in characters of the window's font, and
-# every cell in a column is given the same one, so the headings line up with the rows whatever the text in them.
-# The title column has no width because it takes whatever space is left, which is what resizing the window changes.
-COLUMNS: tuple[tuple[str, int], ...] = (
-    ("", 2),
-    ("Change", 17),
-    ("Repository", 26),
-    ("PR", 6),
-    ("Title", 0),
-    ("Who", 15),
-    ("When", 9),
+# Each column: the name it is known by, its heading, how many characters wide it starts, and whether it takes the
+# space a wider window adds. Every one can be resized afterwards by dragging the divider in its heading.
+COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
+    ("change", "Change", 19, False),
+    ("repo", "Repository", 46, False),
+    ("pr", "PR", 7, False),
+    ("title", "Title", 44, True),
+    ("who", "Who", 18, False),
+    ("when", "When", 10, False),
 )
 STRETCHING_COLUMN = "Title"
 
-TITLE_LIMIT = 70
+# A row is coloured by what it is: blocking, worth a look, or already seen.
+TAGS = {URGENT: "urgent", ROUTINE: "routine", MUTED: "seen"}
+
+# Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
+# pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
+EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] = (
+    ("left", (True, False, False, False), "sb_h_double_arrow", {"relx": 0.0, "rely": 0.0, "relheight": 1.0, "width": EDGE_HANDLE_WIDTH}),
+    (
+        "right",
+        (False, False, True, False),
+        "sb_h_double_arrow",
+        {"relx": 1.0, "rely": 0.0, "anchor": "ne", "relheight": 1.0, "width": EDGE_HANDLE_WIDTH},
+    ),
+    ("top", (False, True, False, False), "sb_v_double_arrow", {"relx": 0.0, "rely": 0.0, "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH}),
+    (
+        "bottom",
+        (False, False, False, True),
+        "sb_v_double_arrow",
+        {"relx": 0.0, "rely": 1.0, "anchor": "sw", "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH},
+    ),
+    ("top left", (True, True, False, False), "size_nw_se", {"relx": 0.0, "rely": 0.0, "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE}),
+    (
+        "top right",
+        (False, True, True, False),
+        "size_ne_sw",
+        {"relx": 1.0, "rely": 0.0, "anchor": "ne", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
+    ),
+    (
+        "bottom left",
+        (True, False, False, True),
+        "size_ne_sw",
+        {"relx": 0.0, "rely": 1.0, "anchor": "sw", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
+    ),
+    (
+        "bottom right",
+        (False, False, True, True),
+        "size_nw_se",
+        {"relx": 1.0, "rely": 1.0, "anchor": "se", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
+    ),
+)
+
+TITLE_LIMIT = 90
+
+
+@dataclass(frozen=True)
+class Row:
+    """One line of the table, whatever it was built from."""
+
+    label: str
+    repo: str
+    number: str
+    title: str
+    who: str
+    when: str
+    url: str
+    colour: str
+
+
+# What each standing state is called, whose name goes beside it, and whether it should be marked as blocking. These
+# describe how a pull request is right now, unlike the event labels, which describe something that just happened.
+STANDING_STATES: tuple[tuple[str, str, str, bool], ...] = (
+    ("reviewing", "Awaiting your review", "author", True),
+    ("changes_requested", "Changes requested", "lastReviewBy", True),
+    ("checks_failing", "Checks failing", "lastCommitBy", True),
+    ("ready_to_merge", "Ready to merge", "lastReviewBy", False),
+)
 
 
 def repo_and_number(event: dict) -> tuple[str, str]:
@@ -73,7 +150,7 @@ def repo_and_number(event: dict) -> tuple[str, str]:
 
 
 def dot_colour(event: dict, unread: bool) -> str:
-    """Return the colour of a row's marker.
+    """Return the colour a change should be drawn in.
 
     :param event: the change the row describes
     :param unread: whether it arrived since the user last looked
@@ -83,23 +160,104 @@ def dot_colour(event: dict, unread: bool) -> str:
     return URGENT if is_urgent(event["kind"]) else ROUTINE
 
 
-def rows_to_show(count: int) -> list[tuple[dict, bool]]:
-    """Return the changes to list, newest first, each paired with whether it is still unread.
+def row_from_event(event: dict, unread: bool) -> Row:
+    """Build a row describing something that happened.
 
-    :param count: how many to show
+    :param event: the change, as recorded in the log
+    :param unread: whether it arrived since the user last looked
+    """
+    repo, number = repo_and_number(event)
+    return Row(
+        label=label_for(event["kind"]),
+        repo=repo,
+        number=number,
+        title=str(event.get("title") or event.get("detail", ""))[:TITLE_LIMIT],
+        who=str(event.get("actor", "")),
+        when=age_in_words(event["at"]),
+        url=str(event.get("url", "")),
+        colour=dot_colour(event, unread),
+    )
+
+
+def standing_state(entry: dict) -> tuple[str, str, bool] | None:
+    """Return how a pull request stands, when that is something worth acting on.
+
+    :param entry: one pull request as the last poll recorded it
+    :return: its label, whose name to show and whether it is blocking, or None when nothing is wanted of the user
+    """
+    for state, label, who_field, urgent in STANDING_STATES:
+        matches = {
+            "reviewing": entry.get("side") == "reviewing",
+            "changes_requested": entry.get("side") == "authored" and entry.get("reviewDecision") == "CHANGES_REQUESTED",
+            "checks_failing": entry.get("side") == "authored" and entry.get("ci") in BROKEN_CI,
+            "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
+        }[state]
+        if matches:
+            return label, str(entry.get(who_field, "")), urgent
+    return None
+
+
+def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
+    """Build rows for the pull requests that want something from the user right now.
+
+    These fill the window when little has changed lately, so it never says "nothing" while a review is waiting.
+
+    :param entries: pull requests as the last poll recorded them
+    :param already_listed: addresses of pull requests a change has already put in the list
+    :return: rows, blocking ones first and most recently touched first within that
+    """
+    rows = []
+    for entry in entries.values():
+        standing = standing_state(entry)
+        url = str(entry.get("url", ""))
+        if standing is None or (url and url in already_listed):
+            continue
+        label, who, urgent = standing
+        touched = str(entry.get("updatedAt", ""))
+        rows.append(
+            (
+                not urgent,
+                touched,
+                Row(
+                    label=label,
+                    repo=str(entry.get("repo", "")),
+                    number=f"#{entry.get('number')}" if entry.get("number") else "",
+                    title=str(entry.get("title", ""))[:TITLE_LIMIT],
+                    who=who,
+                    when=age_in_words(touched) if touched else "",
+                    url=url,
+                    colour=URGENT if urgent else ROUTINE,
+                ),
+            )
+        )
+    rows.sort(key=lambda row: (row[0], [-ord(character) for character in row[1]]))
+    return [row for _urgent, _touched, row in rows]
+
+
+def rows_to_show(count: int) -> list[Row]:
+    """Return the lines to list: what changed since the user last looked, then what is waiting on them.
+
+    Changes come first because they are news. Standing state fills the rest, so the window is useful even on a quiet
+    day, and so it never disagrees with the hover summary about whether anything wants attention.
+
+    :param count: how many rows to return at most
     """
     marker = last_seen()
     since = moment(marker) if marker else None
-    return [(event, since is None or moment(event["at"]) > since) for event in recent_events(count)]
+    changes = [row_from_event(event, since is None or moment(event["at"]) > since) for event in recent_events(count)]
+    listed = {row.url for row in changes if row.url}
+    entries, _damaged = read_snapshot()
+    return (changes + rows_from_snapshot(entries or {}, listed))[:count]
 
 
 class Popup:
     """The frameless window itself."""
 
-    def __init__(self, entries: list[tuple[dict, bool]]) -> None:
-        """:param entries: the changes to list, each paired with whether it is unread."""
+    def __init__(self, entries: list[Row]) -> None:
+        """:param entries: the lines to list, in the order they should appear."""
         make_dpi_aware()
         self.entries = entries
+        self.urls: dict[str, str] = {}
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
         self.root = tk.Tk()
@@ -117,37 +275,24 @@ class Popup:
         self.bold.configure(weight="bold")
         self.build()
 
-    def label(self, parent: tk.Widget, text: str, colour: str, width: int, bold: bool = False) -> tk.Label:
-        """Make one cell of the table.
+    def characters(self, count: int) -> int:
+        """Return how wide a number of characters is in this window's font, which is what column widths are given in."""
+        return self.regular.measure("0") * count
 
-        :param parent: the row to put it in
-        :param text: what it says
-        :param colour: the colour of that text
-        :param width: how many characters wide, or zero to take whatever space is left
-        :param bold: whether to draw it heavier
-        """
-        cell = tk.Label(
-            parent,
-            text=text,
-            background=BACKGROUND,
-            foreground=colour,
-            font=self.bold if bold else self.regular,
-            anchor="w",
-            padx=4,
-        )
-        if width:
-            cell.configure(width=width)
-        cell.pack(side="left", expand=not width, fill="x" if not width else None)
-        return cell
+    def row_height(self) -> int:
+        """Return how tall one row of the table is."""
+        return self.regular.metrics("linespace") + ROW_PADDING
 
     def build(self) -> None:
-        """Lay out the heading strip, the column headings and one scrollable row per change."""
-        unread = sum(1 for _event, is_new in self.entries if is_new)
-        self.heading_strip(f"{APP_NAME} - {unread} unread" if unread else f"{APP_NAME} - nothing unread")
-        if not self.entries:
+        """Lay out the heading strip, the table and the closing hint."""
+        wanting = sum(1 for entry in self.entries if entry.colour != MUTED)
+        self.heading_strip(f"{APP_NAME} - {wanting} wanting attention" if wanting else f"{APP_NAME} - nothing to do")
+        if self.entries:
+            self.table()
+        else:
             tk.Label(
                 self.body,
-                text="No changes recorded yet.",
+                text="Nothing is waiting on you, and nothing has changed since you last looked.",
                 background=BACKGROUND,
                 foreground=MUTED,
                 font=self.regular,
@@ -155,42 +300,12 @@ class Popup:
                 padx=12,
                 pady=14,
             ).pack(fill="x")
-            self.footer()
-            return
-        self.column_headings()
-        self.scrolling_rows()
         self.footer()
-
-    def scrolling_rows(self) -> None:
-        """Lay the rows out in an area that scrolls, so making the window taller shows more of them.
-
-        The headings stay outside it, since a heading that scrolled away with the rows would stop being a heading.
-        """
-        self.canvas = tk.Canvas(self.body, background=BACKGROUND, highlightthickness=0, borderwidth=0)
-        self.canvas.pack(fill="both", expand=True, padx=6)
-        self.rows = tk.Frame(self.canvas, background=BACKGROUND)
-        self.canvas.create_window((0, 0), window=self.rows, anchor="nw", tags="rows")
-        for event, is_new in self.entries:
-            self.row(event, is_new)
-        self.rows.bind("<Configure>", lambda _event: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda event: self.canvas.itemconfigure("rows", width=event.width))
-        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            self.root.bind_all(sequence, self.scroll)
-        self.rows.update_idletasks()
-        self.canvas.configure(height=min(self.rows.winfo_reqheight(), self.root.winfo_screenheight() // 2))
-
-    def scroll(self, event: tk.Event) -> None:
-        """Scroll the rows by a wheel notch, whichever way this platform reports one.
-
-        X11 reports a wheel as button four or five; Windows and macOS report a signed amount instead.
-        """
-        upwards = event.num == 4 if getattr(event, "num", 0) in (4, 5) else event.delta > 0
-        self.canvas.yview_scroll(-1 if upwards else 1, "units")
 
     def heading_strip(self, text: str) -> None:
         """Draw the title strip, which names the window and is what it is dragged by."""
         strip = tk.Frame(self.body, background=BACKGROUND, cursor="fleur")
-        strip.pack(fill="x", padx=12, pady=(10, 6))
+        strip.pack(fill="x", padx=12, pady=(8, 6))
         name = tk.Label(strip, text=text, background=BACKGROUND, foreground=HEADING, font=self.bold)
         name.pack(side="left")
         close = tk.Label(strip, text="X", background=BACKGROUND, foreground=MUTED, font=self.bold, cursor="hand2")
@@ -200,77 +315,84 @@ class Popup:
             widget.bind("<Button-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.move_window)
 
-    def column_headings(self) -> None:
-        """Draw the column headings, so each row's cells can be read without guessing what they are."""
-        line = tk.Frame(self.body, background=BACKGROUND)
-        line.pack(fill="x", padx=6, pady=(2, 0))
-        for heading, width in COLUMNS:
-            self.label(line, heading, HEADING, width, bold=True)
-        tk.Frame(self.body, background=BORDER, height=1).pack(fill="x", padx=10, pady=(3, 3))
+    def style_table(self) -> None:
+        """Colour the table to match the rest of the window.
 
-    def row(self, event: dict, unread: bool) -> None:
-        """Draw one change as a clickable row.
-
-        :param event: the change to describe
-        :param unread: whether it arrived since the user last looked
+        The theme is switched to one that honours background colours. The default theme on Windows draws its own,
+        and would leave the table pale against everything around it.
         """
-        url = event.get("url", "")
-        repo, number = repo_and_number(event)
-        line = tk.Frame(self.rows, background=BACKGROUND, cursor="hand2" if url else "arrow")
-        line.pack(fill="x")
-        cells = (
-            ("*", dot_colour(event, unread), True),
-            (label_for(event["kind"]), TEXT if unread else MUTED, unread),
-            (repo, LINK if url else TEXT, False),
-            (number, LINK if url else TEXT, False),
-            (str(event.get("title") or event.get("detail", ""))[:TITLE_LIMIT], TEXT if unread else MUTED, False),
-            (event.get("actor", ""), MUTED, False),
-            (age_in_words(event["at"]), MUTED, False),
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure(
+            TABLE_STYLE,
+            background=BACKGROUND,
+            fieldbackground=BACKGROUND,
+            foreground=TEXT,
+            font=self.regular,
+            rowheight=self.row_height(),
+            borderwidth=0,
         )
-        for (text, colour, bold), (_heading, width) in zip(cells, COLUMNS, strict=True):
-            self.label(line, text, colour, width, bold=bold)
-        for widget in (line, *line.winfo_children()):
-            widget.bind("<Button-1>", lambda _event, address=url: self.open(address))
-            widget.bind("<Enter>", lambda _event, target=line: self.shade(target, HOVER))
-            widget.bind("<Leave>", lambda _event, target=line: self.shade(target, BACKGROUND))
+        style.configure(f"{TABLE_STYLE}.Heading", background=BORDER, foreground=HEADING, font=self.bold, relief="flat", padding=4)
+        style.map(f"{TABLE_STYLE}.Heading", background=[("active", HOVER)])
+        style.map(TABLE_STYLE, background=[("selected", HOVER)], foreground=[("selected", TEXT)])
+
+    def table(self) -> None:
+        """Draw the rows as a table whose columns resize by dragging the dividers in its headings."""
+        self.style_table()
+        frame = tk.Frame(self.body, background=BACKGROUND)
+        frame.pack(fill="both", expand=True, padx=6)
+        names = [key for key, *_rest in COLUMNS]
+        self.tree = ttk.Treeview(frame, columns=names, show="headings", style=TABLE_STYLE, selectmode="browse")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        for key, heading, width, stretches in COLUMNS:
+            self.tree.heading(key, text=heading, anchor="w")
+            self.tree.column(key, width=self.characters(width), minwidth=self.characters(MINIMUM_COLUMN), stretch=stretches, anchor="w")
+        for colour, tag in TAGS.items():
+            self.tree.tag_configure(tag, foreground=colour)
+        for entry in self.entries:
+            values = (entry.label, entry.repo, entry.number, entry.title, entry.who, entry.when)
+            item = self.tree.insert("", "end", values=values, tags=(TAGS[entry.colour],))
+            self.urls[item] = entry.url
+        self.tree.bind("<Button-1>", self.on_click)
+        self.tree.configure(height=min(len(self.entries), self.root.winfo_screenheight() // (2 * self.row_height())))
+
+    def on_click(self, event: tk.Event) -> None:
+        """Open the row that was clicked, unless the click was on a heading or a divider between columns.
+
+        :param event: the click
+        """
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        url = self.urls.get(self.tree.identify_row(event.y), "")
+        if url:
+            self.open(url)
 
     def footer(self) -> None:
-        """Draw the closing hint, and make the whole bottom strip a place the window can be resized from.
-
-        The strip is the handle rather than only a corner mark, because a one-character target is hard to hit.
-        """
-        strip = tk.Frame(self.body, background=BACKGROUND, cursor="sizing")
+        """Draw the closing hint."""
+        strip = tk.Frame(self.body, background=BACKGROUND)
         strip.pack(fill="x", side="bottom")
-        hint = tk.Label(
+        tk.Label(
             strip,
-            text="Click a row to open it. Wheel scrolls. Drag the title to move, this strip to resize. Escape closes.",
+            text="Click a row to open it. Drag a heading divider to resize a column, the title to move, any edge to resize.",
             background=BACKGROUND,
             foreground=MUTED,
             font=self.regular,
             anchor="w",
             padx=12,
             pady=6,
-            cursor="sizing",
-        )
-        hint.pack(side="left")
-        grip = tk.Label(strip, text="//", background=BACKGROUND, foreground=MUTED, font=self.bold, cursor="sizing", padx=10)
-        grip.pack(side="right")
-        for widget in (strip, hint, grip):
-            widget.bind("<Button-1>", self.start_drag)
-            widget.bind("<B1-Motion>", self.resize_window)
+        ).pack(side="left")
 
-    def edge_handle(self) -> None:
-        """Add a strip down the right-hand edge that the window can also be resized from."""
-        edge = tk.Frame(self.root, background=BORDER, width=EDGE_HANDLE_WIDTH, cursor="sb_h_double_arrow")
-        edge.place(relx=1.0, rely=0.0, anchor="ne", relheight=1.0)
-        edge.bind("<Button-1>", self.start_drag)
-        edge.bind("<B1-Motion>", self.resize_window)
-
-    def shade(self, line: tk.Frame, colour: str) -> None:
-        """Shade a row so it is clear which one a click would open."""
-        line.configure(background=colour)
-        for child in line.winfo_children():
-            child.configure(background=colour)
+    def edge_handles(self) -> None:
+        """Put a grab strip along every edge and corner, so the window resizes from wherever the pointer lands."""
+        for _name, edges, cursor, place in EDGE_HANDLES:
+            handle = tk.Frame(self.root, background=BORDER, cursor=cursor)
+            handle.place(**place)
+            handle.bind("<Button-1>", self.start_drag)
+            handle.bind("<B1-Motion>", lambda event, moving=edges: self.resize_edges(event, moving))
+            handle.lift()
 
     def start_drag(self, event: tk.Event) -> None:
         """Remember where a drag began, and how big and where the window was when it did."""
@@ -283,33 +405,51 @@ class Popup:
         left, top = self.window_origin
         self.root.geometry(f"+{left + event.x_root - start_x}+{top + event.y_root - start_y}")
 
-    def resize_window(self, event: tk.Event) -> None:
-        """Resize the window by however far the pointer has travelled since the drag began."""
+    def resize_edges(self, event: tk.Event, edges: tuple[bool, bool, bool, bool]) -> None:
+        """Resize the window by dragging one of its edges or corners.
+
+        :param event: the motion that is dragging
+        :param edges: which of the left, top, right and bottom edges this handle moves
+        """
+        drag_left, drag_top, drag_right, drag_bottom = edges
         start_x, start_y, width, height = self.drag_origin
-        self.root.geometry(f"{max(MINIMUM_WIDTH, width + event.x_root - start_x)}x{max(MINIMUM_HEIGHT, height + event.y_root - start_y)}")
+        origin_left, origin_top = self.window_origin
+        moved_x, moved_y = event.x_root - start_x, event.y_root - start_y
+
+        new_width = max(MINIMUM_WIDTH, width + (moved_x if drag_right else -moved_x if drag_left else 0))
+        new_height = max(MINIMUM_HEIGHT, height + (moved_y if drag_bottom else -moved_y if drag_top else 0))
+        # Dragging a left or top edge keeps the far edge still, so the window's corner moves by however much the
+        # size actually changed, which is not the pointer's travel once a minimum has been reached.
+        new_left = origin_left + (width - new_width) if drag_left else origin_left
+        new_top = origin_top + (height - new_height) if drag_top else origin_top
+        self.root.geometry(f"{new_width}x{new_height}+{int(new_left)}+{int(new_top)}")
 
     def open(self, url: str) -> None:
         """Open a change on GitHub and close the window.
 
-        :param url: the page to open; a row without one only closes the window
+        :param url: the page to open
         """
-        if url:
-            webbrowser.open(url)
+        webbrowser.open(url)
         self.close()
 
     def close(self) -> None:
         """Take the window down."""
         self.root.destroy()
 
-    def place(self) -> None:
-        """Put the window near the pointer, sized to its contents and kept fully on screen.
+    def preferred_width(self) -> int:
+        """Return the width every column needs at its stated size, so nothing starts out cut off.
 
-        The size comes from what was laid out rather than from a fixed number, so a column can be widened without
-        the last one being quietly cut off.
+        Capped at a share of the screen, because a window wide enough for the longest repository name anyone owns
+        would otherwise stop being a popup. The columns can be dragged narrower or the window wider from there.
         """
+        wanted = sum(self.characters(width) for _key, _heading, width, _stretches in COLUMNS) + WIDTH_ALLOWANCE
+        return min(wanted, int(self.root.winfo_screenwidth() * WIDEST_SHARE_OF_SCREEN))
+
+    def place(self) -> None:
+        """Put the window near the pointer, sized to its contents and kept fully on screen."""
         self.root.update_idletasks()
         screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        width = min(self.root.winfo_reqwidth(), screen_width - 2 * EDGE_MARGIN)
+        width = min(max(MINIMUM_WIDTH, self.preferred_width()), screen_width - 2 * EDGE_MARGIN)
         height = min(self.root.winfo_reqheight(), screen_height - 2 * EDGE_MARGIN)
         left = min(max(EDGE_MARGIN, self.root.winfo_pointerx() - width + POINTER_OFFSET), screen_width - width - EDGE_MARGIN)
         top = min(max(EDGE_MARGIN, self.root.winfo_pointery() - height - POINTER_OFFSET), screen_height - height - EDGE_MARGIN)
@@ -317,7 +457,7 @@ class Popup:
 
     def show(self) -> None:
         """Display the window and wait until it is dismissed."""
-        self.edge_handle()
+        self.edge_handles()
         self.place()
         self.root.deiconify()
         self.root.focus_force()
@@ -328,5 +468,5 @@ class Popup:
 
 
 def show_popup() -> None:
-    """Show the most recent changes in a frameless window, as many as the settings ask for."""
+    """Show what wants attention in a frameless window, as many rows as the settings ask for."""
     Popup(rows_to_show(load_config()["popup_rows"])).show()

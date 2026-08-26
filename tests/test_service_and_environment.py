@@ -7,13 +7,13 @@ import sys
 
 import pytest
 
-from gh_tray import config, environment, events, service
+from gh_tray import config, environment, events, service, snapshot
 
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     """Point every file the polling cycle touches at a temporary directory."""
-    monkeypatch.setattr(service, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
+    monkeypatch.setattr(snapshot, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
     monkeypatch.setattr(events, "EVENTS_PATH", tmp_path / "events.jsonl")
     monkeypatch.setattr(events, "SEEN_PATH", tmp_path / "seen.json")
     return tmp_path
@@ -105,7 +105,7 @@ def test_an_unreadable_snapshot_rebuilds_the_baseline_without_reporting_everythi
     assert result.events == []
     # Not a first run: a damaged file is not proof the user has seen anything, so the unread count must survive.
     assert result.first_run is False
-    assert json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))["version"] == service.SNAPSHOT_VERSION
+    assert json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))["version"] == snapshot.SNAPSHOT_VERSION
 
 
 def test_a_still_unread_mention_is_only_reported_once(workspace, monkeypatch):

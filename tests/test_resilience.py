@@ -12,13 +12,13 @@ import threading
 
 import pytest
 
-from gh_tray import config, events, service
+from gh_tray import config, events, service, snapshot
 
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     """Point every file the polling cycle touches at a temporary directory."""
-    monkeypatch.setattr(service, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
+    monkeypatch.setattr(snapshot, "SNAPSHOT_PATH", tmp_path / "snapshot.json")
     monkeypatch.setattr(events, "EVENTS_PATH", tmp_path / "events.jsonl")
     monkeypatch.setattr(events, "SEEN_PATH", tmp_path / "seen.json")
     return tmp_path
@@ -53,7 +53,7 @@ def test_a_damaged_snapshot_does_not_mark_unread_changes_as_seen(workspace, monk
     service.poll({})
     stub_collector(monkeypatch, digest_with(comments=1))
     assert service.poll({}).status.unread == 1
-    (workspace / "snapshot.json").write_text('{"version": 2, "entries": {"authored:acm', encoding="utf-8")
+    (workspace / "snapshot.json").write_text('{"version": 4, "entries": {"authored:acm', encoding="utf-8")
     result = service.poll({})
     assert result.first_run is False
     assert result.status.unread == 1
@@ -69,7 +69,7 @@ def test_the_snapshot_is_written_whole_or_not_at_all(workspace, monkeypatch):
     stub_collector(monkeypatch, digest_with())
     service.poll({})
     stored = json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))
-    assert stored["version"] == service.SNAPSHOT_VERSION
+    assert stored["version"] == snapshot.SNAPSHOT_VERSION
     assert not list(workspace.glob("*.tmp"))
 
 

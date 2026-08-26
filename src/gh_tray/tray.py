@@ -18,7 +18,8 @@ from .config import load_config
 from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
-from .service import poll, read_snapshot
+from .service import poll
+from .snapshot import read_snapshot
 from .status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
 
 DEFAULT_DASHBOARD = "gh dash"

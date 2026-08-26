@@ -16,7 +16,7 @@ import time
 
 from loguru import logger
 
-from .environment import github_cli, hidden_window_flags
+from .environment import capture_text, github_cli, hidden_window_flags
 
 CALL_TIMEOUT_SECONDS = 60
 # GitHub answers a heavy search with an error often enough that retrying is normal rather than exceptional.
@@ -43,7 +43,7 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
     if not tool:
         raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
     try:
-        done = subprocess.run([tool, *arguments], capture_output=True, text=True, timeout=timeout, check=False, **hidden_window_flags())
+        done = subprocess.run([tool, *arguments], timeout=timeout, check=False, **capture_text(), **hidden_window_flags())
     except subprocess.TimeoutExpired as expiry:
         raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
     except OSError as error:

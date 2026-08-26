@@ -15,24 +15,28 @@ The icon carries a count of changes you have not seen yet.
 A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
 waits half a second to see whether a second click follows.
 
-The click-through window lists one change per row under column headings:
+The click-through window lists what changed since you last looked, then what is merely waiting on you. Changes alone
+would leave it saying "nothing" on a quiet day while three reviews sat in the queue.
 
-| Column     | Holds                                                              |
-| ---------- | ------------------------------------------------------------------ |
-| Marker     | Red for a blocking change, amber for a routine one, grey once seen |
-| Change     | What happened, such as "Checks broke"                              |
-| Repository | The repository it happened in                                      |
-| PR         | The pull request number                                            |
-| Title      | The pull request's title                                           |
-| Who        | Whoever did it: the reviewer, the committer, the commenter         |
-| When       | How long ago                                                       |
+| Column     | Holds                                                                   |
+| ---------- | ----------------------------------------------------------------------- |
+| Change     | What happened, or how it stands: "Checks broke", "Awaiting your review" |
+| Repository | The repository it is in                                                 |
+| PR         | The pull request number                                                 |
+| Title      | The pull request's title                                                |
+| Who        | Whoever did it: the reviewer, the committer, the commenter              |
+| When       | How long ago                                                            |
 
-Who is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of
-somebody else's merge into the branch.
+Rows are red when something is blocking, amber when it is worth a look, and grey once you have seen it. Who is left
+blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of somebody
+else's merge into the branch.
 
-It lists the last 20 changes by default, which is a setting, and the list scrolls with the wheel. The window has no
-frame, so drag its title strip to move it and its bottom strip or right edge to resize it. Making it taller shows more
-rows. Press Escape, click the close mark, or click anything else on screen to dismiss it.
+These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
+for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
+
+It lists 20 rows by default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column.
+The window has no frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the
+close mark, or click anything else on screen to dismiss it.
 
 ## What counts as a change
 
@@ -57,12 +61,28 @@ and where it covers several changes, the one listed first.
 
 ## Requirements
 
-- [GitHub CLI](https://cli.github.com/) (`gh`), signed in
 - [uv](https://docs.astral.sh/uv/), which fetches Python and the dependencies
-- [gh-dash](https://github.com/dlvhdr/gh-dash) for the dashboard: `gh extension install dlvhdr/gh-dash`
+- [GitHub CLI](https://cli.github.com/) (`gh`), signed in
+- [gh-dash](https://github.com/dlvhdr/gh-dash) for the dashboard
 
 Nothing else: no shell, and no command line tools beyond the GitHub one. The application never handles a token of its
 own. It borrows whatever you have already signed in with, and stops working the moment you sign out.
+
+To see where you stand and install what is missing:
+
+```bash
+uv run gh-tray setup
+```
+
+Each requirement is listed with a light: 🟢 present, 🟡 missing but installable from here, 🔴 missing and needing you. Only
+installs that manage their own elevation are ever run, meaning a package manager that asks for administrator rights
+itself, or a GitHub extension that lands in your own directory. Anything needing a root shell is printed for you to run,
+because a desktop application quietly acquiring root is not a thing anyone should have to trust. Signing in is never
+done for you either, since that means entering credentials.
+
+Starting the tray from a terminal with something missing offers the same thing before it starts. Starting it from a
+login entry, where there is nobody to ask, it says what is missing and stops rather than showing an icon that could
+never report anything.
 
 ## Running it
 

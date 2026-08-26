@@ -40,6 +40,16 @@ def hidden_window_flags() -> dict[str, int]:
     return {}
 
 
+def capture_text() -> dict:
+    """Return subprocess keyword arguments for reading a command's output as text.
+
+    The encoding is named rather than left to the system. The GitHub tool writes UTF-8 whatever the machine's
+    locale says, so on a Windows console reading it as the local codepage turns a tick into ``a-hat`` and would
+    mangle any non-English pull request title on its way through.
+    """
+    return {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace"}
+
+
 def make_dpi_aware() -> None:
     """Tell Windows this process draws at the real screen resolution.
 
@@ -70,9 +80,11 @@ def github_auth_summary() -> str:
     github = github_cli()
     if not github:
         return "GitHub CLI (gh) not found on PATH"
-    done = subprocess.run([github, "auth", "status"], capture_output=True, text=True, check=False, **hidden_window_flags())
+    done = subprocess.run([github, "auth", "status"], check=False, **capture_text(), **hidden_window_flags())
     lines = (done.stdout + done.stderr).splitlines()
-    return next((line.strip() for line in lines if "Logged in" in line), "Not signed in to GitHub")
+    summary = next((line.strip() for line in lines if "Logged in" in line), "")
+    # The tool prefixes the line with a tick, which says nothing the words do not.
+    return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
 
 
 def terminal_command(command: str, title: str, maximised: bool) -> list[str]:

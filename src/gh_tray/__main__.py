@@ -36,6 +36,86 @@ def start_logging(to_console: bool) -> None:
     logger.add(LOG_PATH, level="INFO", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
 
 
+LIGHTS = ("🟢", "🟡", "🔴")
+PLAIN_LIGHTS = ("[ ok ]", "[ -- ]", "[ !! ]")
+
+
+def lights() -> tuple[str, str, str]:
+    """Return the marks for present, installable and needs-you, in a form this console can actually print.
+
+    A Windows console still running a legacy codepage cannot encode a coloured circle and raises rather than
+    substituting, so plain words stand in where that is the case.
+    """
+    try:
+        for light in LIGHTS:
+            light.encode(sys.stdout.encoding or "utf-8")
+    except (UnicodeEncodeError, LookupError):
+        return PLAIN_LIGHTS
+    return LIGHTS
+
+
+def print_status() -> list:
+    """Print every outside tool with a light saying whether it is here, and return the ones that are not.
+
+    Green is present, amber is missing but can be installed from here, red is missing and needs the user to act.
+
+    :return: the requirements that are not satisfied
+    """
+    from .prerequisites import requirements
+
+    present_mark, installable_mark, manual_mark = lights()
+    outstanding = []
+    print(f"{APP_NAME} needs these:\n")
+    for requirement, present in requirements():
+        light = present_mark if present else (installable_mark if requirement.installable else manual_mark)
+        note = requirement.summary if present else (" ".join(requirement.command) or requirement.manual)
+        print(f"  {light}  {requirement.name:<14} {note}")
+        if not present:
+            outstanding.append(requirement)
+    print()
+    return outstanding
+
+
+def offer_to_install(assume_yes: bool = False) -> bool:
+    """Report anything missing and offer to install what can be installed.
+
+    :param assume_yes: install without asking, for a caller that has already decided
+    :return: whether everything is now present
+    """
+    from .prerequisites import install, missing
+
+    outstanding = print_status()
+    if not outstanding:
+        print("Nothing to do.")
+        return True
+    installable = [requirement for requirement in outstanding if requirement.installable]
+    if not installable:
+        print("None of these can be installed from here. Run the commands above, then try again.")
+        return False
+    if not assume_yes and input(f"Install {len(installable)} of these now? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("Nothing installed.")
+        return False
+    for requirement in installable:
+        print(f"\nInstalling {requirement.name}...")
+        install(requirement)
+    print()
+    still_missing = missing()
+    for requirement in still_missing:
+        print(f"{lights()[2]}  Still missing: {requirement.name}. {requirement.manual or 'Install it and try again.'}")
+    return not still_missing
+
+
+@app.command
+def setup(yes: bool = False) -> int:
+    """Check for the outside tools gh-tray needs, and offer to install any that are missing.
+
+    :param yes: install without asking first
+    :return: process exit code, non-zero when something is still missing
+    """
+    start_logging(to_console=True)
+    return 0 if offer_to_install(assume_yes=yes) else 1
+
+
 @app.default
 def run_tray() -> int:
     """Show the tray icon and poll on a timer.
@@ -43,6 +123,19 @@ def run_tray() -> int:
     :return: process exit code
     """
     start_logging(to_console=False)
+    from .prerequisites import missing
+
+    if missing():
+        # Started from a terminal, this can ask. Started from a login entry there is nobody to ask, so it says what
+        # is wrong and stops rather than showing an icon that could never report anything.
+        if sys.stdin is not None and sys.stdin.isatty():
+            if not offer_to_install():
+                return 1
+        else:
+            names = ", ".join(requirement.name for requirement in missing())
+            logger.error("cannot start, these are missing: {}", names)
+            print(f"gh-tray cannot start. Missing: {names}. Run 'gh-tray setup' to fix this.", file=sys.stderr)
+            return 1
     lock = SingleInstance(LOCK_PATH)
     if not lock.acquire():
         logger.error("another instance is already running")

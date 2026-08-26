@@ -46,6 +46,7 @@ SNAPSHOT_DEFAULTS: dict = {
     "mergeable": "UNKNOWN",
     "comments": 0,
     "isDraft": False,
+    "updatedAt": "",
     "author": "",
     "lastCommitBy": "",
     "lastReviewBy": "",
