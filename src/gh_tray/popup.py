@@ -16,6 +16,7 @@ from __future__ import annotations
 import tkinter as tk
 import webbrowser
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from tkinter import font as tkfont
 from tkinter import ttk
 
@@ -52,7 +53,24 @@ MUTED = "#9198a1"
 LINK = "#79c0ff"
 URGENT = "#ff7b72"
 ROUTINE = "#e3b341"
+GOOD = "#3fb950"
 HOVER = "#21262d"
+
+# How far a row keeps its colour as it ages, from untouched today to long forgotten. The table can only colour a
+# whole row, not one cell of it, so age is carried by fading the row rather than by tinting its date: what a row is
+# stays in the hue, and how stale it is shows in how strongly that hue is drawn.
+AGE_FADE: tuple[tuple[float, float], ...] = (
+    (1, 1.0),
+    (7, 0.88),
+    (30, 0.76),
+    (90, 0.64),
+    (180, 0.52),
+    (float("inf"), 0.42),
+)
+
+# The colour a change is drawn in, where its kind alone decides. Anything not named here is red when it blocks
+# somebody and amber otherwise.
+KIND_COLOURS = {"ready_to_merge": GOOD}
 
 # Each column: the name it is known by, its heading, how many characters wide it starts, and whether it takes the
 # space a wider window adds. Every one can be resized afterwards by dragging the divider in its heading.
@@ -65,9 +83,18 @@ COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
     ("when", "When", 10, False),
 )
 STRETCHING_COLUMN = "Title"
+DEFAULT_SORT = "when"
 
-# A row is coloured by what it is: blocking, worth a look, or already seen.
-TAGS = {URGENT: "urgent", ROUTINE: "routine", MUTED: "seen"}
+# How each column sorts when its heading is clicked. Dates sort as moments and numbers as numbers, because sorting
+# either as the text shown would put "3m ago" beside "3w ago" and "#7" after "#128".
+SORT_KEYS = {
+    "change": lambda row: row.label.casefold(),
+    "repo": lambda row: row.repo.casefold(),
+    "pr": lambda row: pull_request_number(row.number),
+    "title": lambda row: row.title.casefold(),
+    "who": lambda row: (not row.who, row.who.casefold()),
+    "when": lambda row: moment(row.at),
+}
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
@@ -122,16 +149,53 @@ class Row:
     when: str
     url: str
     colour: str
+    at: str = ""
 
 
-# What each standing state is called, whose name goes beside it, and whether it should be marked as blocking. These
-# describe how a pull request is right now, unlike the event labels, which describe something that just happened.
-STANDING_STATES: tuple[tuple[str, str, str, bool], ...] = (
-    ("reviewing", "Awaiting your review", "author", True),
-    ("changes_requested", "Changes requested", "lastReviewBy", True),
-    ("checks_failing", "Checks failing", "lastCommitBy", True),
-    ("ready_to_merge", "Ready to merge", "lastReviewBy", False),
+# What each standing state is called, whose name goes beside it, whether it blocks somebody, and the colour it is
+# drawn in. These describe how a pull request is right now, unlike the event labels, which describe what just
+# happened. Something ready to merge is good news rather than a warning, so it is green.
+STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
+    ("reviewing", "Awaiting your review", "author", True, URGENT),
+    ("changes_requested", "Changes requested", "lastReviewBy", True, URGENT),
+    ("checks_failing", "Checks failing", "lastCommitBy", True, URGENT),
+    ("ready_to_merge", "Ready to merge", "lastReviewBy", False, GOOD),
 )
+
+
+def pull_request_number(shown: str) -> int:
+    """Return a pull request number as a number, so a column of them sorts by size rather than by spelling.
+
+    :param shown: the number as the table shows it, such as ``#128``
+    """
+    digits = shown.lstrip("#").strip()
+    return int(digits) if digits.isdigit() else 0
+
+
+def blend(colour: str, towards: str, weight: float) -> str:
+    """Mix one colour towards another.
+
+    :param colour: the colour to start from
+    :param towards: the colour to move it towards
+    :param weight: how much of the first to keep, where one keeps it entirely and zero loses it
+    :return: the mixed colour
+    """
+    start = (int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16))
+    end = (int(towards[1:3], 16), int(towards[3:5], 16), int(towards[5:7], 16))
+    mixed = (round(first * weight + second * (1 - weight)) for first, second in zip(start, end, strict=True))
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
+def fade_for(stamp: str, now: datetime | None = None) -> float:
+    """Return how strongly a row of a given age should be drawn.
+
+    :param stamp: when the row last had anything happen to it
+    :param now: the moment to measure against, defaulting to the present
+    """
+    if not stamp:
+        return AGE_FADE[0][1]
+    days = max(0.0, ((now or datetime.now(UTC)) - moment(stamp)).total_seconds()) / 86400
+    return next(weight for limit, weight in AGE_FADE if days < limit)
 
 
 def repo_and_number(event: dict) -> tuple[str, str]:
@@ -157,7 +221,7 @@ def dot_colour(event: dict, unread: bool) -> str:
     """
     if not unread:
         return MUTED
-    return URGENT if is_urgent(event["kind"]) else ROUTINE
+    return KIND_COLOURS.get(event["kind"], URGENT if is_urgent(event["kind"]) else ROUTINE)
 
 
 def row_from_event(event: dict, unread: bool) -> Row:
@@ -176,16 +240,17 @@ def row_from_event(event: dict, unread: bool) -> Row:
         when=age_in_words(event["at"]),
         url=str(event.get("url", "")),
         colour=dot_colour(event, unread),
+        at=str(event.get("at", "")),
     )
 
 
-def standing_state(entry: dict) -> tuple[str, str, bool] | None:
+def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
     """Return how a pull request stands, when that is something worth acting on.
 
     :param entry: one pull request as the last poll recorded it
-    :return: its label, whose name to show and whether it is blocking, or None when nothing is wanted of the user
+    :return: its label, whose name to show, whether it blocks and its colour, or None when nothing is wanted
     """
-    for state, label, who_field, urgent in STANDING_STATES:
+    for state, label, who_field, urgent, colour in STANDING_STATES:
         matches = {
             "reviewing": entry.get("side") == "reviewing",
             "changes_requested": entry.get("side") == "authored" and entry.get("reviewDecision") == "CHANGES_REQUESTED",
@@ -193,7 +258,7 @@ def standing_state(entry: dict) -> tuple[str, str, bool] | None:
             "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
         }[state]
         if matches:
-            return label, str(entry.get(who_field, "")), urgent
+            return label, str(entry.get(who_field, "")), urgent, colour
     return None
 
 
@@ -212,7 +277,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
         url = str(entry.get("url", ""))
         if standing is None or (url and url in already_listed):
             continue
-        label, who, urgent = standing
+        label, who, urgent, colour = standing
         touched = str(entry.get("updatedAt", ""))
         rows.append(
             (
@@ -226,7 +291,8 @@ def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
                     who=who,
                     when=age_in_words(touched) if touched else "",
                     url=url,
-                    colour=URGENT if urgent else ROUTINE,
+                    colour=colour,
+                    at=touched,
                 ),
             )
         )
@@ -234,11 +300,22 @@ def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
     return [row for _urgent, _touched, row in rows]
 
 
-def rows_to_show(count: int) -> list[Row]:
-    """Return the lines to list: what changed since the user last looked, then what is waiting on them.
+def sorted_rows(rows: list[Row], column: str = DEFAULT_SORT, newest_first: bool = True) -> list[Row]:
+    """Return rows in the order a column asks for.
 
-    Changes come first because they are news. Standing state fills the rest, so the window is useful even on a quiet
-    day, and so it never disagrees with the hover summary about whether anything wants attention.
+    :param rows: the rows to order
+    :param column: which column to order by
+    :param newest_first: whether to reverse the column's natural order, which for dates puts the newest at the top
+    """
+    return sorted(rows, key=SORT_KEYS.get(column, SORT_KEYS[DEFAULT_SORT]), reverse=newest_first)
+
+
+def rows_to_show(count: int) -> list[Row]:
+    """Return the lines to list: what changed since the user last looked, plus what is waiting on them.
+
+    Standing state is included, so the window is useful even on a quiet day and never disagrees with the hover
+    summary about whether anything wants attention. The whole list is then ordered newest first, so the most recent
+    thing is at the top wherever it came from.
 
     :param count: how many rows to return at most
     """
@@ -247,7 +324,7 @@ def rows_to_show(count: int) -> list[Row]:
     changes = [row_from_event(event, since is None or moment(event["at"]) > since) for event in recent_events(count)]
     listed = {row.url for row in changes if row.url}
     entries, _damaged = read_snapshot()
-    return (changes + rows_from_snapshot(entries or {}, listed))[:count]
+    return sorted_rows(changes + rows_from_snapshot(entries or {}, listed))[:count]
 
 
 class Popup:
@@ -258,6 +335,9 @@ class Popup:
         make_dpi_aware()
         self.entries = entries
         self.urls: dict[str, str] = {}
+        self.tags: set[str] = set()
+        self.sort_column = DEFAULT_SORT
+        self.newest_first = True
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
         self.root = tk.Tk()
@@ -348,16 +428,49 @@ class Popup:
         self.tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         for key, heading, width, stretches in COLUMNS:
-            self.tree.heading(key, text=heading, anchor="w")
+            self.tree.heading(key, text=heading, anchor="w", command=lambda column=key: self.sort_by(column))
             self.tree.column(key, width=self.characters(width), minwidth=self.characters(MINIMUM_COLUMN), stretch=stretches, anchor="w")
-        for colour, tag in TAGS.items():
-            self.tree.tag_configure(tag, foreground=colour)
-        for entry in self.entries:
-            values = (entry.label, entry.repo, entry.number, entry.title, entry.who, entry.when)
-            item = self.tree.insert("", "end", values=values, tags=(TAGS[entry.colour],))
-            self.urls[item] = entry.url
+        self.fill()
         self.tree.bind("<Button-1>", self.on_click)
         self.tree.configure(height=min(len(self.entries), self.root.winfo_screenheight() // (2 * self.row_height())))
+
+    def tag_for(self, entry: Row) -> str:
+        """Return the tag that colours one row, making it if this combination has not been seen yet.
+
+        A row's hue says what it is and how strongly it is drawn says how stale it is, so there is one tag per pair
+        of the two rather than one per state.
+
+        :param entry: the row to colour
+        """
+        fade = fade_for(entry.at)
+        tag = f"{entry.colour}-{fade}"
+        if tag not in self.tags:
+            self.tree.tag_configure(tag, foreground=blend(entry.colour, BACKGROUND, fade))
+            self.tags.add(tag)
+        return tag
+
+    def fill(self) -> None:
+        """Put the rows into the table in their current order, replacing whatever was there."""
+        self.tree.delete(*self.tree.get_children())
+        self.urls.clear()
+        for entry in self.entries:
+            values = (entry.label, entry.repo, entry.number, entry.title, entry.who, entry.when)
+            item = self.tree.insert("", "end", values=values, tags=(self.tag_for(entry),))
+            self.urls[item] = entry.url
+
+    def sort_by(self, column: str) -> None:
+        """Reorder the table by a column, turning the order around when it is already the one being sorted by.
+
+        :param column: the column whose heading was clicked
+        """
+        # Dates read most usefully newest first, everything else A to Z, so each column starts the way it is wanted.
+        self.newest_first = not self.newest_first if column == self.sort_column else column == DEFAULT_SORT
+        self.sort_column = column
+        self.entries = sorted_rows(self.entries, column, self.newest_first)
+        self.fill()
+        for key, heading, _width, _stretches in COLUMNS:
+            marker = (" v" if self.newest_first else " ^") if key == column else ""
+            self.tree.heading(key, text=f"{heading}{marker}")
 
     def on_click(self, event: tk.Event) -> None:
         """Open the row that was clicked, unless the click was on a heading or a divider between columns.

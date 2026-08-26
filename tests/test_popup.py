@@ -240,3 +240,81 @@ def test_a_mention_names_whoever_wrote_it():
 def test_a_mention_nobody_could_be_found_for_still_appears():
     digest = {"mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "reason": "mention"}]}
     assert events.detect_mention_events(digest, set(), events.utc_now())[0]["actor"] == ""
+
+
+def test_something_ready_to_merge_is_good_news_rather_than_a_warning(event_log):
+    store(event_log, waiting(1, side="authored", reviewDecision="APPROVED", lastReviewBy="approver"))
+    assert popup.rows_to_show(10)[0].colour == popup.GOOD
+
+
+def test_a_ready_to_merge_change_is_green_too():
+    assert popup.dot_colour(change("ready_to_merge"), unread=True) == popup.GOOD
+
+
+def test_the_newest_row_is_at_the_top_whatever_it_came_from(event_log):
+    old = waiting(1, updatedAt="2020-01-01T00:00:00Z")
+    store(event_log, old)
+    events.append_events([change(key="acme/widget#1")])
+    assert popup.rows_to_show(10)[0].repo == "acme/widget"
+
+
+def test_a_change_older_than_what_is_waiting_sinks_below_it(event_log):
+    store(event_log, waiting(1, updatedAt=events.utc_now().replace(".", "")[:19] + "Z"))
+    events.append_events([change(key="acme/widget#1", at="2020-01-01T00:00:00.000000Z")])
+    assert popup.rows_to_show(10)[0].repo == "acme/gadget"
+
+
+def test_a_column_of_numbers_sorts_by_size_not_by_spelling():
+    rows = [
+        popup.Row("", "acme/widget", "#7", "", "", "", "", popup.URGENT),
+        popup.Row("", "acme/widget", "#128", "", "", "", "", popup.URGENT),
+    ]
+    assert [row.number for row in popup.sorted_rows(rows, "pr", newest_first=False)] == ["#7", "#128"]
+
+
+def test_a_row_with_no_number_sorts_without_failing():
+    rows = [popup.Row("", "acme/widget", "", "", "", "", "", popup.URGENT)]
+    assert popup.sorted_rows(rows, "pr", newest_first=False) == rows
+
+
+def test_text_columns_sort_regardless_of_case():
+    rows = [
+        popup.Row("beta", "", "", "", "", "", "", popup.URGENT),
+        popup.Row("Alpha", "", "", "", "", "", "", popup.URGENT),
+    ]
+    assert [row.label for row in popup.sorted_rows(rows, "change", newest_first=False)] == ["Alpha", "beta"]
+
+
+def test_rows_with_nobody_named_sort_last():
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT),
+        popup.Row("", "", "", "", "someone", "", "", popup.URGENT),
+    ]
+    assert [row.who for row in popup.sorted_rows(rows, "who", newest_first=False)] == ["someone", ""]
+
+
+def test_an_unknown_column_falls_back_to_the_usual_order():
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, at="2020-01-01T00:00:00.000000Z"),
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, at="2026-01-01T00:00:00.000000Z"),
+    ]
+    assert popup.sorted_rows(rows, "invented")[0].at.startswith("2026")
+
+
+def test_a_row_fades_as_it_ages():
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    fresh = popup.fade_for((now - timedelta(hours=2)).strftime(events.TIMESTAMP_FORMAT), now=now)
+    stale = popup.fade_for((now - timedelta(days=300)).strftime(events.TIMESTAMP_FORMAT), now=now)
+    assert fresh == 1.0
+    assert stale < fresh
+
+
+def test_a_row_with_no_date_is_drawn_at_full_strength():
+    assert popup.fade_for("") == popup.AGE_FADE[0][1]
+
+
+def test_fading_keeps_the_hue_and_only_dims_it():
+    faded = popup.blend(popup.URGENT, popup.BACKGROUND, 0.5)
+    assert faded != popup.URGENT
+    assert popup.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
+    assert popup.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND

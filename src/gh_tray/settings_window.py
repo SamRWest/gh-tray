@@ -12,6 +12,7 @@ from . import APP_NAME
 from .config import TEXT_KEYS, load_config, save_config
 from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
+from .prerequisites import signed_in
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
@@ -23,6 +24,10 @@ FIELDS = {
 
 
 POINTS_PER_INCH = 72.0
+
+# Signed in or not is the difference between the application working and not, so the line saying which is coloured.
+SIGNED_IN = "#1a7f37"
+SIGNED_OUT = "#d1242f"
 
 
 def run_settings() -> None:
@@ -62,7 +67,10 @@ def run_settings() -> None:
     autostart = tk.BooleanVar(value=autostart_enabled())
     ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(row=row, column=0, columnspan=2, sticky="w")
     row += 1
-    ttk.Label(frame, text=github_auth_summary(), wraplength=440).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
+    # Whether you are signed in decides whether anything works at all, so it says so in colour as well as in words.
+    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=SIGNED_IN if signed_in() else SIGNED_OUT).grid(
+        row=row, column=0, columnspan=2, sticky="w", pady=(6, 0)
+    )
     row += 1
 
     def sign_in() -> None:

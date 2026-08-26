@@ -27,16 +27,18 @@ would leave it saying "nothing" on a quiet day while three reviews sat in the qu
 | Who        | Whoever did it: the reviewer, the committer, the commenter              |
 | When       | How long ago                                                            |
 
-Rows are red when something is blocking, amber when it is worth a look, and grey once you have seen it. Who is left
-blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of somebody
-else's merge into the branch.
+Rows are red when something is blocking, amber when it is worth a look, green when it is good news such as a pull
+request that could be merged, and grey once you have seen it. Each row fades as it ages, so a stale row is drawn in a
+dimmer shade of the same colour. Who is left blank where GitHub attributes the change to nobody, which is the case for a
+conflict: it is a consequence of somebody else's merge into the branch.
 
 These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
 for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
 
-It lists 20 rows by default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column.
-The window has no frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the
-close mark, or click anything else on screen to dismiss it.
+Newest is at the top. Click a heading to sort by that column and again to turn the order around. It lists 20 rows by
+default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window has no
+frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the close mark, or
+click anything else on screen to dismiss it.
 
 ## What counts as a change
 
