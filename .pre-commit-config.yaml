@@ -1,0 +1,44 @@
+# Checks run before every commit, and again in full on every push by the Unit Tests workflow.
+# Run them by hand with `uv run poe lint` (staged files) or `uv run poe lint_all` (everything).
+repos:
+  # Lint the workflow files, since a broken one only shows up after a push.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.10
+    hooks:
+      - id: actionlint
+
+  # The formatter first, so the linter judges the code as it will be committed.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.13
+    hooks:
+      - id: ruff-format
+        types_or: [ python, pyi ]
+      - id: ruff-check
+        types_or: [ python, pyi ]
+        args: [ --fix, --output-format=concise ]
+
+  # Security checks run as part of ruff-check above, through the flake8-bandit ("S") rules selected in
+  # pyproject.toml. That is the same set bandit implements, so bandit itself is not installed. Add `# noqa: S###`
+  # to a line to ignore one finding on it.
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [ '--maxkb=1024' ]
+      - id: detect-private-key
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: name-tests-test
+        args: [ '--pytest-test-first' ]
+
+  # Scan the dependencies for known vulnerabilities. See https://github.com/nyudenkov/pysentry
+  # To fix one: `uv pip install -U <package>`, then raise its floor in pyproject.toml so the fix sticks.
+  - repo: https://github.com/pysentry/pysentry-pre-commit
+    rev: v0.3.13
+    hooks:
+      - id: pysentry

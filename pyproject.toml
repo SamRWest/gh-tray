@@ -26,7 +26,16 @@ build-backend = "hatchling.build"
 packages = ["src/gh_tray"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6"]
+dev = ["poethepoet>=0.30", "prek>=0.2", "pytest>=8.0", "ruff>=0.6"]
+
+# Named jobs, run as `uv run poe <name>`. `uv run poe` on its own lists them.
+[tool.poe.tasks]
+init = { shell = "uv sync; uv run prek install", help = "Install the dependencies and the pre-commit hooks. Run this after cloning or pulling." }
+run = { cmd = "uv run gh-tray", help = "Start the tray" }
+once = { cmd = "uv run gh-tray once", help = "Poll a single time and print what it found, without the tray" }
+lint = { cmd = "uv run prek run", help = "Run the pre-commit checks on staged files" }
+lint_all = { cmd = "uv run prek run --all-files", help = "Run the pre-commit checks on every file, staged or not" }
+test = { cmd = "uv run pytest", help = "Run the tests" }
 
 [tool.ruff]
 line-length = 150
@@ -34,11 +43,16 @@ target-version = "py313"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D"]
-ignore = ["D203", "D213"]
+# "S" is the flake8-bandit security rule set, which is what bandit itself implements, so bandit is not installed
+# separately. Add `# noqa: S###` to a line to ignore one finding on it.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D", "S"]
+# D203 and D213 contradict the docstring style used here. S603 fires on every subprocess call given a list of
+# arguments, which is the form that cannot be shell-injected: the risky forms are S602 and S605 and stay on.
+ignore = ["D203", "D213", "S603"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["D103"]
+# A test says what it means by asserting, and its name says what it covers, so neither wants a docstring.
+"tests/*" = ["D103", "S101"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"

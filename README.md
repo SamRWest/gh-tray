@@ -222,10 +222,28 @@ as gone: without that, one transient failure would report everything that came b
 
 ## Development
 
-```bash
-uv run pytest
-```
+Set the project up, which installs the dependencies and the pre-commit hooks:
 
 ```bash
-uv run ruff check .
+uv run poe init
 ```
+
+The jobs are named, and `uv run poe` on its own lists them:
+
+| Job        | Does                                                        |
+| ---------- | ----------------------------------------------------------- |
+| `test`     | Runs the tests                                              |
+| `lint`     | Runs the pre-commit checks on staged files                  |
+| `lint_all` | Runs them on every file, staged or not                      |
+| `run`      | Starts the tray                                             |
+| `once`     | Polls a single time and prints the result, without the tray |
+
+The checks are formatting and linting with [ruff](https://docs.astral.sh/ruff/), a workflow linter, a scan of the
+dependencies for known vulnerabilities, and the usual file hygiene. Ruff's security rules are on, which is the same set
+[bandit](https://bandit.readthedocs.io/) implements, so bandit is not installed separately.
+
+Every push runs the tests on Linux and Windows and the checks once, in the **Checks and tests** workflow. Windows is
+where the awkward parts live: measuring the taskbar, locking against a second copy, and starting a window with no
+console. Linux is checked because the tray, the login entry and the terminal launcher all claim to work there.
+
+Tests that need a window skip themselves where there is no display to build one on.

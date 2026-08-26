@@ -47,6 +47,7 @@ def search_for(base: str, max_age_days: int, now: datetime) -> str:
         return base
     return f"{base} updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}"
 
+
 SEARCH_QUERY = """
 query($q: String!, $cursor: String) {
   search(query: $q, type: ISSUE, first: 40, after: $cursor) {

@@ -42,7 +42,9 @@ def open_dashboard(config: dict) -> None:
     A command named in the settings is run as given, since how its own window opens is then the user's business.
     """
     if config.get("dashboard_command"):
-        subprocess.Popen(config["dashboard_command"], shell=True)
+        # Through a shell on purpose: this is a command line the user typed into their own settings, and running it
+        # any other way would refuse the pipes, quoting and arguments that make it worth setting at all.
+        subprocess.Popen(config["dashboard_command"], shell=True)  # noqa: S602
         return
     open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", maximised=True)
 

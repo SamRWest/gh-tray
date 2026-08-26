@@ -104,9 +104,7 @@ def run_settings() -> None:
     for column, (value, label) in enumerate(THEME_CHOICES):
         ttk.Radiobutton(styles, text=label, value=value, variable=style_choice).grid(row=0, column=column, padx=(0, 10))
     row += 1
-    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(
-        row=row, column=1, sticky="w", pady=(0, 4)
-    )
+    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(row=row, column=1, sticky="w", pady=(0, 4))
     row += 1
 
     ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)

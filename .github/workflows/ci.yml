@@ -1,0 +1,56 @@
+# Run the checks and the tests on every push.
+#
+# Windows is where this application is developed and where its awkward parts live: the taskbar measurement, the
+# single-instance lock and the hidden-window launcher all take a different path there. Linux is checked too, since
+# the tray, the autostart entry and the terminal launcher all claim to work on it.
+name: Checks and tests
+
+on: [ push, workflow_dispatch ]
+
+env:
+  PYTHON_VERSION: '3.13'
+  UV_VERSION: '0.9.28'
+
+jobs:
+  test:
+    timeout-minutes: 20
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Set up python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      # Fails if the lockfile no longer matches pyproject.toml, which would otherwise let a stale one pass unnoticed.
+      - name: Check the lockfile is up to date
+        run: uv lock --check
+
+      - name: Install the dependencies
+        run: uv sync --locked
+
+      # The window and the tray icon both need a display. There is none on a runner, so one is faked for the Linux
+      # job; the Windows one has a desktop of its own. Tests that still cannot build a window skip themselves.
+      - name: Run the tests
+        run: ${{ matrix.os == 'ubuntu-latest' && 'xvfb-run -a' || '' }} uv run poe test
+
+      # Only once: the checks are about the files, not the platform, and running them twice says nothing new.
+      - name: Run the pre-commit checks
+        if: matrix.os == 'ubuntu-latest'
+        run: uv run poe lint_all

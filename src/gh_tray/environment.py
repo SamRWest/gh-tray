@@ -217,14 +217,15 @@ def autostart_body(command: list[str]) -> str:
         # that launchd silently refuses to load.
         plist = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
         return plistlib.dumps(plist).decode("utf-8")
-    return (
-        "[Desktop Entry]\n"
-        "Type=Application\n"
-        f"Name={APP_NAME}\n"
-        f"Exec={desktop_entry_exec(command)}\n"
-        "Terminal=false\n"
-        "X-GNOME-Autostart-enabled=true\n"
-    )
+    entry = [
+        "[Desktop Entry]",
+        "Type=Application",
+        f"Name={APP_NAME}",
+        f"Exec={desktop_entry_exec(command)}",
+        "Terminal=false",
+        "X-GNOME-Autostart-enabled=true",
+    ]
+    return "\n".join(entry) + "\n"
 
 
 def autostart_encoding() -> str:
