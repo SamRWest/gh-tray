@@ -13,6 +13,7 @@ from .config import TEXT_KEYS, load_config, save_config
 from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 from .prerequisites import signed_in
+from .theme import PALETTE
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
@@ -25,9 +26,31 @@ FIELDS = {
 
 POINTS_PER_INCH = 72.0
 
-# Signed in or not is the difference between the application working and not, so the line saying which is coloured.
-SIGNED_IN = "#1a7f37"
-SIGNED_OUT = "#d1242f"
+
+def apply_theme(root: tk.Tk) -> None:
+    """Colour every kind of widget this window uses to match the desktop's theme.
+
+    The theme is switched to one that honours colours first. The default on Windows draws its own and ignores most
+    of what is set here, which would leave a white window in a dark desktop.
+
+    :param root: the window to style
+    """
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    root.configure(background=PALETTE.background)
+    style.configure(".", background=PALETTE.background, foreground=PALETTE.text, fieldbackground=PALETTE.surface, borderwidth=0)
+    style.configure("TFrame", background=PALETTE.background)
+    style.configure("TLabel", background=PALETTE.background, foreground=PALETTE.text)
+    style.configure("TCheckbutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
+    style.map(
+        "TCheckbutton",
+        background=[("active", PALETTE.background)],
+        indicatorcolor=[("selected", PALETTE.good), ("!selected", PALETTE.surface)],
+    )
+    style.configure("TEntry", fieldbackground=PALETTE.surface, foreground=PALETTE.text, insertcolor=PALETTE.text, bordercolor=PALETTE.border)
+    style.configure("TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface)
+    style.map("TButton", background=[("active", PALETTE.hover)])
+    style.configure("TSeparator", background=PALETTE.border)
 
 
 def run_settings() -> None:
@@ -39,6 +62,7 @@ def run_settings() -> None:
     root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
     root.title(f"{APP_NAME} settings")
     root.resizable(False, False)
+    apply_theme(root)
     frame = ttk.Frame(root, padding=12)
     frame.grid(sticky="nsew")
 
@@ -68,7 +92,7 @@ def run_settings() -> None:
     ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(row=row, column=0, columnspan=2, sticky="w")
     row += 1
     # Whether you are signed in decides whether anything works at all, so it says so in colour as well as in words.
-    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=SIGNED_IN if signed_in() else SIGNED_OUT).grid(
+    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.good if signed_in() else PALETTE.urgent).grid(
         row=row, column=0, columnspan=2, sticky="w", pady=(6, 0)
     )
     row += 1

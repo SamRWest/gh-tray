@@ -27,10 +27,14 @@ would leave it saying "nothing" on a quiet day while three reviews sat in the qu
 | Who        | Whoever did it: the reviewer, the committer, the commenter              |
 | When       | How long ago                                                            |
 
+The window follows your desktop's light or dark theme, as does the settings window. The theme is read when the window
+opens, so changing it takes effect the next time you click.
+
 Rows are red when something is blocking, amber when it is worth a look, green when it is good news such as a pull
 request that could be merged, and grey once you have seen it. Each row fades as it ages, so a stale row is drawn in a
-dimmer shade of the same colour. Who is left blank where GitHub attributes the change to nobody, which is the case for a
-conflict: it is a consequence of somebody else's merge into the branch.
+dimmer shade of the same colour, with the date in its own colour so age reads across the row without hiding what the row
+is about. Who is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a
+consequence of somebody else's merge into the branch.
 
 These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
 for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
@@ -174,8 +178,14 @@ incomplete, so the change history it describes would be silently wrong.
 | `status.py`          | Turning a poll result into a colour, a count and hover text              |
 | `notifier.py`        | Desktop notifications and their click actions                            |
 | `tray.py`            | The icon, its menu, and the polling timer                                |
-| `popup.py`           | The frameless window a single click opens                                |
+| `theme.py`           | The colours to draw with, following the desktop's light or dark theme    |
+| `popup.py`           | Which rows the click-through window lists, and in what order             |
+| `window.py`          | The frameless window itself, and its table                               |
 | `settings_window.py` | The settings window                                                      |
+
+The table is [tksheet](https://github.com/ragardner/tksheet) rather than the toolkit's own, which colours a whole row at
+a time. Here each cell wants its own colour: a row says what it is in one and how stale it is in another, and neither
+should have to give way to the other.
 
 Notifications run on a long-lived event loop of their own. The platform backend calls back into the sending loop when a
 notification is clicked, which can happen long after the send returns, so a loop closed straight after sending would

@@ -45,6 +45,15 @@ wheels = [
 ]
 
 [[package]]
+name = "darkdetect"
+version = "0.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/77/7575be73bf12dee231d0c6e60ce7fb7a7be4fcd58823374fc59a6e48262e/darkdetect-0.8.0.tar.gz", hash = "sha256:b5428e1170263eb5dea44c25dc3895edd75e6f52300986353cd63533fe7df8b1", size = 7681, upload-time = "2022-12-16T14:14:42.113Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/f2/728f041460f1b9739b85ee23b45fa5a505962ea11fd85bdbe2a02b021373/darkdetect-0.8.0-py3-none-any.whl", hash = "sha256:a7509ccf517eaad92b31c214f593dbcf138ea8a43b2935406bbd565e15527a85", size = 8955, upload-time = "2022-12-16T14:14:40.92Z" },
+]
+
+[[package]]
 name = "dbus-fast"
 version = "5.0.22"
 source = { registry = "https://pypi.org/simple" }
@@ -108,11 +117,13 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
+    { name = "darkdetect" },
     { name = "desktop-notifier" },
     { name = "loguru" },
     { name = "pillow" },
     { name = "platformdirs" },
     { name = "pystray" },
+    { name = "tksheet" },
 ]
 
 [package.dev-dependencies]
@@ -124,11 +135,13 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cyclopts", specifier = ">=3.0" },
+    { name = "darkdetect", specifier = ">=0.8.0" },
     { name = "desktop-notifier", specifier = ">=6.0" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pillow", specifier = ">=10.1" },
     { name = "platformdirs", specifier = ">=4.2" },
     { name = "pystray", specifier = ">=0.19.5" },
+    { name = "tksheet", specifier = ">=7.6.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -436,6 +449,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "tksheet"
+version = "7.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/28/4e83480a2c1d41d25fbae2b613847ead6d9499a2d7eec0000bf17aed2f30/tksheet-7.6.0.tar.gz", hash = "sha256:42d0618b10184294a85489a474ae747097483dd9a47b4385ba12b1afa8648e1a", size = 199108, upload-time = "2026-03-11T17:49:25.335Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/a2/406016281147857d919c95a9efb6926b8ada683d2fc4de8c1fabc9d5aefa/tksheet-7.6.0-py3-none-any.whl", hash = "sha256:c586d7d04f93bace45f97888b12ea97cbb48dea4f1c3b7931e89491fdf18f9bb", size = 202704, upload-time = "2026-03-11T17:49:22.644Z" },
 ]
 
 [[package]]

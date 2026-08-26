@@ -13,19 +13,15 @@ clicking anything else on screen.
 
 from __future__ import annotations
 
-import tkinter as tk
-import webbrowser
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from tkinter import font as tkfont
-from tkinter import ttk
 
-from . import APP_NAME
-from .config import LOCK_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH, load_config
-from .environment import SingleInstance, make_dpi_aware
+from .config import LOCK_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
+from .environment import SingleInstance
 from .events import BROKEN_CI, age_in_words, is_urgent, label_for, last_seen, mergeable_now, moment, recent_events, utc_now
 from .snapshot import read_snapshot
 from .storage import write_text_atomic
+from .theme import PALETTE
 
 EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
@@ -46,16 +42,16 @@ EDGE_HANDLE_WIDTH = 6
 CORNER_HANDLE_SIZE = 14
 TABLE_STYLE = "ghtray.Treeview"
 
-BACKGROUND = "#0d1117"
-BORDER = "#30363d"
-HEADING = "#e6edf3"
-TEXT = "#f0f6fc"
-MUTED = "#9198a1"
-LINK = "#79c0ff"
-URGENT = "#ff7b72"
-ROUTINE = "#e3b341"
-GOOD = "#3fb950"
-HOVER = "#21262d"
+BACKGROUND = PALETTE.background
+BORDER = PALETTE.border
+HEADING = PALETTE.heading
+TEXT = PALETTE.text
+MUTED = PALETTE.muted
+LINK = PALETTE.link
+URGENT = PALETTE.urgent
+ROUTINE = PALETTE.routine
+GOOD = PALETTE.good
+HOVER = PALETTE.hover
 
 # How far a row keeps its colour as it ages, from untouched today to long forgotten. The table can only colour a
 # whole row, not one cell of it, so age is carried by fading the row rather than by tinting its date: what a row is
@@ -372,310 +368,3 @@ def rows_to_show(count: int) -> list[Row]:
     return one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed)))[:count]
 
 
-class Popup:
-    """The frameless window itself."""
-
-    def __init__(self, entries: list[Row]) -> None:
-        """:param entries: the lines to list, in the order they should appear."""
-        make_dpi_aware()
-        self.entries = entries
-        self.urls: dict[str, str] = {}
-        self.tags: set[str] = set()
-        self.sort_column = DEFAULT_SORT
-        self.newest_first = True
-        self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
-        self.window_origin: tuple[int, int] = (0, 0)
-        self.root = tk.Tk()
-        self.root.withdraw()
-        # Points become the right physical size only once Tk knows the real resolution of the screen.
-        self.root.tk.call("tk", "scaling", self.root.winfo_fpixels("1i") / POINTS_PER_INCH)
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.configure(background=BORDER)
-        self.body = tk.Frame(self.root, background=BACKGROUND)
-        self.body.pack(padx=1, pady=1, fill="both", expand=True)
-        self.regular = tkfont.nametofont("TkDefaultFont").copy()
-        self.regular.configure(size=FONT_SIZE)
-        self.bold = self.regular.copy()
-        self.bold.configure(weight="bold")
-        self.build()
-
-    def characters(self, count: int) -> int:
-        """Return how wide a number of characters is in this window's font, which is what column widths are given in."""
-        return self.regular.measure("0") * count
-
-    def row_height(self) -> int:
-        """Return how tall one row of the table is."""
-        return self.regular.metrics("linespace") + ROW_PADDING
-
-    def build(self) -> None:
-        """Lay out the heading strip, the table and the closing hint."""
-        wanting = sum(1 for entry in self.entries if entry.colour != MUTED)
-        self.heading_strip(f"{APP_NAME} - {wanting} wanting attention" if wanting else f"{APP_NAME} - nothing to do")
-        if self.entries:
-            self.table()
-        else:
-            tk.Label(
-                self.body,
-                text="Nothing is waiting on you, and nothing has changed since you last looked.",
-                background=BACKGROUND,
-                foreground=MUTED,
-                font=self.regular,
-                anchor="w",
-                padx=12,
-                pady=14,
-            ).pack(fill="x")
-        self.footer()
-
-    def heading_strip(self, text: str) -> None:
-        """Draw the title strip, which names the window and is what it is dragged by."""
-        strip = tk.Frame(self.body, background=BACKGROUND, cursor="fleur")
-        strip.pack(fill="x", padx=12, pady=(8, 6))
-        name = tk.Label(strip, text=text, background=BACKGROUND, foreground=HEADING, font=self.bold)
-        name.pack(side="left")
-        close = tk.Label(strip, text="X", background=BACKGROUND, foreground=MUTED, font=self.bold, cursor="hand2")
-        close.pack(side="right")
-        close.bind("<Button-1>", lambda _event: self.close())
-        for widget in (strip, name):
-            widget.bind("<Button-1>", self.start_drag)
-            widget.bind("<B1-Motion>", self.move_window)
-
-    def style_table(self) -> None:
-        """Colour the table to match the rest of the window.
-
-        The theme is switched to one that honours background colours. The default theme on Windows draws its own,
-        and would leave the table pale against everything around it.
-        """
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(
-            TABLE_STYLE,
-            background=BACKGROUND,
-            fieldbackground=BACKGROUND,
-            foreground=TEXT,
-            font=self.regular,
-            rowheight=self.row_height(),
-            borderwidth=0,
-        )
-        style.configure(f"{TABLE_STYLE}.Heading", background=BORDER, foreground=HEADING, font=self.bold, relief="flat", padding=4)
-        style.map(f"{TABLE_STYLE}.Heading", background=[("active", HOVER)])
-        style.map(TABLE_STYLE, background=[("selected", HOVER)], foreground=[("selected", TEXT)])
-
-    def table(self) -> None:
-        """Draw the rows as a table whose columns resize by dragging the dividers in its headings."""
-        self.style_table()
-        frame = tk.Frame(self.body, background=BACKGROUND)
-        frame.pack(fill="both", expand=True, padx=6)
-        names = [key for key, *_rest in COLUMNS]
-        self.tree = ttk.Treeview(frame, columns=names, show="headings", style=TABLE_STYLE, selectmode="browse")
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-        for key, heading, width, stretches in COLUMNS:
-            self.tree.heading(key, text=heading, anchor="w", command=lambda column=key: self.sort_by(column))
-            self.tree.column(key, width=self.characters(width), minwidth=self.characters(MINIMUM_COLUMN), stretch=stretches, anchor="w")
-        self.fill()
-        self.tree.bind("<Button-1>", self.on_click)
-        self.tree.configure(height=min(len(self.entries), self.root.winfo_screenheight() // (2 * self.row_height())))
-
-    def tag_for(self, entry: Row) -> str:
-        """Return the tag that colours one row, making it if this combination has not been seen yet.
-
-        A row's hue says what it is and how strongly it is drawn says how stale it is, so there is one tag per pair
-        of the two rather than one per state.
-
-        :param entry: the row to colour
-        """
-        fade = fade_for(entry.at)
-        tag = f"{entry.colour}-{fade}"
-        if tag not in self.tags:
-            self.tree.tag_configure(tag, foreground=blend(entry.colour, BACKGROUND, fade))
-            self.tags.add(tag)
-        return tag
-
-    def fill(self) -> None:
-        """Put the rows into the table in their current order, replacing whatever was there."""
-        self.tree.delete(*self.tree.get_children())
-        self.urls.clear()
-        for entry in self.entries:
-            values = (entry.label, entry.repo, entry.number, entry.title, entry.who, entry.when)
-            item = self.tree.insert("", "end", values=values, tags=(self.tag_for(entry),))
-            self.urls[item] = entry.url
-
-    def sort_by(self, column: str) -> None:
-        """Reorder the table by a column, turning the order around when it is already the one being sorted by.
-
-        :param column: the column whose heading was clicked
-        """
-        # Dates read most usefully newest first, everything else A to Z, so each column starts the way it is wanted.
-        self.newest_first = not self.newest_first if column == self.sort_column else column == DEFAULT_SORT
-        self.sort_column = column
-        self.entries = sorted_rows(self.entries, column, self.newest_first)
-        self.fill()
-        for key, heading, _width, _stretches in COLUMNS:
-            marker = (" v" if self.newest_first else " ^") if key == column else ""
-            self.tree.heading(key, text=f"{heading}{marker}")
-
-    def on_click(self, event: tk.Event) -> None:
-        """Open the row that was clicked, unless the click was on a heading or a divider between columns.
-
-        :param event: the click
-        """
-        if self.tree.identify_region(event.x, event.y) != "cell":
-            return
-        url = self.urls.get(self.tree.identify_row(event.y), "")
-        if url:
-            self.open(url)
-
-    def footer(self) -> None:
-        """Draw the closing hint and the button that asks for a fresh look."""
-        strip = tk.Frame(self.body, background=BACKGROUND)
-        strip.pack(fill="x", side="bottom")
-        self.hint = tk.Label(
-            strip,
-            text="Click a row to open it. Drag a heading divider to resize a column, the title to move, any edge to resize.",
-            background=BACKGROUND,
-            foreground=MUTED,
-            font=self.regular,
-            anchor="w",
-            padx=12,
-            pady=6,
-        )
-        self.hint.pack(side="left")
-        self.refresh_button = tk.Label(
-            strip,
-            text="Refresh",
-            background=BORDER,
-            foreground=HEADING,
-            font=self.bold,
-            cursor="hand2",
-            padx=10,
-            pady=2,
-        )
-        self.refresh_button.pack(side="right", padx=12, pady=4)
-        self.refresh_button.bind("<Button-1>", lambda _event: self.refresh())
-
-    def refresh(self) -> None:
-        """Ask for a fresh look at GitHub, and keep re-reading until it arrives.
-
-        The tray is a separate process and the only one allowed to poll, so this leaves it a note rather than
-        polling itself. With no tray running there is nobody to answer, and the window says so instead of waiting
-        for something that will never come.
-        """
-        if not request_refresh():
-            self.hint.configure(text="Nothing is polling. Start gh-tray for this to fetch anything new.")
-            self.reload()
-            return
-        self.refresh_button.configure(text="Refreshing", foreground=MUTED)
-        self.hint.configure(text="Asked for a fresh look. This will update when it arrives.")
-        self.await_update(RELOAD_ATTEMPTS, snapshot_changed_at())
-
-    def await_update(self, attempts_left: int, was: float) -> None:
-        """Re-read until the stored data changes or waiting has gone on long enough.
-
-        :param attempts_left: how many more times to look
-        :param was: when the stored data last changed, as it stood before asking
-        """
-        if snapshot_changed_at() != was:
-            self.reload()
-            self.refresh_button.configure(text="Refresh", foreground=HEADING)
-            self.hint.configure(text="Up to date.")
-            return
-        if attempts_left <= 0:
-            self.refresh_button.configure(text="Refresh", foreground=HEADING)
-            self.hint.configure(text="No answer yet. The tray may be busy or unable to reach GitHub.")
-            return
-        self.root.after(RELOAD_EVERY_MS, lambda: self.await_update(attempts_left - 1, was))
-
-    def reload(self) -> None:
-        """Read the stored data again and redraw the table in the order currently chosen."""
-        self.entries = sorted_rows(rows_to_show(load_config()["popup_rows"]), self.sort_column, self.newest_first)
-        if hasattr(self, "tree"):
-            self.fill()
-
-    def edge_handles(self) -> None:
-        """Put a grab strip along every edge and corner, so the window resizes from wherever the pointer lands."""
-        for _name, edges, cursor, place in EDGE_HANDLES:
-            handle = tk.Frame(self.root, background=BORDER, cursor=cursor)
-            handle.place(**place)
-            handle.bind("<Button-1>", self.start_drag)
-            handle.bind("<B1-Motion>", lambda event, moving=edges: self.resize_edges(event, moving))
-            handle.lift()
-
-    def start_drag(self, event: tk.Event) -> None:
-        """Remember where a drag began, and how big and where the window was when it did."""
-        self.drag_origin = (event.x_root, event.y_root, self.root.winfo_width(), self.root.winfo_height())
-        self.window_origin = (self.root.winfo_x(), self.root.winfo_y())
-
-    def move_window(self, event: tk.Event) -> None:
-        """Move the window by however far the pointer has travelled since the drag began."""
-        start_x, start_y, _width, _height = self.drag_origin
-        left, top = self.window_origin
-        self.root.geometry(f"+{left + event.x_root - start_x}+{top + event.y_root - start_y}")
-
-    def resize_edges(self, event: tk.Event, edges: tuple[bool, bool, bool, bool]) -> None:
-        """Resize the window by dragging one of its edges or corners.
-
-        :param event: the motion that is dragging
-        :param edges: which of the left, top, right and bottom edges this handle moves
-        """
-        drag_left, drag_top, drag_right, drag_bottom = edges
-        start_x, start_y, width, height = self.drag_origin
-        origin_left, origin_top = self.window_origin
-        moved_x, moved_y = event.x_root - start_x, event.y_root - start_y
-
-        new_width = max(MINIMUM_WIDTH, width + (moved_x if drag_right else -moved_x if drag_left else 0))
-        new_height = max(MINIMUM_HEIGHT, height + (moved_y if drag_bottom else -moved_y if drag_top else 0))
-        # Dragging a left or top edge keeps the far edge still, so the window's corner moves by however much the
-        # size actually changed, which is not the pointer's travel once a minimum has been reached.
-        new_left = origin_left + (width - new_width) if drag_left else origin_left
-        new_top = origin_top + (height - new_height) if drag_top else origin_top
-        self.root.geometry(f"{new_width}x{new_height}+{int(new_left)}+{int(new_top)}")
-
-    def open(self, url: str) -> None:
-        """Open a change on GitHub and close the window.
-
-        :param url: the page to open
-        """
-        webbrowser.open(url)
-        self.close()
-
-    def close(self) -> None:
-        """Take the window down."""
-        self.root.destroy()
-
-    def preferred_width(self) -> int:
-        """Return the width every column needs at its stated size, so nothing starts out cut off.
-
-        Capped at a share of the screen, because a window wide enough for the longest repository name anyone owns
-        would otherwise stop being a popup. The columns can be dragged narrower or the window wider from there.
-        """
-        wanted = sum(self.characters(width) for _key, _heading, width, _stretches in COLUMNS) + WIDTH_ALLOWANCE
-        return min(wanted, int(self.root.winfo_screenwidth() * WIDEST_SHARE_OF_SCREEN))
-
-    def place(self) -> None:
-        """Put the window near the pointer, sized to its contents and kept fully on screen."""
-        self.root.update_idletasks()
-        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        width = min(max(MINIMUM_WIDTH, self.preferred_width()), screen_width - 2 * EDGE_MARGIN)
-        height = min(self.root.winfo_reqheight(), screen_height - 2 * EDGE_MARGIN)
-        left = min(max(EDGE_MARGIN, self.root.winfo_pointerx() - width + POINTER_OFFSET), screen_width - width - EDGE_MARGIN)
-        top = min(max(EDGE_MARGIN, self.root.winfo_pointery() - height - POINTER_OFFSET), screen_height - height - EDGE_MARGIN)
-        self.root.geometry(f"{width}x{height}+{int(left)}+{int(top)}")
-
-    def show(self) -> None:
-        """Display the window and wait until it is dismissed."""
-        self.edge_handles()
-        self.place()
-        self.root.deiconify()
-        self.root.focus_force()
-        self.root.bind("<Escape>", lambda _event: self.close())
-        # Binding this straight away can close the window before it has finished taking focus.
-        self.root.after(300, lambda: self.root.bind("<FocusOut>", lambda _event: self.close()))
-        self.root.mainloop()
-
-
-def show_popup() -> None:
-    """Show what wants attention in a frameless window, as many rows as the settings ask for."""
-    Popup(rows_to_show(load_config()["popup_rows"])).show()
