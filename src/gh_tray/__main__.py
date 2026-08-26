@@ -212,7 +212,7 @@ def popup() -> int:
     :return: process exit code
     """
     start_logging(to_console=False)
-    from .popup import show_popup
+    from .window import show_popup
 
     show_popup()
     return 0
