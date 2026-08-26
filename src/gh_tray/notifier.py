@@ -13,16 +13,19 @@ import asyncio
 import threading
 import webbrowser
 
+from desktop_notifier import DesktopNotifier, Icon
 from loguru import logger
 
 from . import APP_NAME
+from .config import APP_ICON_PATH
 from .events import label_for
+from .status import write_app_icon
 
 MAX_LINES_PER_NOTIFICATION = 4
 SEND_TIMEOUT_SECONDS = 30
 
 
-def own_icon():
+def own_icon() -> Icon | None:
     """Return the application's own mark for a notification to carry, or nothing if it cannot be drawn.
 
     Without one the notification service falls back to the icon of whatever program raised it, which for a Python
@@ -30,15 +33,10 @@ def own_icon():
 
     :return: the icon, or None where drawing it failed
     """
-    from desktop_notifier import Icon
-
-    from .config import APP_ICON_PATH
-    from .status import write_app_icon
-
     try:
         return Icon(path=write_app_icon(APP_ICON_PATH))
     except OSError as error:
-        logger.debug("could not draw the application's icon: {}", error)
+        logger.warning("could not draw the application's icon: {}", error)
         return None
 
 
@@ -56,21 +54,24 @@ class Notifier:
     def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, object]:
         """Return the running loop and backend, starting them on first use.
 
-        Both are read inside the lock and returned as locals, so a concurrent stop cannot leave the caller holding a
-        half-torn-down pair. Once stopped, nothing is started again: a notification after shutdown would otherwise
-        raise a fresh loop and thread that nobody would ever stop.
+        Nothing slow or unpredictable happens while the lock is held: the icon is drawn first, and everything this
+        needs is imported when the module is. Doing either inside the lock, on the thread that also holds the poll
+        lock, is what wedged the whole application once.
+
+        Both values are read inside the lock and returned as locals, so a concurrent stop cannot leave the caller
+        holding a half-torn-down pair. Once stopped, nothing is started again: a notification after shutdown would
+        otherwise raise a fresh loop and thread that nobody would ever stop.
 
         :return: the event loop and the desktop notifier bound to it, or a pair of None once stopped
         """
-        from desktop_notifier import DesktopNotifier
-
+        icon = own_icon()
         with self._lock:
             if self._stopped:
                 return None, None
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
                 threading.Thread(target=self._loop.run_forever, daemon=True, name=f"{self.app_name}-notify").start()
-                self._backend = DesktopNotifier(app_name=self.app_name, app_icon=own_icon())
+                self._backend = DesktopNotifier(app_name=self.app_name, app_icon=icon)
             return self._loop, self._backend
 
     def wanted(self, events: list[dict], toast_settings: dict) -> list[dict]:
@@ -122,6 +123,7 @@ class Notifier:
             if url:
                 webbrowser.open(url)
 
+        logger.debug("raising a notification about {} change(s)", len(chosen))
         loop, backend = self._ready()
         if loop is None or backend is None:
             logger.debug("not notifying, the notifier has been stopped")

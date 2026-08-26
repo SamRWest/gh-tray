@@ -133,10 +133,18 @@ class Tray:
             self.config = load_config()
             result = poll(self.config)
             self.status = result.status
-            if result.events:
-                self.notifier.notify(result.events, self.config["toasts"])
             self.repaint()
-            return not result.error
+        # Notifying happens after the lock is dropped and on a thread of its own. It talks to the desktop's
+        # notification service, which is outside this application's control, and once wedged it took the poll lock
+        # with it and the whole application stopped responding.
+        if result.events:
+            threading.Thread(
+                target=self.notifier.notify,
+                args=(result.events, self.config["toasts"]),
+                daemon=True,
+                name=f"{APP_NAME}-notify-once",
+            ).start()
+        return not result.error
 
     def wait_seconds(self, succeeded: bool) -> int:
         """Return how long to wait before the next poll.
