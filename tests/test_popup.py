@@ -335,10 +335,6 @@ def test_a_row_dims_only_once_it_has_been_seen():
     assert not hasattr(popup, "fade_for"), "age no longer dims a row; it has a scale of its own in the date column"
 
 
-
-
-
-
 def test_fading_keeps_the_hue_and_only_dims_it():
     faded = popup.blend(popup.URGENT, popup.BACKGROUND, 0.5)
     assert faded != popup.URGENT
@@ -371,3 +367,37 @@ def test_rows_with_no_address_are_told_apart_by_repository_and_number():
         popup.Row("", "acme/widget", "#7", "", "", "", "", popup.URGENT),
     ]
     assert len(popup.one_per_pull_request(rows)) == 2
+
+
+def test_clicking_a_row_marks_it_seen(event_log):
+    events.append_events([change(key="acme/widget#1")])
+    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
+    assert popup.rows_to_show(10)[0].seen is True
+
+
+def test_clicking_a_seen_row_again_marks_it_unseen(event_log):
+    events.append_events([change(key="acme/widget#1")])
+    events.mark_seen()
+    popup.remember_row_seen(popup.rows_to_show(10)[0], False)
+    assert popup.rows_to_show(10)[0].seen is False
+
+
+def test_a_row_marked_seen_comes_back_when_something_happens_to_it(event_log):
+    # Marking says "I have read this", not "stop telling me about this pull request".
+    events.append_events([change(key="acme/widget#1", at="2026-01-01T00:00:00.000000Z")])
+    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
+    events.append_events([change(kind="new_comment", key="acme/widget#1", at="2026-02-01T00:00:00.000000Z")])
+    assert popup.rows_to_show(10)[0].seen is False
+
+
+def test_a_review_waiting_is_not_dimmed_by_marking_everything_seen(event_log):
+    # A review is still waiting however long ago the user last cleared the list, so it stays at full strength.
+    store(event_log, waiting())
+    events.mark_seen()
+    assert popup.rows_to_show(10)[0].seen is False
+
+
+def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
+    store(event_log, waiting())
+    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
+    assert popup.rows_to_show(10)[0].seen is True

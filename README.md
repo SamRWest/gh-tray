@@ -5,12 +5,12 @@ dashboard when you want the full picture.
 
 The icon carries a count of changes you have not seen yet.
 
-| Doing this to the icon | Gets you                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------- |
-| Hovering               | A short status summary                                                           |
-| Clicking once          | A small window listing the most recent changes; click a row to open it on GitHub |
-| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), maximised                          |
-| Right-clicking         | The review queue, the login-start switch, the settings window and the rest       |
+| Doing this to the icon | Gets you                                                                   |
+| ---------------------- | -------------------------------------------------------------------------- |
+| Hovering               | A short status summary                                                     |
+| Clicking once          | A small window listing the most recent changes                             |
+| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), maximised                    |
+| Right-clicking         | The review queue, the login-start switch, the settings window and the rest |
 
 A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
 waits half a second to see whether a second click follows.
@@ -30,11 +30,16 @@ would leave it saying "nothing" on a quiet day while three reviews sat in the qu
 The window follows your desktop's light or dark theme, as does the settings window. The theme is read when the window
 opens, so changing it takes effect the next time you click.
 
-Rows are red when something is blocking, amber when it is worth a look, green when it is good news such as a pull
-request that could be merged, and grey once you have seen it. Each row fades as it ages, so a stale row is drawn in a
-dimmer shade of the same colour, with the date in its own colour so age reads across the row without hiding what the row
-is about. Who is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a
-consequence of somebody else's merge into the branch.
+Click a row to mark it seen, and click it again to mark it unseen. Double-click to open it on GitHub, which says nothing
+either way about having seen it. A row you have marked comes back unmarked if anything happens to it afterwards, since
+marking means "I have read this", not "stop telling me about this pull request". **Mark all seen** in the right-click
+menu clears the lot.
+
+Each row keeps the colour of what it is: red when something is blocking, amber when it is worth a look, green when it is
+good news such as a pull request that could be merged. A row you have seen is dimmed and its mark goes hollow, and
+nothing else dims it. Age has a scale of its own in the date column, running from just-happened to long-forgotten. Who
+is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of
+somebody else's merge into the branch.
 
 These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
 for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
@@ -43,7 +48,7 @@ One row per pull request: three comments on the same one are one thing to look a
 yourself are left out, since your own comment is not news to you, though your own commit breaking the checks still is.
 **Refresh** asks the tray to look again, since it is the only thing allowed to poll.
 
-Newest is at the top. Click a heading to sort by that column and again to turn the order around. It lists 20 rows by
+Newest is at the top. Click a column heading to sort by it and again to turn the order around. It lists 20 rows by
 default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window has no
 frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the close mark, or
 click anything else on screen to dismiss it.
@@ -151,14 +156,15 @@ Settings and history live in the platform's standard application data directory,
 | `state.json`     | When the last collection ran, which is the window mentions are asked for    |
 | `snapshot.json`  | Last poll's pull request fields, used to detect the next change             |
 | `events.jsonl`   | Changes detected, kept until you have seen them and trimmed to a tail after |
-| `seen.json`      | When you last looked, which is what clears the unread count                 |
+| `seen.json`      | The rows you have marked, and when you last marked everything seen          |
 | `gh-tray.log`    | Rotating diagnostics                                                        |
 | `last_error.log` | Everything written when the last collection failed                          |
 | `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
-against the last time you opened the dashboard or chose **Mark all seen**, so nothing is lost between the moment a
-change lands and the moment you read it.
+against what you have actually looked at, so nothing is lost between the moment a change lands and the moment you read
+it. Clicking a row marks that one row; **Mark all seen** sets a single timestamp and anything older than it counts as
+seen without a mark of its own.
 
 Every state file is written to a temporary file and then moved into place. A process stopped part way through a plain
 write would leave a truncated file, and a truncated state file is worse than a missing one: it reads as valid but

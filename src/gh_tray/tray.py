@@ -207,13 +207,15 @@ class Tray:
         subprocess.Popen([sys.executable, "-m", "gh_tray", "popup"], **hidden_window_flags())
 
     def on_dashboard(self, *_) -> None:
-        """Open the dashboard and treat that as the user having looked."""
+        """Open the dashboard.
+
+        Opening it says nothing about what the user has read, so nothing is marked seen. Rows are marked by
+        clicking them in the recent changes window, and everything at once from this menu.
+        """
         try:
             open_dashboard(self.config)
         except RuntimeError as error:
             logger.error("could not open the dashboard: {}", error)
-            return
-        self.on_mark_seen()
 
     def on_refresh(self, *_) -> None:
         """Poll immediately, off the thread handling the menu, unless a poll is already under way."""

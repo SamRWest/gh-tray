@@ -244,3 +244,47 @@ def test_nothing_is_suppressed_when_who_is_signed_in_is_unknown():
 def test_a_mention_the_user_wrote_themselves_is_not_reported():
     digest = {"viewer": "them", "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "them"}]}
     assert events.detect_events({}, {}, digest) == []
+
+
+def test_a_row_marked_seen_by_hand_leaves_the_unread_count(event_log):
+    events.append_events(
+        [{"at": "2099-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "https://example.test/1", "title": "", "detail": ""}]
+    )
+    assert len(events.unread_events()) == 1
+    events.remember_seen("https://example.test/1", "2099-01-01T00:00:00Z", seen=True)
+    assert events.unread_events() == []
+
+
+def test_a_row_marked_unseen_by_hand_outlasts_marking_everything_seen(event_log):
+    events.append_events(
+        [{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "https://example.test/1", "title": "", "detail": ""}]
+    )
+    events.remember_seen("https://example.test/1", "2026-01-01T00:00:00Z", seen=False)
+    events.mark_seen()
+    assert events.unread_events() == []
+
+
+def test_marking_everything_seen_forgets_the_rows_marked_one_at_a_time(event_log):
+    events.remember_seen("https://example.test/1", "2026-01-01T00:00:00Z", seen=True)
+    events.mark_seen()
+    assert events.seen_marks() == {}
+
+
+def test_a_change_after_a_mark_undoes_it(event_log):
+    events.remember_seen("https://example.test/1", "2026-01-01T00:00:00Z", seen=True)
+    marks = events.seen_marks()
+    assert events.has_been_seen("https://example.test/1", "2026-01-01T00:00:00Z", marks, None) is True
+    assert events.has_been_seen("https://example.test/1", "2026-02-01T00:00:00Z", marks, None) is False
+
+
+def test_a_row_is_remembered_by_its_address_and_by_its_number_where_there_is_none():
+    assert events.row_identity("https://example.test/1", "acme/widget", "7") == "https://example.test/1"
+    assert events.row_identity("", "acme/widget", "7") == "acme/widget#7"
+    assert events.row_identity("", "acme/widget", "#7") == "acme/widget#7"
+
+
+def test_only_the_newest_marks_are_kept():
+    marks = {f"row-{number}": {"at": "", "seen": True, "marked": f"2026-01-{number + 1:02d}T00:00:00Z"} for number in range(9)}
+    kept = events.newest_marks(marks, keep=3)
+    assert set(kept) == {"row-8", "row-7", "row-6"}
+    assert events.newest_marks(marks, keep=20) == marks

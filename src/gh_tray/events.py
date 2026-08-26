@@ -4,7 +4,11 @@ Only transitions produce events. A pull request that was already failing when th
 again, which is what stops a large backlog of red pull requests becoming a wall of notifications.
 
 Polling and looking are tracked separately: the collector advances its baseline every run, but the unread count is
-measured against the last time the user actually looked, so nothing is lost between a change landing and being read.
+measured against what the user has actually looked at, so nothing is lost between a change landing and being read.
+
+What counts as looked at comes from two places. Clicking a row in the window marks that one row, either way, and
+those marks are kept per row. Marking everything seen sets a single timestamp, and anything older than it counts as
+seen without needing a mark of its own.
 """
 
 from __future__ import annotations
@@ -81,6 +85,12 @@ ABSENCE_GRACE_POLLS = 3
 # looking cannot grow the file without limit.
 EVENT_TAIL_KEPT = 200
 EVENT_HARD_LIMIT = 2000
+
+# What the record of looking holds: when the user last marked everything seen, and the rows they have since marked
+# one at a time. The second is capped, since a row marked long ago has usually dropped out of the window entirely.
+LAST_SEEN_KEY = "lastSeenAt"
+SEEN_ROWS_KEY = "rows"
+SEEN_ROWS_KEPT = 200
 
 
 def label_for(kind: str) -> str:
@@ -372,25 +382,117 @@ def append_events(events: list[dict]) -> None:
     trim_events(EVENT_HARD_LIMIT)
 
 
-def last_seen() -> str:
-    """Return the timestamp at which the user last looked, or an empty string if they never have."""
+def read_seen() -> dict:
+    """Return what is recorded about what the user has looked at, or an empty record when nothing is."""
     stored, _damaged = read_json(SEEN_PATH)
-    return stored.get("lastSeenAt", "") if isinstance(stored, dict) else ""
+    return stored if isinstance(stored, dict) else {}
+
+
+def last_seen() -> str:
+    """Return the timestamp at which the user last looked at everything, or an empty string if they never have."""
+    return str(read_seen().get(LAST_SEEN_KEY, ""))
+
+
+def seen_marks() -> dict[str, dict]:
+    """Return the rows the user has marked seen or unseen by hand, keyed by whatever identifies each row."""
+    marks = read_seen().get(SEEN_ROWS_KEY)
+    return {key: mark for key, mark in marks.items() if isinstance(mark, dict)} if isinstance(marks, dict) else {}
+
+
+def row_identity(url: str, repo: str = "", number: str | int = "") -> str:
+    """Return what a row is remembered by once the user has marked it.
+
+    The address is used where there is one, since it names the thing itself rather than where it happens to sit in
+    a list. Where there is none, the repository and number stand in.
+
+    :param url: the page the row leads to
+    :param repo: the repository the row is about
+    :param number: the pull request number, with or without its leading hash
+    """
+    if url:
+        return url
+    tail = str(number).lstrip("#").strip()
+    return f"{repo}#{tail}" if tail else repo
+
+
+def event_identity(event: dict) -> str:
+    """Return what identifies the row a change is shown on."""
+    return row_identity(str(event.get("url", "")), str(event.get("repo", "")), event.get("number", ""))
+
+
+def mark_still_applies(mark: dict, at: str) -> bool:
+    """Return whether a mark made by hand still describes a row.
+
+    A mark is made against the row as it stood, so anything that happens afterwards undoes it: a pull request
+    marked seen and then commented on is something to look at again.
+
+    :param mark: what was recorded when the user marked the row
+    :param at: when the row being drawn last changed
+    """
+    return True if not at else moment(str(mark.get("at", ""))) >= moment(at)
+
+
+def has_been_seen(identity: str, at: str, marks: dict[str, dict], since: datetime | None) -> bool:
+    """Return whether the user has already looked at something.
+
+    A mark made on the row itself wins, being the more deliberate statement of the two. Failing that, anything
+    older than the last time the user marked everything seen counts as seen.
+
+    :param identity: what the row is remembered by
+    :param at: when the thing being judged last changed
+    :param marks: the rows marked by hand, as :func:`seen_marks` returns them
+    :param since: when the user last marked everything seen, or None if they never have
+    """
+    mark = marks.get(identity)
+    if mark is not None and mark_still_applies(mark, at):
+        return bool(mark.get("seen"))
+    return since is not None and moment(at) <= since
 
 
 def mark_seen() -> None:
-    """Record that the user has looked, and shorten the log now that nothing in it is unread."""
-    write_json_atomic(SEEN_PATH, {"lastSeenAt": utc_now()})
+    """Record that the user has looked at everything, and shorten the log now that nothing in it is unread.
+
+    Marks made on single rows are dropped, since the one timestamp now says everything they said.
+    """
+    write_json_atomic(SEEN_PATH, {LAST_SEEN_KEY: utc_now()})
     trim_events(EVENT_TAIL_KEPT)
 
 
+def newest_marks(marks: dict[str, dict], keep: int = SEEN_ROWS_KEPT) -> dict[str, dict]:
+    """Return the most recently made marks, so a tray left running cannot grow the file without limit.
+
+    :param marks: every mark currently recorded
+    :param keep: how many to keep
+    """
+    if len(marks) <= keep:
+        return marks
+    ordered = sorted(marks.items(), key=lambda pair: moment(str(pair[1].get("marked", ""))), reverse=True)
+    return dict(ordered[:keep])
+
+
+def remember_seen(identity: str, at: str, seen: bool) -> None:
+    """Record that the user has marked one row seen or unseen.
+
+    Both answers are stored, because marking a row unseen has to outlast the moment everything was last marked
+    seen, which would otherwise put the row straight back to seen.
+
+    :param identity: what the row is remembered by
+    :param at: when the row last changed, so a later change undoes the mark
+    :param seen: whether the user has now seen it
+    """
+    document = read_seen()
+    marks = dict(seen_marks())
+    marks[identity] = {"at": at, "seen": seen, "marked": utc_now()}
+    document[SEEN_ROWS_KEY] = newest_marks(marks)
+    write_json_atomic(SEEN_PATH, document)
+
+
 def unread_events() -> list[dict]:
-    """Return the events that have arrived since the user last looked, newest first."""
+    """Return the events the user has not seen, newest first."""
     since = last_seen()
-    if not since:
-        return list(reversed(read_events()))
-    marker = moment(since)
-    return [event for event in reversed(read_events()) if moment(event["at"]) > marker]
+    marker = moment(since) if since else None
+    marks = seen_marks()
+    return [event for event in reversed(read_events()) if not has_been_seen(event_identity(event), event["at"], marks, marker)]
 
 
 def recent_events(count: int = 10) -> list[dict]:

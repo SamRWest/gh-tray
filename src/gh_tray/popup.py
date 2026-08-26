@@ -6,6 +6,8 @@ icon's. That also keeps it working on macOS, where a window may only be built on
 The list is what changed since the user last looked, then what is merely waiting on them. Changes alone would leave
 the window saying "nothing" on a quiet day while three reviews sat in the queue, which is the opposite of useful.
 
+A row is drawn as seen once it has been clicked, and as unseen again if anything happens to it afterwards.
+
 Having no frame means the window has none of the things a frame normally provides, so each is supplied here: it is
 moved by dragging its heading strip, resized from any edge or corner, and closed by Escape, the close mark, or
 clicking anything else on screen.
@@ -19,7 +21,22 @@ from datetime import UTC, datetime
 
 from .config import LOCK_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
 from .environment import SingleInstance
-from .events import BROKEN_CI, age_in_words, is_urgent, label_for, last_seen, mergeable_now, moment, recent_events, utc_now
+from .events import (
+    BROKEN_CI,
+    age_in_words,
+    event_identity,
+    has_been_seen,
+    is_urgent,
+    label_for,
+    last_seen,
+    mergeable_now,
+    moment,
+    recent_events,
+    remember_seen,
+    row_identity,
+    seen_marks,
+    utc_now,
+)
 from .snapshot import read_snapshot
 from .storage import write_text_atomic
 from .theme import PALETTE
@@ -206,11 +223,11 @@ def dot_colour(event: dict, unread: bool = True) -> str:
     return KIND_COLOURS.get(event["kind"], URGENT if is_urgent(event["kind"]) else ROUTINE)
 
 
-def row_from_event(event: dict, unread: bool) -> Row:
+def row_from_event(event: dict, seen: bool) -> Row:
     """Build a row describing something that happened.
 
     :param event: the change, as recorded in the log
-    :param unread: whether it arrived since the user last looked
+    :param seen: whether the user has already looked at it
     """
     repo, number = repo_and_number(event)
     return Row(
@@ -222,7 +239,7 @@ def row_from_event(event: dict, unread: bool) -> Row:
         when=age_in_words(event["at"]),
         url=str(event.get("url", "")),
         colour=dot_colour(event),
-        seen=not unread,
+        seen=seen,
         at=str(event.get("at", "")),
     )
 
@@ -245,13 +262,17 @@ def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
     return None
 
 
-def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
+def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str, dict] | None = None) -> list[Row]:
     """Build rows for the pull requests that want something from the user right now.
 
     These fill the window when little has changed lately, so it never says "nothing" while a review is waiting.
 
+    Only a mark on the row itself dims one of these. A review that has been waiting a fortnight is still waiting,
+    however long ago the user last cleared the list, so the moment of that clearing says nothing about it.
+
     :param entries: pull requests as the last poll recorded them
     :param already_listed: addresses of pull requests a change has already put in the list
+    :param marks: the rows the user has marked by hand, as :func:`gh_tray.events.seen_marks` returns them
     :return: rows, blocking ones first and most recently touched first within that
     """
     rows = []
@@ -262,6 +283,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
             continue
         label, who, urgent, colour = standing
         touched = str(entry.get("updatedAt", ""))
+        identity = row_identity(url, str(entry.get("repo", "")), entry.get("number", ""))
         rows.append(
             (
                 not urgent,
@@ -276,6 +298,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str]) -> list[Row]:
                     url=url,
                     colour=colour,
                     at=touched,
+                    seen=has_been_seen(identity, touched, marks or {}, None),
                 ),
             )
         )
@@ -342,10 +365,20 @@ def rows_to_show(count: int) -> list[Row]:
     """
     marker = last_seen()
     since = moment(marker) if marker else None
+    marks = seen_marks()
     # The log is read deeply rather than to the row count, since several entries can collapse into one row.
-    changes = [row_from_event(event, since is None or moment(event["at"]) > since) for event in recent_events(count * ROWS_READ_DEEPLY)]
+    changes = [
+        row_from_event(event, has_been_seen(event_identity(event), event["at"], marks, since)) for event in recent_events(count * ROWS_READ_DEEPLY)
+    ]
     listed = {row.url for row in changes if row.url}
     entries, _damaged = read_snapshot()
-    return one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed)))[:count]
+    return one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))[:count]
 
 
+def remember_row_seen(row: Row, seen: bool) -> None:
+    """Record that the user has marked a row seen or unseen, so the window and the tray icon agree about it.
+
+    :param row: the row that was clicked
+    :param seen: whether the user has now seen it
+    """
+    remember_seen(row_identity(row.url, row.repo, row.number), row.at, seen)

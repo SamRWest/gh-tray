@@ -4,6 +4,9 @@ The table is a spreadsheet widget rather than the toolkit's own, because that on
 here each cell wants its own: a row says what it is in one colour and how stale it is in another, and neither
 should have to give way to the other.
 
+Clicking a row marks it seen, and clicking it again marks it unseen. Double-clicking opens it on GitHub without
+saying anything about whether it has been seen.
+
 Having no frame means the window has none of the things a frame normally provides, so each is supplied here: it is
 moved by dragging its heading strip, resized from any edge or corner, and closed by Escape, the close mark, or
 clicking anything else on screen.
@@ -11,8 +14,10 @@ clicking anything else on screen.
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 import webbrowser
+from dataclasses import replace
 from tkinter import font as tkfont
 
 from loguru import logger
@@ -32,6 +37,7 @@ from .popup import (
     age_colour,
     blend,
     glyph_for,
+    remember_row_seen,
     request_refresh,
     rows_to_show,
     snapshot_changed_at,
@@ -64,6 +70,12 @@ TALLEST_SHARE_OF_SCREEN = 0.55
 
 # The date is drawn on a scale of its own, so it needs finding among the columns.
 DATE_COLUMN = "when"
+
+# How long after a click a second one may still be the other half of a double click. A double click reaches this
+# window as one click and then a double, so the first click has already marked the row by the time the second
+# arrives and the row has to be put back as it was. The toolkit counts 500ms as a double click, and this allows a
+# little more so a click pair either side of that figure is never left half-applied.
+PAIRED_CLICK_SECONDS = 0.7
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
@@ -138,6 +150,9 @@ class Popup:
         self.newest_first = True
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
+        # Which row a click landed on, how it stood before that click, and when the click was, so the first half of
+        # a double click can be undone when the second half arrives.
+        self.before_click: tuple[int | None, bool, float] = (None, False, 0.0)
         self.root = tk.Tk()
         self.root.withdraw()
         # Points become the right physical size only once Tk knows the real resolution of the screen.
@@ -161,10 +176,14 @@ class Popup:
         """Return how tall one row of the table is."""
         return self.regular.metrics("linespace") + ROW_PADDING
 
+    def heading_text(self) -> str:
+        """Return the line at the top of the window, which counts the rows not yet marked seen."""
+        waiting = sum(1 for entry in self.entries if not entry.seen)
+        return f"{APP_NAME} - {waiting} notification{'' if waiting == 1 else 's'}" if waiting else f"{APP_NAME} - nothing to do"
+
     def build(self) -> None:
         """Lay out the heading strip, the table and the closing hint."""
-        wanting = sum(1 for entry in self.entries if not entry.seen)
-        self.heading_strip(f"{APP_NAME} - {wanting} wanting attention" if wanting else f"{APP_NAME} - nothing to do")
+        self.heading_strip(self.heading_text())
         if self.entries:
             self.table()
         else:
@@ -184,7 +203,7 @@ class Popup:
         """Draw the title strip, which names the window and is what it is dragged by."""
         strip = tk.Frame(self.body, background=PALETTE.background, cursor="fleur")
         strip.pack(fill="x", padx=12, pady=(8, 6))
-        name = tk.Label(strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold)
+        self.name = name = tk.Label(strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold)
         name.pack(side="left")
         close = tk.Label(strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2")
         close.pack(side="right")
@@ -228,9 +247,9 @@ class Popup:
         # Only what a reader needs: resizing a column, moving about, and copying a cell out.
         self.sheet.enable_bindings("single_select", "column_width_resize", "double_click_column_resize", "arrowkeys", "copy")
         self.sheet.set_column_widths([self.characters(width) for _key, _heading, width, _stretches in COLUMNS])
-        self.sheet.extra_bindings("cell_select", self.on_select)
         self.paint()
-        self.sheet.bind("<Button-1>", self.on_header_click, add="+")
+        self.sheet.bind("<Button-1>", self.on_click, add="+")
+        self.sheet.bind("<Double-Button-1>", self.on_double_click, add="+")
 
     def paint(self) -> None:
         """Colour every cell.
@@ -254,14 +273,82 @@ class Popup:
         self.paint()
         self.sheet.redraw()
 
-    def on_header_click(self, event: tk.Event) -> None:
+    def on_click(self, event: tk.Event) -> None:
+        """Act on a single click: a heading sorts by its column, a row marks itself seen or unseen.
+
+        :param event: the click
+        """
+        if self.sheet.identify_region(event) == "header":
+            self.sort_from_heading(event)
+            return
+        row = self.clicked_row(event)
+        if row is None:
+            return
+        self.remember_click(row)
+        self.set_seen(row, not self.entries[row].seen)
+
+    def on_double_click(self, event: tk.Event) -> None:
+        """Open whichever row was double-clicked, undoing the mark its first click made.
+
+        The first click of the pair arrives as an ordinary click and has already marked the row, so the row is put
+        back as it was before opening it. Opening something is not a statement about having seen it.
+
+        :param event: the second click of the pair
+        """
+        row = self.clicked_row(event)
+        if row is None:
+            return
+        self.undo_click(row)
+        if self.entries[row].url:
+            self.open(self.entries[row].url)
+
+    def clicked_row(self, event: tk.Event) -> int | None:
+        """Return which row a click landed on, or nothing when it landed anywhere else.
+
+        :param event: the click
+        """
+        if self.sheet.identify_region(event) != "table":
+            return None
+        row = self.sheet.identify_row(event, allow_end=False)
+        return row if row is not None and 0 <= row < len(self.entries) else None
+
+    def remember_click(self, row: int) -> None:
+        """Remember how a row stood before this click, unless the click continues one already remembered.
+
+        :param row: the row that was clicked
+        """
+        clicked, _was, when = self.before_click
+        if clicked != row or time.monotonic() - when > PAIRED_CLICK_SECONDS:
+            self.before_click = (row, self.entries[row].seen, time.monotonic())
+
+    def undo_click(self, row: int) -> None:
+        """Put a row back as it stood before the click that has just marked it.
+
+        :param row: the row being double-clicked
+        """
+        clicked, was, when = self.before_click
+        if clicked == row and time.monotonic() - when <= PAIRED_CLICK_SECONDS:
+            self.set_seen(row, was)
+        self.before_click = (None, False, 0.0)
+
+    def set_seen(self, row: int, seen: bool) -> None:
+        """Mark one row seen or unseen, remember it for next time, and redraw.
+
+        :param row: which row to mark
+        :param seen: whether the user has now seen it
+        """
+        if self.entries[row].seen == seen:
+            return
+        self.entries[row] = replace(self.entries[row], seen=seen)
+        remember_row_seen(self.entries[row], seen)
+        self.refill()
+        self.name.configure(text=self.heading_text())
+
+    def sort_from_heading(self, event: tk.Event) -> None:
         """Sort by the column whose heading was clicked, unless the click was on a divider between two.
 
         :param event: the click
         """
-        region = self.sheet.identify_region(event)
-        if region != "header" or self.sheet.identify_column(event, allow_end=False) is None:
-            return
         column = self.sheet.identify_column(event, allow_end=False)
         if self.sheet.MT.current_cursor == "sb_h_double_arrow" or column is None or column >= len(COLUMNS):
             return
@@ -280,25 +367,13 @@ class Popup:
         marker = " v" if self.newest_first else " ^"
         self.sheet.headers([f"{heading}{marker if key == column else ''}" for key, heading, _width, _stretches in COLUMNS])
 
-    def on_select(self, event: object = None) -> None:
-        """Open whichever row was clicked.
-
-        :param event: the selection, which carries the row that was picked
-        """
-        selected = self.sheet.get_currently_selected()
-        if selected is None or getattr(selected, "row", None) is None:
-            return
-        row = selected.row
-        if 0 <= row < len(self.entries) and self.entries[row].url:
-            self.open(self.entries[row].url)
-
     def footer(self) -> None:
         """Draw the closing hint and the button that asks for a fresh look."""
         strip = tk.Frame(self.body, background=PALETTE.background)
         strip.pack(fill="x", side="bottom")
         self.hint = tk.Label(
             strip,
-            text="Click a row to open it. Drag a heading divider to resize a column, the title to move, any edge to resize.",
+            text="Click a row to mark it seen, double-click to open it. Click a heading to sort, drag the title to move, an edge to resize.",
             background=PALETTE.background,
             foreground=PALETTE.muted,
             font=self.regular,

@@ -236,3 +236,35 @@ def test_an_unknown_value_is_not_stored_as_though_it_were_real(workspace, monkey
     service.poll({})
     stored = json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))
     assert stored["entries"]["authored:acme/widget#7"]["mergeable"] == "CONFLICTING"
+
+
+def test_a_file_briefly_held_by_another_program_is_still_written(tmp_path, monkeypatch):
+    # Windows refuses to replace a file another program has open, which a virus scanner routinely does for a
+    # moment after every write.
+    from gh_tray import storage
+
+    attempts = []
+    real_replace = storage.os.replace
+
+    def sometimes_busy(temporary, path):
+        attempts.append(path)
+        if len(attempts) < 3:
+            raise PermissionError("in use")
+        real_replace(temporary, path)
+
+    monkeypatch.setattr(storage.os, "replace", sometimes_busy)
+    monkeypatch.setattr(storage.time, "sleep", lambda _seconds: None)
+    storage.write_text_atomic(tmp_path / "state.json", "written")
+    assert (tmp_path / "state.json").read_text(encoding="utf-8") == "written"
+
+
+def test_a_file_held_open_indefinitely_is_reported_rather_than_retried_forever(tmp_path, monkeypatch):
+    from gh_tray import storage
+
+    def always_busy(_temporary, _path):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(storage.os, "replace", always_busy)
+    monkeypatch.setattr(storage.time, "sleep", lambda _seconds: None)
+    with pytest.raises(PermissionError):
+        storage.write_text_atomic(tmp_path / "state.json", "written")
