@@ -89,6 +89,8 @@ TOGGLE_WITHIN_SECONDS = 1.2
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
+# The pointer shapes are the names every platform knows. The ones Windows adds for the diagonals do not exist on
+# a Linux desktop, where naming one is not ignored but refused, and takes the whole window with it.
 EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] = (
     ("left", (True, False, False, False), "sb_h_double_arrow", {"relx": 0.0, "rely": 0.0, "relheight": 1.0, "width": EDGE_HANDLE_WIDTH}),
     (
@@ -104,23 +106,28 @@ EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] =
         "sb_v_double_arrow",
         {"relx": 0.0, "rely": 1.0, "anchor": "sw", "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH},
     ),
-    ("top left", (True, True, False, False), "size_nw_se", {"relx": 0.0, "rely": 0.0, "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE}),
+    (
+        "top left",
+        (True, True, False, False),
+        "top_left_corner",
+        {"relx": 0.0, "rely": 0.0, "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
+    ),
     (
         "top right",
         (False, True, True, False),
-        "size_ne_sw",
+        "top_right_corner",
         {"relx": 1.0, "rely": 0.0, "anchor": "ne", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
     ),
     (
         "bottom left",
         (True, False, False, True),
-        "size_ne_sw",
+        "bottom_left_corner",
         {"relx": 0.0, "rely": 1.0, "anchor": "sw", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
     ),
     (
         "bottom right",
         (False, False, True, True),
-        "size_nw_se",
+        "bottom_right_corner",
         {"relx": 1.0, "rely": 1.0, "anchor": "se", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
     ),
 )
