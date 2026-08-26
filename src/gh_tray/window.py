@@ -20,15 +20,19 @@ from tksheet import Sheet
 
 from . import APP_NAME
 from .config import load_config
-from .environment import make_dpi_aware
+from .environment import make_dpi_aware, work_area
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
+    GLYPHS,
     RELOAD_ATTEMPTS,
     RELOAD_EVERY_MS,
+    SEEN_GLYPH,
     Row,
+    age_colour,
     blend,
     fade_for,
+    glyph_for,
     request_refresh,
     rows_to_show,
     snapshot_changed_at,
@@ -40,8 +44,12 @@ EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
 # pointer itself and, when the click was on a tray icon, clear of the taskbar.
 POINTER_OFFSET = 16
+# How far above the pointer the window sits, so a click near the bottom of the screen still leaves it clear.
+POINTER_GAP = 24
 MINIMUM_WIDTH = 480
 MINIMUM_HEIGHT = 140
+# Never in any font, so its width is whatever this one draws for a character it does not have.
+MISSING_GLYPH = "￿"
 FONT_SIZE = 11
 POINTS_PER_INCH = 72.0
 ROW_PADDING = 10
@@ -51,6 +59,11 @@ WIDTH_ALLOWANCE = 70
 WIDEST_SHARE_OF_SCREEN = 0.62
 EDGE_HANDLE_WIDTH = 6
 CORNER_HANDLE_SIZE = 14
+# What the table adds around its rows, and the most of the screen the window may take up.
+TABLE_TRIM = 8
+TALLEST_SHARE_OF_SCREEN = 0.55
+# How strongly a row already seen is drawn: dimmed rather than turned grey, so it keeps saying what it is.
+SEEN_STRENGTH = 0.45
 
 # The date is drawn in its own colour, faded by how old it is. The rest of a row keeps the colour of what it is,
 # faded the same amount, so age reads across the row without hiding what the row is about.
@@ -95,9 +108,27 @@ EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] =
 )
 
 
-def cells_of(entry: Row) -> list[str]:
-    """Return one row's text, in column order."""
-    return [entry.label, entry.repo, entry.number, entry.title, entry.who, entry.when]
+def cells_of(entry: Row, glyphs: bool) -> list[str]:
+    """Return one row's text, in column order.
+
+    :param entry: the row to lay out
+    :param glyphs: whether the window can draw the marks that head a row
+    """
+    label = f"{glyph_for(entry)}  {entry.label}" if glyphs else entry.label
+    return [label, entry.repo, entry.number, entry.title, entry.who, entry.when]
+
+
+def can_draw_glyphs(font: tkfont.Font) -> bool:
+    """Return whether this window's font has the marks that head a row.
+
+    A font without them draws a box for each, which says less than nothing. There is no way to ask a font what it
+    holds, so each mark is measured against a character no font has: one that comes out the same width is being
+    drawn as that same empty box.
+
+    :param font: the font the table is drawn in
+    """
+    missing = font.measure(MISSING_GLYPH)
+    return all(font.measure(glyph) not in (0, missing) for glyph in (*GLYPHS.values(), SEEN_GLYPH))
 
 
 class Popup:
@@ -136,7 +167,7 @@ class Popup:
 
     def build(self) -> None:
         """Lay out the heading strip, the table and the closing hint."""
-        wanting = sum(1 for entry in self.entries if entry.colour != PALETTE.muted)
+        wanting = sum(1 for entry in self.entries if not entry.seen)
         self.heading_strip(f"{APP_NAME} - {wanting} wanting attention" if wanting else f"{APP_NAME} - nothing to do")
         if self.entries:
             self.table()
@@ -168,12 +199,15 @@ class Popup:
 
     def table(self) -> None:
         """Draw the rows as a spreadsheet, whose columns resize by dragging the dividers in its headings."""
+        self.glyphs = can_draw_glyphs(self.regular)
         self.sheet = Sheet(
             self.body,
             headers=[heading for _key, heading, _width, _stretches in COLUMNS],
-            data=[cells_of(entry) for entry in self.entries],
+            data=[cells_of(entry, self.glyphs) for entry in self.entries],
             font=(self.regular.cget("family"), FONT_SIZE, "normal"),
             header_font=(self.bold.cget("family"), FONT_SIZE, "bold"),
+            header_align="w",
+            align="w",
             default_row_height=self.row_height(),
             show_row_index=False,
             show_top_left=False,
@@ -203,19 +237,23 @@ class Popup:
         self.sheet.bind("<Button-1>", self.on_header_click, add="+")
 
     def paint(self) -> None:
-        """Colour every cell: the date by how old it is, the rest by what the row is, both faded by that same age."""
+        """Colour every cell.
+
+        The date runs along a scale of its own, from just-happened to long-forgotten, so a column of them reads as
+        a gradient down the window. The rest of a row keeps the colour of what it is, dimmed once seen, so how old
+        something is and what it is are both legible without either having to give way.
+        """
         self.sheet.dehighlight_cells(all_=True)
         date_column = next(index for index, (key, *_rest) in enumerate(COLUMNS) if key == DATE_COLUMN)
         for row, entry in enumerate(self.entries):
-            fade = fade_for(entry.at)
-            body = blend(entry.colour, PALETTE.background, fade)
-            date = blend(PALETTE.muted if entry.colour == PALETTE.muted else PALETTE.heading, PALETTE.background, fade)
+            body = blend(entry.colour, PALETTE.background, SEEN_STRENGTH if entry.seen else fade_for(entry.at))
+            date = age_colour(entry.at)
             for column in range(len(COLUMNS)):
                 self.sheet.highlight_cells(row=row, column=column, fg=date if column == date_column else body)
 
     def refill(self) -> None:
         """Put the rows into the table in their current order, and colour them again."""
-        self.sheet.set_sheet_data([cells_of(entry) for entry in self.entries], reset_col_positions=False, redraw=False)
+        self.sheet.set_sheet_data([cells_of(entry, self.glyphs) for entry in self.entries], reset_col_positions=False, redraw=False)
         self.paint()
         self.sheet.redraw()
 
@@ -377,18 +415,49 @@ class Popup:
     def preferred_width(self) -> int:
         """Return the width every column needs at its stated size, capped so the window stays a popup."""
         wanted = sum(self.characters(width) for _key, _heading, width, _stretches in COLUMNS) + WIDTH_ALLOWANCE
-        return min(wanted, int(self.root.winfo_screenwidth() * WIDEST_SHARE_OF_SCREEN))
+        return min(wanted, int(self.usable_screen()[0] * WIDEST_SHARE_OF_SCREEN))
+
+    def table_height(self) -> int:
+        """Return how tall the table needs to be to show every row it has, without leaving empty space below."""
+        # One row's worth for the headings, and a little for the border the widget draws round itself.
+        return (len(self.entries) + 1) * self.row_height() + TABLE_TRIM
+
+    def usable_screen(self) -> tuple[int, int]:
+        """Return how much of the screen a window may occupy, leaving out any taskbar, dock or panel.
+
+        The toolkit reports the largest a window can be made, which every desktop works out for itself with its own
+        bars already deducted. That is the same answer on Windows, macOS and Linux without asking any of them
+        directly. Where it looks wrong, the whole screen is used instead.
+
+        :return: the usable width and height in pixels
+        """
+        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        try:
+            width, height = self.root.wm_maxsize()
+        except tk.TclError:
+            width, height = screen_width, screen_height
+        if not (0 < width <= screen_width and 0 < height <= screen_height):
+            width, height = screen_width, screen_height
+        return work_area((width, height))
 
     def place(self) -> None:
-        """Put the window near the pointer, sized to its contents and kept fully on screen."""
+        """Put the window near the pointer, sized to its contents and kept clear of the desktop's own bars.
+
+        The height follows how many rows there actually are, so a quiet day gets a small window rather than a tall
+        one mostly full of nothing.
+        """
         self.root.update_idletasks()
-        screen_width, screen_height = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        rows = len(self.entries) or 1
-        wanted_height = self.root.winfo_reqheight() + (rows + 2) * self.row_height() if hasattr(self, "sheet") else self.root.winfo_reqheight()
-        width = min(max(MINIMUM_WIDTH, self.preferred_width()), screen_width - 2 * EDGE_MARGIN)
-        height = min(wanted_height, screen_height // 2)
-        left = min(max(EDGE_MARGIN, self.root.winfo_pointerx() - width + POINTER_OFFSET), screen_width - width - EDGE_MARGIN)
-        top = min(max(EDGE_MARGIN, self.root.winfo_pointery() - height - POINTER_OFFSET), screen_height - height - EDGE_MARGIN)
+        usable_width, usable_height = self.usable_screen()
+        tallest = int(usable_height * TALLEST_SHARE_OF_SCREEN)
+        if hasattr(self, "sheet"):
+            self.sheet.configure(height=min(self.table_height(), tallest))
+            self.root.update_idletasks()
+        width = min(max(MINIMUM_WIDTH, self.preferred_width()), usable_width - 2 * EDGE_MARGIN)
+        height = min(max(MINIMUM_HEIGHT, self.root.winfo_reqheight()), tallest)
+        left = min(max(EDGE_MARGIN, self.root.winfo_pointerx() - width + POINTER_OFFSET), usable_width - width - EDGE_MARGIN)
+        # The window sits above the pointer, and never below what the desktop says is usable, so a click low on the
+        # screen does not put it behind the taskbar.
+        top = min(max(EDGE_MARGIN, self.root.winfo_pointery() - height - POINTER_GAP), usable_height - height - EDGE_MARGIN)
         self.root.geometry(f"{width}x{height}+{int(left)}+{int(top)}")
 
     def show(self) -> None:

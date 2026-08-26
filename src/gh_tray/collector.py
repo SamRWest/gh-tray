@@ -11,6 +11,7 @@ up one by one.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from loguru import logger
@@ -23,9 +24,28 @@ TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 FIRST_RUN_WINDOW = timedelta(days=1)
 # One request each, so only the first few mentions are traced back to whoever wrote them.
 MENTION_LOOKUP_LIMIT = 10
+# How many askings go out at once. GitHub asks callers not to flood it, and four is enough to overlap the waiting
+# without becoming a flood.
+CONCURRENT_ASKINGS = 4
+CONCURRENT_LOOKUPS = 4
 
 AUTHORED = "is:pr is:open author:@me archived:false"
 REVIEWING = "is:pr is:open review-requested:@me archived:false"
+
+
+def search_for(base: str, max_age_days: int, now: datetime) -> str:
+    """Add the age cutoff to a search, so GitHub leaves out what would only be thrown away on arrival.
+
+    Without this the search returns everything ever opened and most of it is dropped here, which on a long-lived
+    account means fetching two pages to keep one. Each page is a slow request, so this is most of a poll's time.
+
+    :param base: the search expression
+    :param max_age_days: how old is too old, or zero to keep everything
+    :param now: the moment to measure against
+    """
+    if not max_age_days:
+        return base
+    return f"{base} updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}"
 
 SEARCH_QUERY = """
 query($q: String!, $cursor: String) {
@@ -129,6 +149,21 @@ def page_url(api_url: str) -> str:
     return api_url.replace("api.github.com/repos", "github.com").replace("/pulls/", "/pull/")
 
 
+def comment_author(comment_url: str) -> str:
+    """Return who wrote one comment, or nothing if it cannot be read.
+
+    :param comment_url: the comment's address on GitHub's interface
+    """
+    if not comment_url:
+        return ""
+    try:
+        comment = api(comment_url.replace("https://api.github.com/", ""))
+    except GitHubError as error:
+        logger.debug("could not find out who wrote a mention: {}", error)
+        return ""
+    return nested(comment, "user", "login") if isinstance(comment, dict) else ""
+
+
 def collect_mentions(since: str) -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
@@ -137,21 +172,16 @@ def collect_mentions(since: str) -> list[dict]:
     feed = api(f"notifications?all=false&since={since}&per_page=100")
     if not isinstance(feed, list):
         return []
+    raised = [notification for notification in feed if notification.get("reason") in ("mention", "team_mention")]
+    # One request each to find out who wrote them, so only the first few are traced and those go out together.
+    traced = [(notification.get("subject") or {}).get("latest_comment_url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
+    with ThreadPoolExecutor(max_workers=CONCURRENT_LOOKUPS, thread_name_prefix="gh-tray-mentions") as pool:
+        authors = list(pool.map(comment_author, traced))
+    authors += [""] * (len(raised) - len(authors))
+
     mentions = []
-    looked_up = 0
-    for notification in feed:
-        if notification.get("reason") not in ("mention", "team_mention"):
-            continue
+    for notification, actor in zip(raised, authors, strict=True):
         subject = notification.get("subject") or {}
-        actor = ""
-        comment_url = subject.get("latest_comment_url") or ""
-        if comment_url and looked_up < MENTION_LOOKUP_LIMIT:
-            looked_up += 1
-            try:
-                comment = api(comment_url.replace("https://api.github.com/", ""))
-                actor = nested(comment, "user", "login") if isinstance(comment, dict) else ""
-            except GitHubError as error:
-                logger.debug("could not find out who wrote a mention: {}", error)
         mentions.append(
             {
                 "repo": nested(notification, "repository", "full_name"),
@@ -180,17 +210,26 @@ def collect(config: dict) -> tuple[dict | None, str]:
     """
     started = datetime.now(UTC)
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
+    cutoff = config.get("max_age_days", 0)
+    authored_search = search_for(AUTHORED, cutoff, started)
+    reviewing_search = search_for(REVIEWING, cutoff, started)
     try:
-        signed_in_as = viewer()
-        authored = [normalise(node, "authored") for node in search_pull_requests(SEARCH_QUERY, AUTHORED)]
-        reviewing = [normalise(node, "reviewing") for node in search_pull_requests(SEARCH_QUERY, REVIEWING)]
-        mentions = collect_mentions(since)
+        # The four askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
+        # they go out together. The poll then takes about as long as its slowest part rather than their sum.
+        with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
+            signed_in = pool.submit(viewer)
+            own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
+            to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
+            mentioning = pool.submit(collect_mentions, since)
+            signed_in_as = signed_in.result()
+            authored = [normalise(node, "authored") for node in own.result()]
+            reviewing = [normalise(node, "reviewing") for node in to_review.result()]
+            mentions = mentioning.result()
     except GitHubError as error:
         write_text_atomic(ERROR_LOG_PATH, f"{started.isoformat()}\n{error}\n")
         logger.error("collection failed: {}", error)
         return None, str(error)[:120]
 
-    cutoff = config.get("max_age_days", 0)
     authored, hidden_authored = drop_stale(authored, cutoff, started)
     reviewing, hidden_reviewing = drop_stale(reviewing, cutoff, started)
     write_json_atomic(STATE_PATH, {"lastRunAt": started.strftime(TIMESTAMP_FORMAT)})

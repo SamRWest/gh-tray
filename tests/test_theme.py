@@ -53,7 +53,7 @@ def brightness(colour: str) -> float:
     return (0.299 * red + 0.587 * green + 0.114 * blue) / 255
 
 
-@pytest.mark.parametrize("name", ["text", "heading", "muted", "urgent", "routine", "good", "link"])
+@pytest.mark.parametrize("name", ["text", "heading", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink"])
 def test_every_ink_stands_out_from_its_background(name):
     # A colour picked for a dark window is unreadable on a white one, which is why there are two sets and not one.
     for palette in (theme.DARK, theme.LIGHT):
@@ -66,7 +66,7 @@ def test_the_two_palettes_are_the_opposite_way_round():
     assert brightness(theme.DARK.text) > brightness(theme.LIGHT.text)
 
 
-@pytest.mark.parametrize("name", ["urgent", "routine", "good"])
+@pytest.mark.parametrize("name", ["red", "orange", "amber", "green", "blue", "violet", "pink"])
 def test_a_faded_row_still_stands_out_from_its_background(name):
     # The oldest rows are drawn at the weakest strength, and must not fade into the background entirely.
     from gh_tray.popup import AGE_FADE

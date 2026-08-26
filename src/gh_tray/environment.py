@@ -16,6 +16,9 @@ from loguru import logger
 
 from . import APP_NAME
 
+# What Windows calls the part of the screen a window may use, with the taskbar left out.
+SPI_GETWORKAREA = 0x0030
+
 # Terminals tried in order on Linux: the name to look for, the flag that opens it maximised where it has one, and
 # the arguments it takes before a command. The first one present wins, except that a request to maximise prefers a
 # terminal that can. Maximised, not full screen: the window keeps its title bar and the desktop keeps its panels.
@@ -68,6 +71,32 @@ def make_dpi_aware() -> None:
             continue
         return
     logger.debug("could not ask Windows for a sharp window, text may look soft")
+
+
+def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
+    """Return how much of the screen a window may use, with any taskbar, dock or panel left out.
+
+    Windows will say directly, and is the one that has to be asked: its toolkit reports the whole screen as
+    available and a window placed against the bottom of that ends up behind the taskbar. Elsewhere the toolkit's own
+    answer already accounts for the desktop's bars, so the caller's fallback is used.
+
+    :param fallback: the width and height to use where the desktop cannot be asked
+    :return: the usable width and height in pixels
+    """
+    if sys.platform != "win32":
+        return fallback
+    import ctypes
+    import ctypes.wintypes
+
+    area = ctypes.wintypes.RECT()
+    try:
+        told = ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(area), 0)
+    except (AttributeError, OSError) as error:
+        logger.debug("could not read the usable screen area: {}", error)
+        return fallback
+    if not told:
+        return fallback
+    return area.right - area.left, area.bottom - area.top
 
 
 def github_cli() -> str | None:

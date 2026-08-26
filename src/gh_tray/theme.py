@@ -17,7 +17,11 @@ from loguru import logger
 
 @dataclass(frozen=True)
 class Palette:
-    """Every colour a window draws with."""
+    """Every colour a window draws with.
+
+    No colour here is a plain grey. Text drawn in one reads as switched off rather than merely quiet, so the quiet
+    inks are tinted towards the surface they sit on and stay part of the same picture.
+    """
 
     dark: bool
     background: str
@@ -27,44 +31,67 @@ class Palette:
     text: str
     muted: str
     link: str
-    urgent: str
-    routine: str
-    good: str
     hover: str
     selection: str
+    # One hue per sort of thing, so a glance down the window tells them apart without reading a word. They are
+    # bright enough to stay themselves when dimmed for a row already seen, which a muted colour does not.
+    red: str
+    orange: str
+    amber: str
+    green: str
+    blue: str
+    violet: str
+    pink: str
+    # The two ends of the scale a date is drawn on, from something that just happened to something long forgotten.
+    fresh: str
+    stale: str
 
 
+# Dark greys rather than blacks: a near-black window is a hole in the desktop, and the borders between its parts
+# disappear into it.
 DARK = Palette(
     dark=True,
-    background="#0d1117",
-    surface="#161b22",
-    border="#30363d",
-    heading="#e6edf3",
-    text="#f0f6fc",
-    muted="#9198a1",
-    link="#79c0ff",
-    urgent="#ff7b72",
-    routine="#e3b341",
-    good="#3fb950",
-    hover="#21262d",
-    selection="#1f6feb",
+    background="#22272e",
+    surface="#2d333b",
+    border="#444c56",
+    heading="#f0f6fc",
+    text="#e8eef4",
+    muted="#adbac7",
+    link="#6cb6ff",
+    hover="#373e47",
+    selection="#4184e4",
+    red="#ff7b72",
+    orange="#ffa657",
+    amber="#f2cc60",
+    green="#5ddb6f",
+    blue="#79c0ff",
+    violet="#d2a8ff",
+    pink="#ff9bce",
+    fresh="#a5d6ff",
+    stale="#7c8fbf",
 )
 
 # Darker inks throughout: the same hues at dark-mode brightness are unreadable on white.
 LIGHT = Palette(
     dark=False,
     background="#ffffff",
-    surface="#f6f8fa",
-    border="#d0d7de",
-    heading="#1f2328",
-    text="#1f2328",
-    muted="#636c76",
+    surface="#f2f5f8",
+    border="#ccd5de",
+    heading="#111a24",
+    text="#1f2937",
+    muted="#4f5b67",
     link="#0969da",
-    urgent="#cf222e",
-    routine="#9a6700",
-    good="#1a7f37",
-    hover="#eaeef2",
+    hover="#e8eef4",
     selection="#ddf4ff",
+    red="#cf222e",
+    orange="#bc4c00",
+    amber="#8a6400",
+    green="#1a7f37",
+    blue="#0969da",
+    violet="#8250df",
+    pink="#bf3989",
+    fresh="#0550ae",
+    stale="#6e83a8",
 )
 
 

@@ -88,14 +88,14 @@ def test_changes_since_the_user_looked_are_marked_and_older_ones_are_not(event_l
     events.append_events([change(key="acme/widget#1")])
     events.mark_seen()
     events.append_events([change(key="acme/widget#2")])
-    marked = {row.number: row.colour for row in popup.rows_to_show(10)}
-    assert marked["#2"] != popup.MUTED
-    assert marked["#1"] == popup.MUTED
+    marked = {row.number: row.seen for row in popup.rows_to_show(10)}
+    assert marked["#2"] is False
+    assert marked["#1"] is True
 
 
 def test_everything_is_unread_before_the_user_has_ever_looked(event_log):
     events.append_events([change(), change(key="acme/widget#8")])
-    assert all(row.colour != popup.MUTED for row in popup.rows_to_show(10))
+    assert all(not row.seen for row in popup.rows_to_show(10))
 
 
 def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
@@ -104,7 +104,7 @@ def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
     rows = popup.rows_to_show(10)
     assert [row.label for row in rows] == ["Awaiting your review"]
     assert rows[0].who == "someone"
-    assert rows[0].colour == popup.URGENT
+    assert rows[0].colour == popup.PALETTE.orange
 
 
 def test_what_changed_is_listed_before_what_is_merely_waiting(event_log):
@@ -164,13 +164,41 @@ def test_the_most_recently_touched_comes_first_among_equals(event_log):
     assert [row.number for row in popup.rows_to_show(10)] == ["#2", "#1"]
 
 
-def test_a_blocking_change_is_marked_more_loudly_than_a_routine_one():
+def test_each_sort_of_change_has_its_own_colour():
     assert popup.dot_colour(change("ci_broken"), unread=True) == popup.URGENT
-    assert popup.dot_colour(change("new_comment"), unread=True) == popup.ROUTINE
+    assert popup.dot_colour(change("new_comment")) == popup.PALETTE.blue
+    assert popup.dot_colour(change("mention")) == popup.PALETTE.violet
+    assert len({popup.dot_colour(change(kind)) for kind in popup.KIND_STYLE}) == len(popup.KIND_STYLE)
 
 
-def test_a_change_already_seen_is_marked_quietly_whatever_it_was():
-    assert popup.dot_colour(change("ci_broken"), unread=False) == popup.MUTED
+def test_a_change_already_seen_keeps_saying_what_sort_of_thing_it_was():
+    # Turning a seen row grey would say it had been switched off rather than merely read; it is dimmed instead.
+    assert popup.dot_colour(change("ci_broken"), unread=False) == popup.URGENT
+
+
+def test_no_row_is_ever_drawn_in_plain_grey():
+    from gh_tray import theme
+
+    for palette in (theme.DARK, theme.LIGHT):
+        for name in ("red", "orange", "amber", "green", "blue", "violet", "pink", "fresh", "stale"):
+            red, green, blue = (int(getattr(palette, name)[index : index + 2], 16) for index in (1, 3, 5))
+            assert max(red, green, blue) - min(red, green, blue) > 12, f"{name} is a grey"
+
+
+def test_every_sort_of_row_has_its_own_mark():
+    marks = {popup.glyph_for(popup.Row("", "", "", "", "", "", "", colour)) for colour in (popup.URGENT, popup.ROUTINE, popup.GOOD)}
+    assert len(marks) == 3
+    assert popup.glyph_for(popup.Row("", "", "", "", "", "", "", popup.URGENT, seen=True)) == popup.SEEN_GLYPH
+
+
+def test_a_date_is_drawn_further_along_its_scale_the_older_it_is():
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    fresh = popup.age_colour((now - timedelta(minutes=5)).strftime(events.TIMESTAMP_FORMAT), now=now)
+    middling = popup.age_colour((now - timedelta(days=14)).strftime(events.TIMESTAMP_FORMAT), now=now)
+    stale = popup.age_colour((now - timedelta(days=400)).strftime(events.TIMESTAMP_FORMAT), now=now)
+    assert fresh == popup.PALETTE.fresh
+    assert stale == popup.PALETTE.stale
+    assert middling not in (fresh, stale), "the scale should pass through the colours between its two ends"
 
 
 def test_ages_are_described_in_the_shortest_accurate_form():

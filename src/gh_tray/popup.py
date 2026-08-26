@@ -13,6 +13,7 @@ clicking anything else on screen.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -23,56 +24,47 @@ from .snapshot import read_snapshot
 from .storage import write_text_atomic
 from .theme import PALETTE
 
-EDGE_MARGIN = 12
-# The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
-# pointer itself and, when the click was on a tray icon, clear of the taskbar.
-POINTER_OFFSET = 16
-MINIMUM_WIDTH = 480
-MINIMUM_HEIGHT = 140
-
-FONT_SIZE = 11
-POINTS_PER_INCH = 72.0
-ROW_PADDING = 8
-# Room for the window's border, the scrollbar and the table's own padding, so no column starts out cut off.
-WIDTH_ALLOWANCE = 60
-MINIMUM_COLUMN = 4
-# A window wide enough for the longest repository name anyone owns would stop being a popup, so it is capped here.
-WIDEST_SHARE_OF_SCREEN = 0.62
-EDGE_HANDLE_WIDTH = 6
-CORNER_HANDLE_SIZE = 14
-TABLE_STYLE = "ghtray.Treeview"
-
 BACKGROUND = PALETTE.background
 BORDER = PALETTE.border
 HEADING = PALETTE.heading
 TEXT = PALETTE.text
 MUTED = PALETTE.muted
 LINK = PALETTE.link
-URGENT = PALETTE.urgent
-ROUTINE = PALETTE.routine
-GOOD = PALETTE.good
 HOVER = PALETTE.hover
+# Kept under the names the rest of the application knows them by: what blocks somebody, what is worth a look, and
+# what is good news.
+URGENT = PALETTE.red
+ROUTINE = PALETTE.amber
+GOOD = PALETTE.green
 
-# How far a row keeps its colour as it ages, from untouched today to long forgotten. The table can only colour a
-# whole row, not one cell of it, so age is carried by fading the row rather than by tinting its date: what a row is
-# stays in the hue, and how stale it is shows in how strongly that hue is drawn.
+# How far a row keeps its colour as it ages, from untouched today to long forgotten. What a row is stays in the hue
+# and how stale it is shows in how strongly that hue is drawn, so neither has to give way to the other.
 AGE_FADE: tuple[tuple[float, float], ...] = (
     (1, 1.0),
-    (7, 0.88),
-    (30, 0.76),
-    (90, 0.64),
-    (180, 0.52),
-    (float("inf"), 0.42),
+    (7, 0.9),
+    (30, 0.82),
+    (90, 0.74),
+    (180, 0.68),
+    (float("inf"), 0.62),
 )
 
-# The colour a change is drawn in, where its kind alone decides. Anything not named here is red when it blocks
-# somebody and amber otherwise.
-KIND_COLOURS = {"ready_to_merge": GOOD}
+# One hue and one mark per sort of change, so a glance down the window tells them apart before a word is read.
+# Anything not named here falls back to red when it blocks somebody and amber otherwise.
+KIND_STYLE: dict[str, tuple[str, str]] = {
+    "review_requested": (PALETTE.orange, "🟠"),
+    "ci_broken": (PALETTE.red, "🔴"),
+    "changes_requested": (PALETTE.amber, "🟡"),
+    "mention": (PALETTE.violet, "🟣"),
+    "ready_to_merge": (PALETTE.green, "🟢"),
+    "conflict": (PALETTE.pink, "🩷"),
+    "new_comment": (PALETTE.blue, "🔵"),
+}
+KIND_COLOURS = {kind: colour for kind, (colour, _glyph) in KIND_STYLE.items()}
 
 # Each column: the name it is known by, its heading, how many characters wide it starts, and whether it takes the
 # space a wider window adds. Every one can be resized afterwards by dragging the divider in its heading.
 COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
-    ("change", "Change", 19, False),
+    ("change", "Change", 23, False),
     ("repo", "Repository", 46, False),
     ("pr", "PR", 7, False),
     ("title", "Title", 44, True),
@@ -93,43 +85,6 @@ SORT_KEYS = {
     "when": lambda row: moment(row.at),
 }
 
-# Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
-# pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
-EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] = (
-    ("left", (True, False, False, False), "sb_h_double_arrow", {"relx": 0.0, "rely": 0.0, "relheight": 1.0, "width": EDGE_HANDLE_WIDTH}),
-    (
-        "right",
-        (False, False, True, False),
-        "sb_h_double_arrow",
-        {"relx": 1.0, "rely": 0.0, "anchor": "ne", "relheight": 1.0, "width": EDGE_HANDLE_WIDTH},
-    ),
-    ("top", (False, True, False, False), "sb_v_double_arrow", {"relx": 0.0, "rely": 0.0, "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH}),
-    (
-        "bottom",
-        (False, False, False, True),
-        "sb_v_double_arrow",
-        {"relx": 0.0, "rely": 1.0, "anchor": "sw", "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH},
-    ),
-    ("top left", (True, True, False, False), "size_nw_se", {"relx": 0.0, "rely": 0.0, "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE}),
-    (
-        "top right",
-        (False, True, True, False),
-        "size_ne_sw",
-        {"relx": 1.0, "rely": 0.0, "anchor": "ne", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
-    ),
-    (
-        "bottom left",
-        (True, False, False, True),
-        "size_ne_sw",
-        {"relx": 0.0, "rely": 1.0, "anchor": "sw", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
-    ),
-    (
-        "bottom right",
-        (False, False, True, True),
-        "size_nw_se",
-        {"relx": 1.0, "rely": 1.0, "anchor": "se", "width": CORNER_HANDLE_SIZE, "height": CORNER_HANDLE_SIZE},
-    ),
-)
 
 TITLE_LIMIT = 90
 # How many log entries to read per row shown, since several entries about one pull request collapse into one row.
@@ -137,6 +92,8 @@ ROWS_READ_DEEPLY = 5
 # How long to keep re-reading after asking for a poll, and how often, while waiting for the tray to finish one.
 RELOAD_ATTEMPTS = 20
 RELOAD_EVERY_MS = 1000
+# The age at which a date is drawn at the far end of its colour scale.
+AGE_RAMP_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -152,16 +109,31 @@ class Row:
     url: str
     colour: str
     at: str = ""
+    seen: bool = False
+
+
+# The mark at the head of a row. Drawn only where the window can actually draw them: a font without them shows a
+# row of empty boxes, which is worse than no mark at all.
+GLYPHS = {colour: glyph for colour, glyph in ((colour, glyph) for _kind, (colour, glyph) in KIND_STYLE.items())}
+SEEN_GLYPH = "⚪"
+
+
+def glyph_for(entry: Row) -> str:
+    """Return the mark that heads a row.
+
+    :param entry: the row to mark
+    """
+    return SEEN_GLYPH if entry.seen else GLYPHS.get(entry.colour, "")
 
 
 # What each standing state is called, whose name goes beside it, whether it blocks somebody, and the colour it is
 # drawn in. These describe how a pull request is right now, unlike the event labels, which describe what just
 # happened. Something ready to merge is good news rather than a warning, so it is green.
 STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
-    ("reviewing", "Awaiting your review", "author", True, URGENT),
-    ("changes_requested", "Changes requested", "lastReviewBy", True, URGENT),
-    ("checks_failing", "Checks failing", "lastCommitBy", True, URGENT),
-    ("ready_to_merge", "Ready to merge", "lastReviewBy", False, GOOD),
+    ("reviewing", "Awaiting your review", "author", True, PALETTE.orange),
+    ("changes_requested", "Changes requested", "lastReviewBy", True, PALETTE.amber),
+    ("checks_failing", "Checks failing", "lastCommitBy", True, PALETTE.red),
+    ("ready_to_merge", "Ready to merge", "lastReviewBy", False, PALETTE.green),
 )
 
 
@@ -188,6 +160,17 @@ def blend(colour: str, towards: str, weight: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in mixed)
 
 
+def days_old(stamp: str, now: datetime | None = None) -> float:
+    """Return how many days ago something happened.
+
+    :param stamp: when it happened
+    :param now: the moment to measure against, defaulting to the present
+    """
+    if not stamp:
+        return 0.0
+    return max(0.0, ((now or datetime.now(UTC)) - moment(stamp)).total_seconds()) / 86400
+
+
 def fade_for(stamp: str, now: datetime | None = None) -> float:
     """Return how strongly a row of a given age should be drawn.
 
@@ -196,8 +179,20 @@ def fade_for(stamp: str, now: datetime | None = None) -> float:
     """
     if not stamp:
         return AGE_FADE[0][1]
-    days = max(0.0, ((now or datetime.now(UTC)) - moment(stamp)).total_seconds()) / 86400
-    return next(weight for limit, weight in AGE_FADE if days < limit)
+    return next(weight for limit, weight in AGE_FADE if days_old(stamp, now) < limit)
+
+
+def age_colour(stamp: str, now: datetime | None = None) -> str:
+    """Return the colour a date is drawn in, on a scale from just-happened to long-forgotten.
+
+    The scale is by the logarithm of the age rather than the age itself, because the difference between an hour and
+    a day matters and the difference between forty and fifty weeks does not.
+
+    :param stamp: when it happened
+    :param now: the moment to measure against, defaulting to the present
+    """
+    along = min(1.0, math.log1p(days_old(stamp, now)) / math.log1p(AGE_RAMP_DAYS))
+    return blend(PALETTE.fresh, PALETTE.stale, 1.0 - along)
 
 
 def repo_and_number(event: dict) -> tuple[str, str]:
@@ -215,14 +210,15 @@ def repo_and_number(event: dict) -> tuple[str, str]:
     return repo, f"#{number}" if number else ""
 
 
-def dot_colour(event: dict, unread: bool) -> str:
-    """Return the colour a change should be drawn in.
+def dot_colour(event: dict, unread: bool = True) -> str:
+    """Return the colour a change is drawn in, which is decided by what sort of change it is.
+
+    A change already seen keeps this colour and is dimmed instead. Turning it grey would say the row had been
+    switched off rather than merely read, and would lose what sort of thing it was at a glance.
 
     :param event: the change the row describes
-    :param unread: whether it arrived since the user last looked
+    :param unread: kept so callers reading older code still work; the colour no longer depends on it
     """
-    if not unread:
-        return MUTED
     return KIND_COLOURS.get(event["kind"], URGENT if is_urgent(event["kind"]) else ROUTINE)
 
 
@@ -241,7 +237,8 @@ def row_from_event(event: dict, unread: bool) -> Row:
         who=str(event.get("actor", "")),
         when=age_in_words(event["at"]),
         url=str(event.get("url", "")),
-        colour=dot_colour(event, unread),
+        colour=dot_colour(event),
+        seen=not unread,
         at=str(event.get("at", "")),
     )
 
