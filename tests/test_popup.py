@@ -168,7 +168,7 @@ def test_each_sort_of_change_has_its_own_colour():
     assert popup.dot_colour(change("ci_broken"), unread=True) == popup.URGENT
     assert popup.dot_colour(change("new_comment")) == popup.PALETTE.blue
     assert popup.dot_colour(change("mention")) == popup.PALETTE.violet
-    assert len({popup.dot_colour(change(kind)) for kind in popup.KIND_STYLE}) == len(popup.KIND_STYLE)
+    assert len({popup.dot_colour(change(kind)) for kind in popup.KIND_COLOURS}) == len(popup.KIND_COLOURS)
 
 
 def test_a_change_already_seen_keeps_saying_what_sort_of_thing_it_was():
@@ -185,9 +185,9 @@ def test_no_row_is_ever_drawn_in_plain_grey():
             assert max(red, green, blue) - min(red, green, blue) > 12, f"{name} is a grey"
 
 
-def test_every_sort_of_row_has_its_own_mark():
-    marks = {popup.glyph_for(popup.Row("", "", "", "", "", "", "", colour)) for colour in (popup.URGENT, popup.ROUTINE, popup.GOOD)}
-    assert len(marks) == 3
+def test_a_row_is_marked_filled_until_seen_and_hollow_after():
+    assert popup.glyph_for(popup.Row("", "", "", "", "", "", "", popup.URGENT)) == popup.UNSEEN_GLYPH
+
     assert popup.glyph_for(popup.Row("", "", "", "", "", "", "", popup.URGENT, seen=True)) == popup.SEEN_GLYPH
 
 
@@ -329,16 +329,14 @@ def test_an_unknown_column_falls_back_to_the_usual_order():
     assert popup.sorted_rows(rows, "invented")[0].at.startswith("2026")
 
 
-def test_a_row_fades_as_it_ages():
-    now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-    fresh = popup.fade_for((now - timedelta(hours=2)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    stale = popup.fade_for((now - timedelta(days=300)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    assert fresh == 1.0
-    assert stale < fresh
+def test_a_row_dims_only_once_it_has_been_seen():
+    # Age used to dim a row as well, leaving two rows of the same sort looking different for no nameable reason.
+    assert 0.0 < popup.SEEN_STRENGTH < 1.0
+    assert not hasattr(popup, "fade_for"), "age no longer dims a row; it has a scale of its own in the date column"
 
 
-def test_a_row_with_no_date_is_drawn_at_full_strength():
-    assert popup.fade_for("") == popup.AGE_FADE[0][1]
+
+
 
 
 def test_fading_keeps_the_hue_and_only_dims_it():

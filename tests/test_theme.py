@@ -69,9 +69,56 @@ def test_the_two_palettes_are_the_opposite_way_round():
 @pytest.mark.parametrize("name", ["red", "orange", "amber", "green", "blue", "violet", "pink"])
 def test_a_faded_row_still_stands_out_from_its_background(name):
     # The oldest rows are drawn at the weakest strength, and must not fade into the background entirely.
-    from gh_tray.popup import AGE_FADE
 
-    weakest = min(weight for _limit, weight in AGE_FADE)
+    from gh_tray.popup import SEEN_STRENGTH
+
+    weakest = SEEN_STRENGTH
     for palette in (theme.DARK, theme.LIGHT):
         faded = blend(getattr(palette, name), palette.background, weakest)
         assert abs(brightness(faded) - brightness(palette.background)) > 0.05, f"{name} disappears when old"
+
+
+def test_the_theme_can_be_forced_either_way():
+    assert theme.palette(theme.ALWAYS_DARK) is theme.DARK
+    assert theme.palette(theme.ALWAYS_LIGHT) is theme.LIGHT
+
+
+def test_following_the_desktop_is_what_auto_means(monkeypatch):
+    monkeypatch.setattr(theme.darkdetect, "isDark", lambda: False)
+    assert theme.palette(theme.FOLLOW_DESKTOP) is theme.LIGHT
+    monkeypatch.setattr(theme.darkdetect, "isDark", lambda: True)
+    assert theme.palette(theme.FOLLOW_DESKTOP) is theme.DARK
+
+
+def test_an_unknown_theme_setting_falls_back_to_following_the_desktop(tmp_path, monkeypatch):
+    monkeypatch.setattr(theme, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"theme": "chartreuse"}', encoding="utf-8")
+    assert theme.chosen_style() == theme.FOLLOW_DESKTOP
+
+
+def test_the_chosen_theme_is_read_from_the_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(theme, "CONFIG_PATH", tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"theme": "light"}', encoding="utf-8")
+    assert theme.chosen_style() == theme.ALWAYS_LIGHT
+
+
+def test_no_settings_yet_means_following_the_desktop(tmp_path, monkeypatch):
+    monkeypatch.setattr(theme, "CONFIG_PATH", tmp_path / "absent.json")
+    assert theme.chosen_style() == theme.FOLLOW_DESKTOP
+
+
+def test_the_application_mark_is_drawn_at_every_size_windows_asks_for(tmp_path):
+    from gh_tray.status import APP_ICON_SIZES, app_icon, write_app_icon
+
+    for size in APP_ICON_SIZES:
+        assert app_icon(size).size == (size, size)
+    written = write_app_icon(tmp_path / "icon.ico")
+    assert written.exists() and written.stat().st_size > 0
+
+
+def test_the_mark_is_not_a_blank_square():
+    from gh_tray.status import ICON_BACKGROUND, app_icon
+
+    drawn = app_icon(64).convert("RGB")
+    background = tuple(int(ICON_BACKGROUND[index : index + 2], 16) for index in (1, 3, 5))
+    assert any(pixel != background for pixel in drawn.getdata()), "the mark drew nothing but its own background"

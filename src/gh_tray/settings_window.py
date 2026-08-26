@@ -9,11 +9,11 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import APP_NAME
-from .config import TEXT_KEYS, load_config, save_config
+from .config import TEXT_KEYS, THEME_KEY, load_config, save_config
 from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 from .prerequisites import signed_in
-from .theme import PALETTE
+from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, PALETTE
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
@@ -25,6 +25,9 @@ FIELDS = {
 
 
 POINTS_PER_INCH = 72.0
+
+# The theme choices offered, and what each is called in the window.
+THEME_CHOICES = ((FOLLOW_DESKTOP, "Follow the desktop"), (ALWAYS_DARK, "Dark"), (ALWAYS_LIGHT, "Light"))
 
 
 def apply_theme(root: tk.Tk) -> None:
@@ -45,12 +48,18 @@ def apply_theme(root: tk.Tk) -> None:
     style.map(
         "TCheckbutton",
         background=[("active", PALETTE.background)],
-        indicatorcolor=[("selected", PALETTE.good), ("!selected", PALETTE.surface)],
+        indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
     )
     style.configure("TEntry", fieldbackground=PALETTE.surface, foreground=PALETTE.text, insertcolor=PALETTE.text, bordercolor=PALETTE.border)
     style.configure("TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface)
     style.map("TButton", background=[("active", PALETTE.hover)])
     style.configure("TSeparator", background=PALETTE.border)
+    style.configure("TRadiobutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
+    style.map(
+        "TRadiobutton",
+        background=[("active", PALETTE.background)],
+        indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
+    )
 
 
 def run_settings() -> None:
@@ -88,11 +97,25 @@ def run_settings() -> None:
 
     ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
     row += 1
+    ttk.Label(frame, text="Colours").grid(row=row, column=0, sticky="w")
+    style_choice = tk.StringVar(value=config[THEME_KEY])
+    styles = ttk.Frame(frame)
+    styles.grid(row=row, column=1, sticky="w")
+    for column, (value, label) in enumerate(THEME_CHOICES):
+        ttk.Radiobutton(styles, text=label, value=value, variable=style_choice).grid(row=0, column=column, padx=(0, 10))
+    row += 1
+    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(
+        row=row, column=1, sticky="w", pady=(0, 4)
+    )
+    row += 1
+
+    ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
+    row += 1
     autostart = tk.BooleanVar(value=autostart_enabled())
     ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(row=row, column=0, columnspan=2, sticky="w")
     row += 1
     # Whether you are signed in decides whether anything works at all, so it says so in colour as well as in words.
-    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.good if signed_in() else PALETTE.urgent).grid(
+    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.green if signed_in() else PALETTE.red).grid(
         row=row, column=0, columnspan=2, sticky="w", pady=(6, 0)
     )
     row += 1
@@ -114,6 +137,7 @@ def run_settings() -> None:
         for key in TEXT_KEYS:
             config[key] = entries[key].get().strip()
         config["toasts"] = {kind: variable.get() for kind, variable in toggles.items()}
+        config[THEME_KEY] = style_choice.get()
         save_config(config)
         set_autostart(autostart.get())
         root.destroy()

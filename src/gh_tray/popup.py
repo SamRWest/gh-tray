@@ -37,29 +37,22 @@ URGENT = PALETTE.red
 ROUTINE = PALETTE.amber
 GOOD = PALETTE.green
 
-# How far a row keeps its colour as it ages, from untouched today to long forgotten. What a row is stays in the hue
-# and how stale it is shows in how strongly that hue is drawn, so neither has to give way to the other.
-AGE_FADE: tuple[tuple[float, float], ...] = (
-    (1, 1.0),
-    (7, 0.9),
-    (30, 0.82),
-    (90, 0.74),
-    (180, 0.68),
-    (float("inf"), 0.62),
-)
+# How strongly a row is drawn once the user has seen it. This is the only thing that dims a row: how old something
+# is has a scale of its own in the date column, and dimming for that as well left two rows of the same sort looking
+# different for a reason nobody could name.
+SEEN_STRENGTH = 0.58
 
-# One hue and one mark per sort of change, so a glance down the window tells them apart before a word is read.
-# Anything not named here falls back to red when it blocks somebody and amber otherwise.
-KIND_STYLE: dict[str, tuple[str, str]] = {
-    "review_requested": (PALETTE.orange, "🟠"),
-    "ci_broken": (PALETTE.red, "🔴"),
-    "changes_requested": (PALETTE.amber, "🟡"),
-    "mention": (PALETTE.violet, "🟣"),
-    "ready_to_merge": (PALETTE.green, "🟢"),
-    "conflict": (PALETTE.pink, "🩷"),
-    "new_comment": (PALETTE.blue, "🔵"),
+# One hue per sort of change, so a glance down the window tells them apart before a word is read. Anything not
+# named here falls back to red when it blocks somebody and amber otherwise.
+KIND_COLOURS: dict[str, str] = {
+    "review_requested": PALETTE.orange,
+    "ci_broken": PALETTE.red,
+    "changes_requested": PALETTE.amber,
+    "mention": PALETTE.violet,
+    "ready_to_merge": PALETTE.green,
+    "conflict": PALETTE.pink,
+    "new_comment": PALETTE.blue,
 }
-KIND_COLOURS = {kind: colour for kind, (colour, _glyph) in KIND_STYLE.items()}
 
 # Each column: the name it is known by, its heading, how many characters wide it starts, and whether it takes the
 # space a wider window adds. Every one can be resized afterwards by dragging the divider in its heading.
@@ -112,10 +105,12 @@ class Row:
     seen: bool = False
 
 
-# The mark at the head of a row. Drawn only where the window can actually draw them: a font without them shows a
-# row of empty boxes, which is worse than no mark at all.
-GLYPHS = {colour: glyph for colour, glyph in ((colour, glyph) for _kind, (colour, glyph) in KIND_STYLE.items())}
-SEEN_GLYPH = "⚪"
+# The mark at the head of a row: filled while it still wants attention, hollow once seen. A plain shape rather than
+# a coloured emoji, because the toolkit draws emoji from the font in one colour whatever the character is, so they
+# came out as outlines. Drawn in the row's own colour, this one is the filled colour those were meant to be.
+UNSEEN_GLYPH = "●"
+SEEN_GLYPH = "○"
+GLYPHS = (UNSEEN_GLYPH, SEEN_GLYPH)
 
 
 def glyph_for(entry: Row) -> str:
@@ -123,7 +118,7 @@ def glyph_for(entry: Row) -> str:
 
     :param entry: the row to mark
     """
-    return SEEN_GLYPH if entry.seen else GLYPHS.get(entry.colour, "")
+    return SEEN_GLYPH if entry.seen else UNSEEN_GLYPH
 
 
 # What each standing state is called, whose name goes beside it, whether it blocks somebody, and the colour it is
@@ -169,17 +164,6 @@ def days_old(stamp: str, now: datetime | None = None) -> float:
     if not stamp:
         return 0.0
     return max(0.0, ((now or datetime.now(UTC)) - moment(stamp)).total_seconds()) / 86400
-
-
-def fade_for(stamp: str, now: datetime | None = None) -> float:
-    """Return how strongly a row of a given age should be drawn.
-
-    :param stamp: when the row last had anything happen to it
-    :param now: the moment to measure against, defaulting to the present
-    """
-    if not stamp:
-        return AGE_FADE[0][1]
-    return next(weight for limit, weight in AGE_FADE if days_old(stamp, now) < limit)
 
 
 def age_colour(stamp: str, now: datetime | None = None) -> str:

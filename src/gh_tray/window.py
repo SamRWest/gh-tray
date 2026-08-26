@@ -27,11 +27,10 @@ from .popup import (
     GLYPHS,
     RELOAD_ATTEMPTS,
     RELOAD_EVERY_MS,
-    SEEN_GLYPH,
+    SEEN_STRENGTH,
     Row,
     age_colour,
     blend,
-    fade_for,
     glyph_for,
     request_refresh,
     rows_to_show,
@@ -62,11 +61,8 @@ CORNER_HANDLE_SIZE = 14
 # What the table adds around its rows, and the most of the screen the window may take up.
 TABLE_TRIM = 8
 TALLEST_SHARE_OF_SCREEN = 0.55
-# How strongly a row already seen is drawn: dimmed rather than turned grey, so it keeps saying what it is.
-SEEN_STRENGTH = 0.45
 
-# The date is drawn in its own colour, faded by how old it is. The rest of a row keeps the colour of what it is,
-# faded the same amount, so age reads across the row without hiding what the row is about.
+# The date is drawn on a scale of its own, so it needs finding among the columns.
 DATE_COLUMN = "when"
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
@@ -128,7 +124,7 @@ def can_draw_glyphs(font: tkfont.Font) -> bool:
     :param font: the font the table is drawn in
     """
     missing = font.measure(MISSING_GLYPH)
-    return all(font.measure(glyph) not in (0, missing) for glyph in (*GLYPHS.values(), SEEN_GLYPH))
+    return all(font.measure(glyph) not in (0, missing) for glyph in GLYPHS)
 
 
 class Popup:
@@ -239,14 +235,15 @@ class Popup:
     def paint(self) -> None:
         """Colour every cell.
 
-        The date runs along a scale of its own, from just-happened to long-forgotten, so a column of them reads as
-        a gradient down the window. The rest of a row keeps the colour of what it is, dimmed once seen, so how old
-        something is and what it is are both legible without either having to give way.
+        A row is drawn in the colour of what it is, at full strength while it wants attention and dimmed once seen.
+        That is the only thing that dims it: how old something is has a scale of its own in the date column, which
+        runs from just-happened to long-forgotten and reads as a gradient down the window. Dimming for age as well
+        left two rows of the same sort looking different for a reason nobody could name.
         """
         self.sheet.dehighlight_cells(all_=True)
         date_column = next(index for index, (key, *_rest) in enumerate(COLUMNS) if key == DATE_COLUMN)
         for row, entry in enumerate(self.entries):
-            body = blend(entry.colour, PALETTE.background, SEEN_STRENGTH if entry.seen else fade_for(entry.at))
+            body = blend(entry.colour, PALETTE.background, SEEN_STRENGTH) if entry.seen else entry.colour
             date = age_colour(entry.at)
             for column in range(len(COLUMNS)):
                 self.sheet.highlight_cells(row=row, column=column, fg=date if column == date_column else body)

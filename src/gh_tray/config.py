@@ -13,6 +13,7 @@ from platformdirs import user_data_path
 
 from . import APP_NAME
 from .storage import read_json, write_json_atomic
+from .theme import STYLES
 
 APP_DIR = user_data_path(APP_NAME, appauthor=False)
 CONFIG_PATH = APP_DIR / "config.json"
@@ -23,6 +24,8 @@ SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
+# Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
+APP_ICON_PATH = APP_DIR / "gh-tray.ico"
 # Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
 # of what one needs to say to the other.
 REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
@@ -33,6 +36,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
+    "theme": "auto",
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -45,6 +49,8 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
+# The theme the windows are drawn in: follow the desktop, or insist on one.
+THEME_KEY = "theme"
 
 # Each numeric setting and the range it must fall in. A popup taller than this stops being a popup, and a poll
 # interval below a minute would hammer the GitHub API for no benefit.
@@ -71,6 +77,8 @@ def normalise(config: dict) -> dict:
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
     config["toasts"] = {kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()}
+    if config.get(THEME_KEY) not in STYLES:
+        config[THEME_KEY] = DEFAULT_CONFIG[THEME_KEY]
     return config
 
 

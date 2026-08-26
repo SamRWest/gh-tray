@@ -13,6 +13,12 @@ from dataclasses import dataclass
 
 import darkdetect
 from loguru import logger
+from platformdirs import user_data_path
+
+from . import APP_NAME
+from .storage import read_json
+
+CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 
 
 @dataclass(frozen=True)
@@ -95,6 +101,11 @@ LIGHT = Palette(
 )
 
 
+# What the theme setting may be set to, and what each means.
+FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT = "auto", "dark", "light"
+STYLES = (FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT)
+
+
 def is_dark() -> bool:
     """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told."""
     try:
@@ -108,9 +119,27 @@ def is_dark() -> bool:
     return bool(detected)
 
 
-def palette() -> Palette:
-    """Return the colours to draw with, following the desktop's theme."""
+def palette(style: str = FOLLOW_DESKTOP) -> Palette:
+    """Return the colours to draw with.
+
+    :param style: ``dark`` or ``light`` to insist on one, or ``auto`` to follow whatever the desktop is set to
+    """
+    if style == ALWAYS_DARK:
+        return DARK
+    if style == ALWAYS_LIGHT:
+        return LIGHT
     return DARK if is_dark() else LIGHT
 
 
-PALETTE = palette()
+def chosen_style() -> str:
+    """Return the theme the settings ask for, read from the settings file directly.
+
+    The settings module cannot be imported here, since it needs this one, and a window needs its colours before
+    anything else. The file is small and read once as a window opens, so reading it twice costs nothing.
+    """
+    stored, _damaged = read_json(CONFIG_PATH)
+    asked = stored.get("theme") if isinstance(stored, dict) else None
+    return asked if asked in STYLES else FOLLOW_DESKTOP
+
+
+PALETTE = palette(chosen_style())

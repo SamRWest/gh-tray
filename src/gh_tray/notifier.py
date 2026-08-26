@@ -22,6 +22,26 @@ MAX_LINES_PER_NOTIFICATION = 4
 SEND_TIMEOUT_SECONDS = 30
 
 
+def own_icon():
+    """Return the application's own mark for a notification to carry, or nothing if it cannot be drawn.
+
+    Without one the notification service falls back to the icon of whatever program raised it, which for a Python
+    application is the Python logo: nothing to do with this application and no help in telling it apart.
+
+    :return: the icon, or None where drawing it failed
+    """
+    from desktop_notifier import Icon
+
+    from .config import APP_ICON_PATH
+    from .status import write_app_icon
+
+    try:
+        return Icon(path=write_app_icon(APP_ICON_PATH))
+    except OSError as error:
+        logger.debug("could not draw the application's icon: {}", error)
+        return None
+
+
 class Notifier:
     """Raises one desktop notification per poll, covering every change the user has asked to be told about."""
 
@@ -50,7 +70,7 @@ class Notifier:
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
                 threading.Thread(target=self._loop.run_forever, daemon=True, name=f"{self.app_name}-notify").start()
-                self._backend = DesktopNotifier(app_name=self.app_name)
+                self._backend = DesktopNotifier(app_name=self.app_name, app_icon=own_icon())
             return self._loop, self._backend
 
     def wanted(self, events: list[dict], toast_settings: dict) -> list[dict]:
