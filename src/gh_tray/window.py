@@ -16,6 +16,7 @@ clicking anything else on screen.
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 import webbrowser
 from dataclasses import replace
@@ -82,6 +83,9 @@ WATCH_EVERY_MS = 100
 # How long the window takes to finish coming up and settle on the focus. Until then a loss of focus is part of it
 # arriving rather than the user clicking elsewhere, and dismissing on that would mean it never appeared at all.
 FOCUS_SETTLE_MS = 300
+# How soon after the window loses focus a note asking for it counts as the same click. The tray waits half a
+# second to see whether a second click follows, so its note arrives that much after the click that sent it.
+TOGGLE_WITHIN_SECONDS = 1.2
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
@@ -157,8 +161,13 @@ class Popup:
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
         # Whether the window is up and has settled, which is what tells a click elsewhere from the window's own
-        # arrival taking the focus.
+        # arrival taking the focus, and when a click elsewhere last put it away. No sentinel number for the
+        # second: the reference point of a monotonic clock is undefined, so any number chosen to mean "never"
+        # could legitimately occur.
         self.showing = False
+        self.dismissed_at: float | None = None
+        # The pending change of mind about the window having arrived, cancelled if it goes away first.
+        self.settling: str | None = None
         self.root = tk.Tk()
         self.root.withdraw()
         # Points become the right physical size only once Tk knows the real resolution of the screen.
@@ -211,9 +220,11 @@ class Popup:
         strip.pack(fill="x", padx=12, pady=(8, 6))
         self.name = name = tk.Label(strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold)
         name.pack(side="left")
-        close = tk.Label(strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2")
+        self.close_mark = close = tk.Label(strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2")
         close.pack(side="right")
-        close.bind("<Button-1>", lambda _event: self.close())
+        # Bound to the method itself rather than through a lambda, so a name that no longer exists fails here while
+        # the window is being built rather than silently doing nothing when the mark is clicked.
+        close.bind("<Button-1>", self.hide)
         for widget in (strip, name):
             widget.bind("<Button-1>", self.start_drag)
             widget.bind("<B1-Motion>", self.move_window)
@@ -459,19 +470,21 @@ class Popup:
         webbrowser.open(url)
         self.hide()
 
-    def hide(self) -> None:
+    def hide(self, *_) -> None:
         """Put the window away, keeping it loaded so the next showing is immediate."""
         self.showing = False
+        self.stop_settling()
         self.root.withdraw()
 
-    def on_focus_out(self) -> None:
-        """Put the window away when the user clicks something else.
+    def on_focus_out(self, *_) -> None:
+        """Put the window away when the user clicks something else, remembering that this is why it went.
 
         Coming up takes the focus in a couple of steps, and the window is not treated as shown until that has
         settled, so its own arrival does not dismiss it.
         """
         if self.showing:
             self.hide()
+            self.dismissed_at = time.monotonic()
 
     def preferred_width(self) -> int:
         """Return the width every column needs at its stated size, capped so the window stays a popup."""
@@ -523,16 +536,25 @@ class Popup:
 
     def show(self) -> None:
         """Bring the window up beside the pointer, with whatever is currently waiting."""
+        self.dismissed_at = None
         self.reload()
         self.place()
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
-        self.root.after(FOCUS_SETTLE_MS, self.settle)
+        self.stop_settling()
+        self.settling = self.root.after(FOCUS_SETTLE_MS, self.settle)
         logger.debug("showing {} rows in the {} theme", len(self.entries), "dark" if PALETTE.dark else "light")
+
+    def stop_settling(self) -> None:
+        """Drop any pending decision that the window has arrived, since it is no longer arriving."""
+        if self.settling is not None:
+            self.root.after_cancel(self.settling)
+            self.settling = None
 
     def settle(self) -> None:
         """Start treating a loss of focus as a dismissal, now that the window has finished coming up."""
+        self.settling = None
         self.showing = True
 
     def serve(self, waiting: SingleInstance) -> None:
@@ -546,8 +568,8 @@ class Popup:
         """
         self.waiting = waiting
         self.edge_handles()
-        self.root.bind("<Escape>", lambda _event: self.hide())
-        self.root.bind("<FocusOut>", lambda _event: self.on_focus_out())
+        self.root.bind("<Escape>", self.hide)
+        self.root.bind("<FocusOut>", self.on_focus_out)
         self.watch()
         self.root.mainloop()
 
@@ -558,12 +580,26 @@ class Popup:
         self.root.after(WATCH_EVERY_MS, self.watch)
 
     def answer(self) -> None:
-        """Show the window, or hand over to a fresh one when the colours it was drawn in are no longer the ones wanted."""
+        """Act on a note asking for the window: show it, put it away, or hand over to a window in the right colours."""
+        if self.just_dismissed():
+            # The click that asked for the window is the same one that took its focus away, so it means put it
+            # away rather than fetch it back.
+            POPUP_REQUEST_PATH.unlink(missing_ok=True)
+            return
         if self.theme_changed():
             self.hand_over()
             return
         POPUP_REQUEST_PATH.unlink(missing_ok=True)
         self.show()
+
+    def just_dismissed(self) -> bool:
+        """Return whether losing the focus has this moment put the window away.
+
+        Clicking the tray icon while the window is up takes the focus from it, which puts it away, and the note
+        asking for it arrives a moment later. Answering that note would bring the window straight back and leave
+        the click having done nothing at all.
+        """
+        return self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS
 
     def theme_changed(self) -> bool:
         """Return whether the desktop or the settings now ask for different colours than the window was drawn in."""
