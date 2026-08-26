@@ -207,14 +207,17 @@ def settings() -> int:
 
 @app.command
 def popup() -> int:
-    """Show the most recent changes in a small frameless window.
+    """Keep the changes window loaded and hidden, showing it whenever the tray asks.
+
+    The tray starts this itself and stops it on the way out, so there is rarely a reason to run it by hand. Clicking
+    the tray icon is what asks the window to show.
 
     :return: process exit code
     """
     start_logging(to_console=False)
-    from .window import show_popup
+    from .window import serve_popup
 
-    show_popup()
+    serve_popup()
     return 0
 
 

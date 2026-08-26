@@ -16,11 +16,13 @@ clicking anything else on screen.
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .config import LOCK_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
-from .environment import SingleInstance
+from .config import LOCK_PATH, POPUP_LOCK_PATH, POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
+from .environment import SingleInstance, hidden_window_flags
 from .events import (
     BROKEN_CI,
     age_in_words,
@@ -320,6 +322,36 @@ def request_refresh() -> bool:
         return False
     write_text_atomic(REFRESH_REQUEST_PATH, utc_now())
     return True
+
+
+def window_waiting() -> bool:
+    """Return whether a changes window is already loaded and waiting to be asked to show itself."""
+    waiting = SingleInstance(POPUP_LOCK_PATH)
+    if not waiting.acquire():
+        return True
+    waiting.release()
+    return False
+
+
+def request_popup() -> None:
+    """Leave the waiting window a note asking it to show itself.
+
+    One note serves any number of clicks, which is what stops a handful of impatient ones producing a handful of
+    windows.
+    """
+    write_text_atomic(POPUP_REQUEST_PATH, utc_now())
+
+
+def start_window() -> subprocess.Popen:
+    """Start the process that keeps the changes window loaded and hidden.
+
+    The window lives in a process of its own rather than the tray's, so its user interface loop never shares a
+    thread with the tray icon's. That also keeps it working on macOS, where a window may only be built on a
+    process's main thread.
+
+    :return: the started process
+    """
+    return subprocess.Popen([sys.executable, "-m", __package__, "popup"], **hidden_window_flags())
 
 
 def one_per_pull_request(rows: list[Row]) -> list[Row]:

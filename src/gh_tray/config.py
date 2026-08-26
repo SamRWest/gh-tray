@@ -29,6 +29,11 @@ APP_ICON_PATH = APP_DIR / "gh-tray.ico"
 # Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
 # of what one needs to say to the other.
 REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
+# The same the other way round: the tray asking the changes window to show itself. That window stays loaded and
+# hidden between showings, so being asked reaches it in a few milliseconds rather than the second a fresh process
+# takes to start. Its lock is what says one is already waiting.
+POPUP_REQUEST_PATH = APP_DIR / "popup.request"
+POPUP_LOCK_PATH = APP_DIR / "popup.lock"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
@@ -120,5 +125,3 @@ def load_config() -> dict:
 def save_config(config: dict) -> None:
     """Write settings back to disk, creating the application directory if needed."""
     write_json_atomic(CONFIG_PATH, normalise(config), indent=2)
-
-

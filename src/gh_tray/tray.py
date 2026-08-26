@@ -14,10 +14,11 @@ import pystray
 from loguru import logger
 
 from . import APP_NAME
-from .config import REFRESH_REQUEST_PATH, load_config
+from .config import POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, load_config
 from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
+from .popup import request_popup, start_window, window_waiting
 from .service import poll
 from .snapshot import read_snapshot
 from .status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
@@ -58,7 +59,10 @@ class Tray:
         """Load the settings and build the icon in its starting state."""
         self.config = load_config()
         REFRESH_REQUEST_PATH.unlink(missing_ok=True)
+        POPUP_REQUEST_PATH.unlink(missing_ok=True)
         self.status = Status()
+        # The process holding the changes window, started on demand and stopped when the tray quits.
+        self.window: subprocess.Popen | None = None
         self.notifier = Notifier()
         self.stop_requested = threading.Event()
         self.poll_lock = threading.Lock()
@@ -203,8 +207,14 @@ class Tray:
         self.pending_click.start()
 
     def on_popup(self, *_) -> None:
-        """Show the recent changes in a small window beside the tray."""
-        subprocess.Popen([sys.executable, "-m", "gh_tray", "popup"], **hidden_window_flags())
+        """Ask the waiting window to show the recent changes, starting one if none is waiting.
+
+        The window is a separate process that stays loaded and hidden, so this is a note rather than a launch. One
+        note serves any number of clicks, which is what stops several impatient ones opening several windows.
+        """
+        request_popup()
+        if not window_waiting():
+            self.window = start_window()
 
     def on_dashboard(self, *_) -> None:
         """Open the dashboard.
@@ -236,15 +246,20 @@ class Tray:
         self.icon.update_menu()
 
     def on_quit(self, *_) -> None:
-        """Stop the timers, the notifier and the icon."""
+        """Stop the timers, the notifier, the waiting window and the icon."""
         self.stop_requested.set()
         if self.pending_click is not None:
             self.pending_click.cancel()
             self.pending_click = None
+        if self.window is not None and self.window.poll() is None:
+            # It has no icon of its own, so left running it would be a process nobody could see or stop.
+            self.window.terminate()
         self.notifier.stop()
         self.icon.stop()
 
     def run(self) -> None:
-        """Show the icon and start polling."""
+        """Show the icon, start polling, and load the changes window ready for the first click."""
         threading.Thread(target=self.loop, daemon=True, name=f"{APP_NAME}-poll").start()
+        if not window_waiting():
+            self.window = start_window()
         self.icon.run()

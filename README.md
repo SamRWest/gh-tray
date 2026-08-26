@@ -15,6 +15,11 @@ The icon carries a count of changes you have not seen yet.
 A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
 waits half a second to see whether a second click follows.
 
+The window itself appears straight away. It is built once, when the tray starts, and hidden rather than closed
+afterwards, so showing it again costs a few milliseconds instead of the second a fresh process takes. It lives in a
+process of its own, which the tray starts and stops with itself. Clicking the icon several times in a row leaves one
+note asking for it, not several windows.
+
 The click-through window lists what changed since you last looked, then what is merely waiting on you. Changes alone
 would leave it saying "nothing" on a quiet day while three reviews sat in the queue.
 
@@ -159,6 +164,7 @@ Settings and history live in the platform's standard application data directory,
 | `gh-tray.log`    | Rotating diagnostics                                                        |
 | `last_error.log` | Everything written when the last collection failed                          |
 | `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
+| `popup.lock`     | Held open by the hidden changes window, so only one waits                   |
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
 against what you have actually looked at, so nothing is lost between the moment a change lands and the moment you read
@@ -185,7 +191,7 @@ incomplete, so the change history it describes would be silently wrong.
 | `tray.py`            | The icon, its menu, and the polling timer                                |
 | `theme.py`           | The colours to draw with, following the desktop's light or dark theme    |
 | `popup.py`           | Which rows the click-through window lists, and in what order             |
-| `window.py`          | The frameless window itself, and its table                               |
+| `window.py`          | The frameless window itself, its table, and staying loaded and hidden    |
 | `settings_window.py` | The settings window                                                      |
 
 The table is [tksheet](https://github.com/ragardner/tksheet) rather than the toolkit's own, which colours a whole row at

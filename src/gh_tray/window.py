@@ -6,6 +6,9 @@ should have to give way to the other.
 
 Clicking a row opens it on GitHub. Right-clicking marks it seen, and right-clicking again marks it unseen.
 
+The window is built once and then hidden rather than closed, and shows itself again whenever the tray leaves a note
+asking it to. Building it costs most of a second, which is a long time to wait after clicking a tray icon.
+
 Having no frame means the window has none of the things a frame normally provides, so each is supplied here: it is
 moved by dragging its heading strip, resized from any edge or corner, and closed by Escape, the close mark, or
 clicking anything else on screen.
@@ -22,8 +25,8 @@ from loguru import logger
 from tksheet import Sheet
 
 from . import APP_NAME
-from .config import load_config
-from .environment import make_dpi_aware, work_area
+from .config import POPUP_LOCK_PATH, POPUP_REQUEST_PATH, load_config
+from .environment import SingleInstance, make_dpi_aware, work_area
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -39,8 +42,9 @@ from .popup import (
     rows_to_show,
     snapshot_changed_at,
     sorted_rows,
+    start_window,
 )
-from .theme import PALETTE, blend
+from .theme import PALETTE, blend, chosen_style, palette
 
 EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
@@ -71,6 +75,13 @@ DATE_COLUMN = "when"
 # What the table widget understands as a right click. It adds the other button macOS uses for one itself, so this
 # is the same everywhere.
 RIGHT_CLICK = "<3>"
+
+# How often the hidden window looks for a note asking it to show itself. Ten times a second costs nothing and is
+# faster than anyone can notice, so a click on the tray icon reads as immediate.
+WATCH_EVERY_MS = 100
+# How long the window takes to finish coming up and settle on the focus. Until then a loss of focus is part of it
+# arriving rather than the user clicking elsewhere, and dismissing on that would mean it never appeared at all.
+FOCUS_SETTLE_MS = 300
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
@@ -145,6 +156,9 @@ class Popup:
         self.newest_first = True
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
+        # Whether the window is up and has settled, which is what tells a click elsewhere from the window's own
+        # arrival taking the focus.
+        self.showing = False
         self.root = tk.Tk()
         self.root.withdraw()
         # Points become the right physical size only once Tk knows the real resolution of the screen.
@@ -438,16 +452,26 @@ class Popup:
         self.root.geometry(f"{new_width}x{new_height}+{int(new_left)}+{int(new_top)}")
 
     def open(self, url: str) -> None:
-        """Open a change on GitHub and close the window.
+        """Open a change on GitHub and put the window away.
 
         :param url: the page to open
         """
         webbrowser.open(url)
-        self.close()
+        self.hide()
 
-    def close(self) -> None:
-        """Take the window down."""
-        self.root.destroy()
+    def hide(self) -> None:
+        """Put the window away, keeping it loaded so the next showing is immediate."""
+        self.showing = False
+        self.root.withdraw()
+
+    def on_focus_out(self) -> None:
+        """Put the window away when the user clicks something else.
+
+        Coming up takes the focus in a couple of steps, and the window is not treated as shown until that has
+        settled, so its own arrival does not dismiss it.
+        """
+        if self.showing:
+            self.hide()
 
     def preferred_width(self) -> int:
         """Return the width every column needs at its stated size, capped so the window stays a popup."""
@@ -498,18 +522,73 @@ class Popup:
         self.root.geometry(f"{width}x{height}+{int(left)}+{int(top)}")
 
     def show(self) -> None:
-        """Display the window and wait until it is dismissed."""
-        self.edge_handles()
+        """Bring the window up beside the pointer, with whatever is currently waiting."""
+        self.reload()
         self.place()
         self.root.deiconify()
+        self.root.lift()
         self.root.focus_force()
-        self.root.bind("<Escape>", lambda _event: self.close())
-        # Binding this straight away can close the window before it has finished taking focus.
-        self.root.after(300, lambda: self.root.bind("<FocusOut>", lambda _event: self.close()))
+        self.root.after(FOCUS_SETTLE_MS, self.settle)
         logger.debug("showing {} rows in the {} theme", len(self.entries), "dark" if PALETTE.dark else "light")
+
+    def settle(self) -> None:
+        """Start treating a loss of focus as a dismissal, now that the window has finished coming up."""
+        self.showing = True
+
+    def serve(self, waiting: SingleInstance) -> None:
+        """Stay loaded and hidden, showing the window whenever the tray asks for it.
+
+        Building the window costs most of a second, nearly all of it loading the drawing libraries and laying the
+        table out. Doing that once and then hiding rather than closing is what makes a click on the tray icon show
+        something straight away.
+
+        :param waiting: the lock saying this process is the one window waiting to be shown
+        """
+        self.waiting = waiting
+        self.edge_handles()
+        self.root.bind("<Escape>", lambda _event: self.hide())
+        self.root.bind("<FocusOut>", lambda _event: self.on_focus_out())
+        self.watch()
         self.root.mainloop()
 
+    def watch(self) -> None:
+        """Look for a note asking the window to show itself, and keep looking."""
+        if POPUP_REQUEST_PATH.exists():
+            self.answer()
+        self.root.after(WATCH_EVERY_MS, self.watch)
 
-def show_popup() -> None:
-    """Show what wants attention in a frameless window, as many rows as the settings ask for."""
-    Popup(rows_to_show(load_config()["popup_rows"])).show()
+    def answer(self) -> None:
+        """Show the window, or hand over to a fresh one when the colours it was drawn in are no longer the ones wanted."""
+        if self.theme_changed():
+            self.hand_over()
+            return
+        POPUP_REQUEST_PATH.unlink(missing_ok=True)
+        self.show()
+
+    def theme_changed(self) -> bool:
+        """Return whether the desktop or the settings now ask for different colours than the window was drawn in."""
+        return palette(chosen_style()).dark != PALETTE.dark
+
+    def hand_over(self) -> None:
+        """Give way to a freshly built window, which will be drawn in the colours now wanted.
+
+        The colours are read once, as the window is built, and they reach far enough into it that repainting is not
+        worth the tangle. The note asking for a window is left where it is, so the replacement answers it as soon
+        as it is ready and the click that arrived here is not lost.
+        """
+        logger.info("the theme changed, handing over to a fresh window")
+        self.waiting.release()
+        start_window()
+        self.root.destroy()
+
+
+def serve_popup() -> None:
+    """Keep the changes window loaded and hidden, ready to be shown the moment the tray asks."""
+    waiting = SingleInstance(POPUP_LOCK_PATH)
+    if not waiting.acquire():
+        logger.info("a window is already waiting, leaving it to it")
+        return
+    try:
+        Popup(rows_to_show(load_config()["popup_rows"])).serve(waiting)
+    finally:
+        waiting.release()
