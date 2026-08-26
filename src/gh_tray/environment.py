@@ -16,8 +16,18 @@ from loguru import logger
 
 from . import APP_NAME
 
-# Terminals tried in order on Linux. The first one present wins; gnome-terminal needs a different argument form.
-LINUX_TERMINALS = ("x-terminal-emulator", "gnome-terminal", "konsole", "alacritty", "kitty", "xfce4-terminal", "xterm")
+# Terminals tried in order on Linux: the name to look for, the flag that makes it fill the screen where it has one,
+# and the arguments it takes before a command. The first one present wins, except that a request to fill the screen
+# prefers a terminal that can.
+LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
+    ("x-terminal-emulator", None, ("-e", "sh", "-c")),
+    ("gnome-terminal", "--full-screen", ("--", "sh", "-c")),
+    ("konsole", "--fullscreen", ("-e", "sh", "-c")),
+    ("xfce4-terminal", "--fullscreen", ("-x", "sh", "-c")),
+    ("alacritty", None, ("-e", "sh", "-c")),
+    ("kitty", None, ("sh", "-c")),
+    ("xterm", None, ("-e", "sh", "-c")),
+)
 
 
 def hidden_window_flags() -> dict[str, int]:
@@ -93,31 +103,45 @@ def github_auth_summary() -> str:
     return next((line.strip() for line in lines if "Logged in" in line), "Not signed in to GitHub")
 
 
-def open_in_terminal(command: str, title: str) -> None:
-    """Run a command in a new terminal window, using the first terminal this platform offers.
+def terminal_command(command: str, title: str, fullscreen: bool) -> list[str]:
+    """Build the argument vector that runs a command in a new terminal window.
+
+    Filling the screen is best effort. Where the available terminal has no way to do it, the window simply opens at
+    its usual size rather than the command failing to run at all.
 
     :param command: the shell command to run in the new window
     :param title: window title, honoured only where the terminal supports one
+    :param fullscreen: whether the window should fill the screen
+    :return: the argument vector to start
     :raises RuntimeError: when no terminal emulator can be found
     """
     if sys.platform == "win32":
         windows_terminal = shutil.which("wt")
         if windows_terminal:
-            subprocess.Popen([windows_terminal, "--title", title, "cmd", "/c", command])
-        else:
-            subprocess.Popen(["cmd", "/c", "start", title, "cmd", "/k", command])
-        return
+            return [windows_terminal, *(["--fullscreen"] if fullscreen else []), "--title", title, "cmd", "/c", command]
+        return ["cmd", "/c", "start", *(["/max"] if fullscreen else []), title, "cmd", "/k", command]
     if sys.platform == "darwin":
-        subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{command}"'])
-        return
-    for terminal in LINUX_TERMINALS:
-        found = shutil.which(terminal)
+        zoom = "\nset zoomed of front window to true" if fullscreen else ""
+        return ["osascript", "-e", f'tell application "Terminal"\ndo script "{command}"\nactivate{zoom}\nend tell']
+    # A stable sort, so the usual preference order is kept among terminals that are equally able to fill the screen.
+    candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if fullscreen else LINUX_TERMINALS
+    for name, flag, launch in candidates:
+        found = shutil.which(name)
         if not found:
             continue
-        arguments = [found, "--", "sh", "-c", command] if terminal == "gnome-terminal" else [found, "-e", command]
-        subprocess.Popen(arguments)
-        return
+        return [found, *([flag] if fullscreen and flag else []), *launch, command]
     raise RuntimeError("no terminal emulator found")
+
+
+def open_in_terminal(command: str, title: str, fullscreen: bool = False) -> None:
+    """Run a command in a new terminal window, using the first terminal this platform offers.
+
+    :param command: the shell command to run in the new window
+    :param title: window title, honoured only where the terminal supports one
+    :param fullscreen: whether the window should fill the screen
+    :raises RuntimeError: when no terminal emulator can be found
+    """
+    subprocess.Popen(terminal_command(command, title, fullscreen))
 
 
 def launch_command() -> list[str]:

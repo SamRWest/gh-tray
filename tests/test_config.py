@@ -49,7 +49,22 @@ def test_a_corrupt_settings_file_falls_back_to_defaults(settings_file):
 
 def test_a_poll_interval_below_the_minimum_is_raised(settings_file):
     settings_file.write_text(json.dumps({"poll_minutes": 0}), encoding="utf-8")
-    assert config.load_config()["poll_minutes"] == config.MINIMUM_POLL_MINUTES
+    assert config.load_config()["poll_minutes"] == config.NUMBER_RANGES["poll_minutes"][0]
+
+
+def test_a_popup_taller_than_the_screen_is_capped(settings_file):
+    settings_file.write_text(json.dumps({"popup_rows": 5000}), encoding="utf-8")
+    assert config.load_config()["popup_rows"] == config.NUMBER_RANGES["popup_rows"][1]
+
+
+def test_a_popup_with_no_rows_is_raised_to_one(settings_file):
+    settings_file.write_text(json.dumps({"popup_rows": 0}), encoding="utf-8")
+    assert config.load_config()["popup_rows"] == 1
+
+
+def test_every_numeric_setting_has_a_default(settings_file):
+    # A range without a matching default would fall over the moment the setting was missing or wrong.
+    assert set(config.NUMBER_RANGES) <= set(config.DEFAULT_CONFIG)
 
 
 def test_a_negative_age_cutoff_becomes_no_cutoff(settings_file):

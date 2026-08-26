@@ -191,3 +191,48 @@ def test_settings_are_written_whole_or_not_at_all(settings_file):
     config.save_config(config.load_config())
     assert json.loads(settings_file.read_text(encoding="utf-8"))["poll_minutes"]
     assert not list(settings_file.parent.glob("*.tmp"))
+
+
+def test_a_conflict_is_not_reported_again_when_github_forgets_and_remembers(workspace, monkeypatch):
+    # GitHub works out mergeability only when asked, so a pull request commonly reads as unknown for one poll.
+    def conflicting(mergeable: str) -> dict:
+        digest = digest_with()
+        digest["authored"][0]["mergeable"] = mergeable
+        return digest
+
+    stub_collector(monkeypatch, conflicting("MERGEABLE"))
+    service.poll({})
+    stub_collector(monkeypatch, conflicting("CONFLICTING"))
+    assert [event["kind"] for event in service.poll({}).events] == ["conflict"]
+    stub_collector(monkeypatch, conflicting("UNKNOWN"))
+    assert service.poll({}).events == []
+    stub_collector(monkeypatch, conflicting("CONFLICTING"))
+    assert service.poll({}).events == []
+
+
+def test_a_conflict_clearing_through_unknown_is_still_noticed_when_it_returns(workspace, monkeypatch):
+    def with_mergeable(mergeable: str) -> dict:
+        digest = digest_with()
+        digest["authored"][0]["mergeable"] = mergeable
+        return digest
+
+    stub_collector(monkeypatch, with_mergeable("MERGEABLE"))
+    service.poll({})
+    stub_collector(monkeypatch, with_mergeable("UNKNOWN"))
+    service.poll({})
+    stub_collector(monkeypatch, with_mergeable("CONFLICTING"))
+    assert [event["kind"] for event in service.poll({}).events] == ["conflict"]
+
+
+def test_an_unknown_value_is_not_stored_as_though_it_were_real(workspace, monkeypatch):
+    def with_mergeable(mergeable: str) -> dict:
+        digest = digest_with()
+        digest["authored"][0]["mergeable"] = mergeable
+        return digest
+
+    stub_collector(monkeypatch, with_mergeable("CONFLICTING"))
+    service.poll({})
+    stub_collector(monkeypatch, with_mergeable("UNKNOWN"))
+    service.poll({})
+    stored = json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))
+    assert stored["entries"]["authored:acme/widget#7"]["mergeable"] == "CONFLICTING"

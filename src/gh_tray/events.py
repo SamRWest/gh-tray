@@ -31,6 +31,9 @@ RULE_LABELS: dict[str, tuple[str, bool]] = {
 
 BROKEN_CI = frozenset({"FAILURE", "ERROR"})
 
+# Field values that mean "not worked out yet" rather than a real state, and so must never be compared against.
+UNINFORMATIVE_VALUES: dict[str, frozenset[str]] = {"mergeable": frozenset({"UNKNOWN"})}
+
 # What each snapshot field falls back to when the collector reports it as absent. A field left as None would make
 # every later comparison against it meaningless, so the fallbacks stand in for "nothing known yet".
 SNAPSHOT_DEFAULTS: dict = {
@@ -99,6 +102,20 @@ def moment(stamp: str) -> datetime:
         return datetime.min.replace(tzinfo=UTC)
 
 
+def age_in_words(stamp: str, now: datetime | None = None) -> str:
+    """Describe how long ago something happened, in the fewest words that stay accurate.
+
+    :param stamp: a timestamp as written into the event log
+    :param now: the moment to measure against, defaulting to the present
+    :return: a short phrase such as ``just now`` or ``3d ago``
+    """
+    seconds = max(0.0, ((now or datetime.now(UTC)) - moment(stamp)).total_seconds())
+    for limit, divisor, unit in ((90, 1, ""), (3600, 60, "m"), (86400, 3600, "h"), (604800, 86400, "d")):
+        if seconds < limit:
+            return "just now" if not unit else f"{int(seconds // divisor)}{unit} ago"
+    return f"{int(seconds // 604800)}w ago"
+
+
 def snapshot_key(side: str, key: str) -> str:
     """Return the snapshot key for one pull request on one side of the digest.
 
@@ -125,6 +142,31 @@ def snapshot_of(digest: dict) -> dict:
             record["absent_polls"] = 0
             snapshot[snapshot_key(side, pull_request["key"])] = record
     return snapshot
+
+
+def carry_known_values(previous: dict, current: dict) -> dict:
+    """Replace values meaning "not worked out yet" with the last value that meant something.
+
+    GitHub works out whether a pull request can be merged only when asked, so it commonly reads as unknown on one
+    poll and returns to its real value on the next. Comparing against the unknown would report that return as a
+    fresh change, over and over, for a pull request whose state never actually moved.
+
+    :param previous: the snapshot stored by the last poll
+    :param current: the snapshot just built from a fresh result
+    :return: the fresh snapshot with uninformative values replaced by the last known ones
+    """
+    filled = {}
+    for key, record in current.items():
+        was = previous.get(key)
+        if was is None:
+            filled[key] = record
+            continue
+        updated = dict(record)
+        for field, uninformative in UNINFORMATIVE_VALUES.items():
+            if updated.get(field) in uninformative and was.get(field) not in uninformative:
+                updated[field] = was[field]
+        filled[key] = updated
+    return filled
 
 
 def carry_forward(previous: dict, current: dict, grace: int = ABSENCE_GRACE_POLLS) -> dict:

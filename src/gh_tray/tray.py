@@ -16,7 +16,7 @@ from loguru import logger
 from . import APP_NAME
 from .config import bootstrap, load_config
 from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
-from .events import label_for, mark_seen, recent_events, unread_events
+from .events import mark_seen
 from .notifier import Notifier
 from .service import poll, read_snapshot
 from .status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
@@ -33,12 +33,14 @@ DOUBLE_CLICK_SECONDS = 0.5
 
 
 def open_dashboard(config: dict) -> None:
-    """Open the terminal dashboard, or whichever command the settings name instead."""
-    command = config.get("dashboard_command") or DEFAULT_DASHBOARD
+    """Open the terminal dashboard filling the screen, or whichever command the settings name instead.
+
+    A command named in the settings is run as given, since how its own window opens is then the user's business.
+    """
     if config.get("dashboard_command"):
-        subprocess.Popen(command, shell=True)
+        subprocess.Popen(config["dashboard_command"], shell=True)
         return
-    open_in_terminal(command, "gh-dash")
+    open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", fullscreen=True)
 
 
 def open_settings() -> None:
@@ -56,7 +58,10 @@ class Tray:
         self.notifier = Notifier()
         self.stop_requested = threading.Event()
         self.poll_lock = threading.Lock()
-        self.last_click = 0.0
+        # No sentinel number: the reference point of a monotonic clock is undefined, so any number chosen to mean
+        # "no click yet" could legitimately occur and would turn the very first click into a double click.
+        self.last_click: float | None = None
+        self.pending_click: threading.Timer | None = None
         self.icon = pystray.Icon(APP_NAME, build_image(GREY, 0), f"{APP_NAME} - starting", menu=self.build_menu())
 
     def build_menu(self) -> pystray.Menu:
@@ -71,7 +76,7 @@ class Tray:
             item("Open dashboard", self.on_dashboard),
             item("Refresh now", self.on_refresh),
             menu.SEPARATOR,
-            item("Recent changes", self.changes_menu()),
+            item("Recent changes...", self.on_popup),
             item("Awaiting your review", self.reviews_menu()),
             menu.SEPARATOR,
             item("Mark all seen", self.on_mark_seen),
@@ -79,15 +84,6 @@ class Tray:
             item("Settings...", lambda _icon=None, _item=None: open_settings()),
             item("Quit", self.on_quit),
         )
-
-    def changes_menu(self) -> pystray.Menu:
-        """Return a submenu of unread changes, falling back to recent ones, each opening its page in a browser."""
-        item, menu = pystray.MenuItem, pystray.Menu
-        events = unread_events() or recent_events(MENU_ENTRY_LIMIT)
-        if not events:
-            return menu(item("nothing new", None, enabled=False))
-        entries = [item(f"{label_for(event['kind'])} - {event['key']}", self.opener(event.get("url", ""))) for event in events[:MENU_ENTRY_LIMIT]]
-        return menu(*entries)
 
     def reviews_menu(self) -> pystray.Menu:
         """Return a submenu of the pull requests waiting on the user's review."""
@@ -159,13 +155,27 @@ class Tray:
             self.stop_requested.wait(self.wait_seconds(succeeded))
 
     def on_click(self, *_) -> None:
-        """Handle a click on the icon, opening the dashboard when it completes a double click."""
+        """Handle a click on the icon: one click shows the recent changes, two open the dashboard.
+
+        A single click cannot act at once, because the first click of a double click looks exactly like it. So it is
+        held for as long as a double click may take, and cancelled if a second click arrives.
+        """
         now = time.monotonic()
-        if now - self.last_click <= DOUBLE_CLICK_SECONDS:
-            self.last_click = 0.0
+        if self.pending_click is not None:
+            self.pending_click.cancel()
+            self.pending_click = None
+        if self.last_click is not None and now - self.last_click <= DOUBLE_CLICK_SECONDS:
+            self.last_click = None
             self.on_dashboard()
             return
         self.last_click = now
+        self.pending_click = threading.Timer(DOUBLE_CLICK_SECONDS, self.on_popup)
+        self.pending_click.daemon = True
+        self.pending_click.start()
+
+    def on_popup(self, *_) -> None:
+        """Show the recent changes in a small window beside the tray."""
+        subprocess.Popen([sys.executable, "-m", "gh_tray", "popup"], **hidden_window_flags())
 
     def on_dashboard(self, *_) -> None:
         """Open the dashboard and treat that as the user having looked."""
@@ -195,8 +205,11 @@ class Tray:
         self.icon.update_menu()
 
     def on_quit(self, *_) -> None:
-        """Stop the timer, the notifier and the icon."""
+        """Stop the timers, the notifier and the icon."""
         self.stop_requested.set()
+        if self.pending_click is not None:
+            self.pending_click.cancel()
+            self.pending_click = None
         self.notifier.stop()
         self.icon.stop()
 

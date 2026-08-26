@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "orgs": "",
     "max_age_days": 365,
+    "popup_rows": 8,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -49,8 +50,15 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-MINIMUM_POLL_MINUTES = 1
 TEXT_KEYS = ("orgs", "collector", "bash_path", "dashboard_command")
+
+# Each numeric setting and the range it must fall in. A popup taller than this stops being a popup, and a poll
+# interval below a minute would hammer the GitHub API for no benefit.
+NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
+    "poll_minutes": (1, None),
+    "max_age_days": (0, None),
+    "popup_rows": (1, 50),
+}
 
 
 def normalise(config: dict) -> dict:
@@ -59,12 +67,13 @@ def normalise(config: dict) -> dict:
     :param config: settings as read from disk, possibly with wrong types or out-of-range numbers
     :return: the same mapping with numbers clamped and text fields forced to strings
     """
-    for key, minimum in (("poll_minutes", MINIMUM_POLL_MINUTES), ("max_age_days", 0)):
+    for key, (minimum, maximum) in NUMBER_RANGES.items():
         try:
-            config[key] = max(minimum, int(config[key]))
-        except (TypeError, ValueError):
+            value = max(minimum, int(config[key]))
+        except (TypeError, ValueError, KeyError):
             logger.warning("setting {} is not a whole number, using the default", key)
-            config[key] = DEFAULT_CONFIG[key]
+            value = DEFAULT_CONFIG[key]
+        config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
     config["toasts"] = {kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()}

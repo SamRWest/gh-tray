@@ -11,6 +11,7 @@ from .config import SNAPSHOT_PATH
 from .events import (
     append_events,
     carry_forward,
+    carry_known_values,
     detect_events,
     mark_seen,
     mention_urls,
@@ -74,6 +75,8 @@ def poll(config: dict) -> PollResult:
     current = snapshot_of(digest)
     previous, damaged = read_snapshot()
     baseline_only = previous is None
+    if previous:
+        current = carry_known_values(previous, current)
     events = [] if baseline_only else detect_events(previous, current, digest, mention_urls(read_events()))
     append_events(events)
     write_snapshot(carry_forward(previous or {}, current))

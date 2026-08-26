@@ -13,11 +13,12 @@ from .config import TEXT_KEYS, bootstrap, save_config
 from .environment import autostart_enabled, detect_orgs, github_auth_summary, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 
-NUMBER_FIELDS = ("poll_minutes", "max_age_days")
+NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
     "poll_minutes": ("Poll every (minutes)", 8),
     "orgs": ("Organisations (comma separated, blank = all of yours)", 46),
     "max_age_days": ("Hide pull requests older than (days, 0 = keep all)", 8),
+    "popup_rows": ("Changes shown when you click the tray icon", 8),
     "collector": ("Collector script (blank = the one shipped with this app)", 46),
     "bash_path": ("Bash path (blank = auto-detect)", 46),
     "dashboard_command": ("Dashboard command (blank = gh dash)", 46),

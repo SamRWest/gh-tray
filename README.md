@@ -3,9 +3,20 @@
 A system tray icon that watches your GitHub pull requests, tells you when something changes, and opens a terminal
 dashboard when you want the full picture.
 
-The icon carries a count of changes you have not seen yet. Hovering shows a short status summary. Double-clicking opens
-[gh-dash](https://github.com/dlvhdr/gh-dash). Right-clicking reaches the recent changes, the review queue, the
-login-start switch and the settings window.
+The icon carries a count of changes you have not seen yet.
+
+| Doing this to the icon | Gets you                                                                         |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| Hovering               | A short status summary                                                           |
+| Clicking once          | A small window listing the most recent changes; click a row to open it on GitHub |
+| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), filling the screen                 |
+| Right-clicking         | The review queue, the login-start switch, the settings window and the rest       |
+
+A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
+waits half a second to see whether a second click follows.
+
+How many changes the click-through window lists is a setting. Press Escape, click the close mark, or click anything else
+on screen to dismiss it.
 
 ## What counts as a change
 
@@ -75,9 +86,9 @@ file.
 ## Settings
 
 The settings window covers the poll interval, which organisations to sweep for newly opened pull requests, how old a
-pull request has to be before it is ignored, which changes raise a notification, whether to start at login, and the
-paths to the collector, `bash` and the dashboard command. Every path field may be left blank, in which case the
-application works it out at runtime.
+pull request has to be before it is ignored, how many changes the click-through window lists, which changes raise a
+notification, whether to start at login, and the paths to the collector, `bash` and the dashboard command. Every path
+field may be left blank, in which case the application works it out at runtime.
 
 The organisation list is filled in from your account's memberships the first time the application runs, and the **Detect
 organisations** button refills it later.
@@ -124,6 +135,7 @@ incomplete, so the change history it describes would be silently wrong.
 | `status.py`          | Turning a poll result into a colour, a count and hover text               |
 | `notifier.py`        | Desktop notifications and their click actions                             |
 | `tray.py`            | The icon, its menu, and the polling timer                                 |
+| `popup.py`           | The frameless window a single click opens                                 |
 | `settings_window.py` | The settings window                                                       |
 
 Notifications run on a long-lived event loop of their own. The platform backend calls back into the sending loop when a

@@ -112,6 +112,19 @@ def settings() -> int:
     return 0
 
 
+@app.command
+def popup() -> int:
+    """Show the most recent changes in a small frameless window.
+
+    :return: process exit code
+    """
+    start_logging(to_console=False)
+    from .popup import show_popup
+
+    show_popup()
+    return 0
+
+
 def main() -> None:
     """Run the command line application."""
     sys.exit(app() or 0)
