@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from PIL import ImageColor
 
 from gh_tray import theme
-from gh_tray.popup import blend
+from gh_tray.theme import blend
 
 
 def test_a_dark_desktop_gets_the_dark_colours(monkeypatch):
@@ -116,9 +117,18 @@ def test_the_application_mark_is_drawn_at_every_size_windows_asks_for(tmp_path):
     assert written.exists() and written.stat().st_size > 0
 
 
-def test_the_mark_is_not_a_blank_square():
-    from gh_tray.status import ICON_BACKGROUND, app_icon
+def test_the_mark_carries_its_three_colours_at_every_size_it_is_asked_for():
+    # The mark is three coloured dots on a dark field. At sixteen pixels the dots are two pixels across, so what
+    # matters is that each colour still reaches the picture rather than being smoothed away into the field.
+    from gh_tray.status import APP_ICON_SIZES, ICON_ROWS, app_icon
 
-    drawn = app_icon(64).convert("RGB")
-    background = tuple(int(ICON_BACKGROUND[index : index + 2], 16) for index in (1, 3, 5))
-    assert any(pixel != background for pixel in drawn.getdata()), "the mark drew nothing but its own background"
+    for size in APP_ICON_SIZES:
+        drawn = app_icon(size).convert("RGB")
+        for _middle, _width, colour in ICON_ROWS:
+            wanted = ImageColor.getrgb(colour)
+            assert any(close_to(pixel, wanted) for pixel in drawn.get_flattened_data()), f"{colour} is missing at {size} pixels"
+
+
+def close_to(pixel: tuple[int, int, int], wanted: tuple[int, int, int], allowance: int = 60) -> bool:
+    """Return whether a drawn pixel is recognisably one of the mark's colours, after smoothing has moved it."""
+    return all(abs(drawn - asked) <= allowance for drawn, asked in zip(pixel, wanted, strict=True))

@@ -33,7 +33,6 @@ from .popup import (
     SEEN_STRENGTH,
     Row,
     age_colour,
-    blend,
     glyph_for,
     remember_row_seen,
     request_refresh,
@@ -41,7 +40,7 @@ from .popup import (
     snapshot_changed_at,
     sorted_rows,
 )
-from .theme import PALETTE
+from .theme import PALETTE, blend
 
 EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the

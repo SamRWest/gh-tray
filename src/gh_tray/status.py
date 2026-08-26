@@ -6,23 +6,37 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 from .events import BROKEN_CI, is_urgent
+from .theme import blend
 
 RED, AMBER, GREEN, GREY = "#d1242f", "#bf8700", "#1a7f37", "#6e7781"
 
 ICON_SIZE = 64
 
-# The application's own mark, kept in step with data/icon.svg: the sizes Windows asks for, the tray it draws,
-# and the three marks landing in it, in the colours the window uses for what wants attention.
+# The application's own mark, kept in step with data/icon.svg: three coloured dots reading as three rows of a
+# list, each with the row it belongs to beside it. Drawn on a grid ICON_REFERENCE units square and scaled up.
 APP_ICON_SIZE = 256
 APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 ICON_REFERENCE = 64
-ICON_BACKGROUND = "#22272e"
-ICON_TRAY = "#adbac7"
-ICON_MARKS = ((21, 17, "#ff7b72"), (32, 25, "#ffa657"), (43, 17, "#5ddb6f"))
-ICON_TRAY_OUTLINE = ((13, 36), (18, 51), (46, 51), (51, 36))
+ICON_CORNER = 16
+# The field the mark sits on, which fades down the square rather than sitting flat.
+ICON_TOP = "#2e343d"
+ICON_BOTTOM = "#1e232a"
+# Each row: how far down it sits, how long its bar is, and its colour, being the three the window uses for what
+# wants attention.
+ICON_ROWS = ((19, 22, "#ff7b72"), (32, 15, "#ffa657"), (45, 19, "#5ddb6f"))
+ICON_DOT_X = 18
+ICON_DOT_RADIUS = 5
+ICON_BAR_X = 28
+ICON_BAR_HEIGHT = 7
+# How strongly the bars are drawn against the field. They are texture rather than detail: at the smallest sizes
+# they melt into a soft block and the three dots carry the mark alone.
+ICON_BAR_STRENGTH = 0.34
+# Drawn this many times larger and then reduced. The drawing has no smoothing of its own, and a sixteen pixel icon
+# of hard-edged circles is a mess of steps.
+ICON_OVERSAMPLE = 4
 # Windows caps a tray tooltip near 128 characters of plain text, and offers no way to style it.
 TOOLTIP_LIMIT = 127
 
@@ -96,8 +110,19 @@ def tooltip_text(status: Status, app_name: str = "gh-tray") -> str:
     return "\n".join(lines)[:TOOLTIP_LIMIT]
 
 
+def fading_field(size: int) -> Image.Image:
+    """Draw the square the mark sits on, fading from the lighter colour at the top to the darker at the bottom.
+
+    :param size: how many pixels square to draw it
+    """
+    column = Image.new("RGB", (1, size))
+    for row in range(size):
+        column.putpixel((0, row), ImageColor.getrgb(blend(ICON_TOP, ICON_BOTTOM, 1.0 - row / max(1, size - 1))))
+    return column.resize((size, size))
+
+
 def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
-    """Draw the application's own mark: a tray with three things landing in it.
+    """Draw the application's own mark: three coloured dots as three rows of a list.
 
     The same design as ``data/icon.svg``, which is the editable original and the one Linux desktops are given.
     Windows and the notification service want a raster image, and drawing it here avoids carrying a renderer for
@@ -105,17 +130,23 @@ def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
 
     :param size: how many pixels square to draw it
     """
-    scale = size / ICON_REFERENCE
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    drawn = size * ICON_OVERSAMPLE
+    scale = drawn / ICON_REFERENCE
+    corners = Image.new("L", (drawn, drawn), 0)
+    ImageDraw.Draw(corners).rounded_rectangle((0, 0, drawn - 1, drawn - 1), radius=round(ICON_CORNER * scale), fill=255)
+    image = Image.new("RGBA", (drawn, drawn), (0, 0, 0, 0))
+    image.paste(fading_field(drawn), mask=corners)
     canvas = ImageDraw.Draw(image)
-    canvas.rounded_rectangle((0, 0, size - 1, size - 1), radius=round(14 * scale), fill=ICON_BACKGROUND)
-    for centre_x, centre_y, colour in ICON_MARKS:
-        radius = 4.5 * scale
-        middle = (centre_x * scale, centre_y * scale)
-        canvas.ellipse((middle[0] - radius, middle[1] - radius, middle[0] + radius, middle[1] + radius), fill=colour)
-    # An open tray rather than a closed box, so it reads as something things land in.
-    canvas.line([(point[0] * scale, point[1] * scale) for point in ICON_TRAY_OUTLINE], fill=ICON_TRAY, width=max(1, round(4 * scale)), joint="curve")
-    return image
+    for middle, bar_width, colour in ICON_ROWS:
+        radius = ICON_DOT_RADIUS * scale
+        centre = (ICON_DOT_X * scale, middle * scale)
+        canvas.ellipse((centre[0] - radius, centre[1] - radius, centre[0] + radius, centre[1] + radius), fill=colour)
+        half = ICON_BAR_HEIGHT * scale / 2
+        bar = (ICON_BAR_X * scale, centre[1] - half, (ICON_BAR_X + bar_width) * scale, centre[1] + half)
+        # Mixed against the field at this row's own height, since the field is lighter at the top than the bottom.
+        behind = blend(ICON_TOP, ICON_BOTTOM, 1.0 - middle / ICON_REFERENCE)
+        canvas.rounded_rectangle(bar, radius=half, fill=blend(colour, behind, ICON_BAR_STRENGTH))
+    return image.resize((size, size), Image.LANCZOS)
 
 
 def write_app_icon(path: Path) -> Path:

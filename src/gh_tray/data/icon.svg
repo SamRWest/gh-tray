@@ -1,11 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="gh-tray">
   <title>gh-tray</title>
-  <rect width="64" height="64" rx="14" fill="#22272e"/>
-  <!-- An open tray, so it reads as something things land in. Kept in step with status.app_icon. -->
-  <polyline points="13,36 18,51 46,51 51,36" fill="none" stroke="#adbac7" stroke-width="4"
-            stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- Three marks landing in it, in the colours the window uses for what wants attention. -->
-  <circle cx="21" cy="17" r="4.5" fill="#ff7b72"/>
-  <circle cx="32" cy="25" r="4.5" fill="#ffa657"/>
-  <circle cx="43" cy="17" r="4.5" fill="#5ddb6f"/>
+  <defs>
+    <!-- The field fades down the square rather than sitting flat. Kept in step with status.app_icon. -->
+    <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2e343d"/>
+      <stop offset="1" stop-color="#1e232a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#field)"/>
+  <!-- Three rows of a list, in the colours the window uses for what wants attention. The bars are held back so
+       they read as texture: at small sizes they melt away and the three dots carry the mark alone. -->
+  <circle cx="18" cy="19" r="5" fill="#ff7b72"/>
+  <rect x="28" y="15.5" width="22" height="7" rx="3.5" fill="#ff7b72" opacity="0.34"/>
+  <circle cx="18" cy="32" r="5" fill="#ffa657"/>
+  <rect x="28" y="28.5" width="15" height="7" rx="3.5" fill="#ffa657" opacity="0.34"/>
+  <circle cx="18" cy="45" r="5" fill="#5ddb6f"/>
+  <rect x="28" y="41.5" width="19" height="7" rx="3.5" fill="#5ddb6f" opacity="0.34"/>
 </svg>

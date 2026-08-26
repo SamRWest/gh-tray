@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from gh_tray import events, popup, snapshot
+from gh_tray import events, popup, snapshot, theme
 
 
 @pytest.fixture
@@ -336,10 +336,10 @@ def test_a_row_dims_only_once_it_has_been_seen():
 
 
 def test_fading_keeps_the_hue_and_only_dims_it():
-    faded = popup.blend(popup.URGENT, popup.BACKGROUND, 0.5)
+    faded = theme.blend(popup.URGENT, popup.BACKGROUND, 0.5)
     assert faded != popup.URGENT
-    assert popup.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
-    assert popup.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND
+    assert theme.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
+    assert theme.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND
 
 
 def test_several_comments_on_one_pull_request_are_one_row(event_log):

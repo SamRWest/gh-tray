@@ -106,6 +106,20 @@ FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT = "auto", "dark", "light"
 STYLES = (FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT)
 
 
+def blend(colour: str, towards: str, weight: float) -> str:
+    """Mix one colour towards another.
+
+    :param colour: the colour to start from
+    :param towards: the colour to move it towards
+    :param weight: how much of the first to keep, where one keeps it entirely and zero loses it
+    :return: the mixed colour
+    """
+    start = (int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16))
+    end = (int(towards[1:3], 16), int(towards[3:5], 16), int(towards[5:7], 16))
+    mixed = (round(first * weight + second * (1 - weight)) for first, second in zip(start, end, strict=True))
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
 def is_dark() -> bool:
     """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told."""
     try:
