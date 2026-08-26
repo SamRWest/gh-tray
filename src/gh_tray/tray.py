@@ -51,7 +51,7 @@ def open_dashboard(config: dict) -> None:
 
 def open_settings() -> None:
     """Open the settings window as its own process, keeping its event loop clear of the tray's."""
-    subprocess.Popen([sys.executable, "-m", "gh_tray", "settings"], **hidden_window_flags())
+    subprocess.Popen([sys.executable, "-m", "gh_tray", "settings"], **hidden_window_flags())  # ty: ignore[no-matching-overload]
 
 
 class Tray:

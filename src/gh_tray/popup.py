@@ -351,7 +351,9 @@ def start_window() -> subprocess.Popen:
 
     :return: the started process
     """
-    return subprocess.Popen([sys.executable, "-m", __package__, "popup"], **hidden_window_flags())
+    # The checker cannot pick an overload through keyword arguments handed over as a mapping, which is how the
+    # flag that hides the console reaches here, so it is told to let this one be.
+    return subprocess.Popen([sys.executable, "-m", __package__, "popup"], **hidden_window_flags())  # ty: ignore[no-matching-overload]
 
 
 def one_per_pull_request(rows: list[Row]) -> list[Row]:

@@ -29,15 +29,15 @@ class Clicks:
     on_popup = tray.Tray.on_popup
 
     def __init__(self) -> None:
-        """Start with no window process."""
+        """Start with no window process and nothing started."""
         self.window = None
+        self.started: list[str] = []
 
 
 @pytest.fixture
 def clicks(paths, monkeypatch):
     """Build a stand-in tray that records how many window processes it would have started."""
     subject = Clicks()
-    subject.started = []
 
     def start_window():
         """Stand in for starting the window process."""

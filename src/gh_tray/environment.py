@@ -73,6 +73,30 @@ def make_dpi_aware() -> None:
     logger.debug("could not ask Windows for a sharp window, text may look soft")
 
 
+def window_scaling(window_id: int) -> int | None:
+    """Return how finely the display holding a window is drawing, in dots per inch.
+
+    Telling Windows this process draws at the real resolution also tells it not to rescale anything when that
+    resolution changes: a window is expected to notice and redraw itself. The toolkit used here does not, so a
+    window built at one scaling keeps those sizes and comes out tiny at a coarser one. Reading the number lets the
+    window be rebuilt instead. Locking and unlocking is enough to change it, since the display can come back
+    differently to how it went away.
+
+    :param window_id: the window to ask about
+    :return: dots per inch, or None where the platform cannot say
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    try:
+        # Windows 10 and later. Anything older is left alone rather than guessed at.
+        found = int(ctypes.windll.user32.GetDpiForWindow(window_id))
+    except (AttributeError, OSError):
+        return None
+    return found or None
+
+
 def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
     """Return how much of the screen a window may use, with any taskbar, dock or panel left out.
 

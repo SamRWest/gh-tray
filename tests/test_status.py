@@ -85,9 +85,20 @@ def test_the_menu_header_reports_the_three_counts():
     assert status.summary_line(Status(authored=25, reviewing=4, red=15)) == "4 to review - 15 red - 25 open"
 
 
+def pixel_at(image, spot: tuple[int, int]) -> tuple:
+    """Return one pixel of a drawn image as its channels.
+
+    A picture can hold a single number per pixel rather than channels, so this says which of the two is expected
+    instead of leaving it to be discovered by a later line failing for the wrong reason.
+    """
+    found = image.getpixel(spot)
+    assert isinstance(found, tuple), f"expected channels at {spot}, found {found!r}"
+    return found
+
+
 def centre_pixel(colour: str, count: int) -> tuple:
     """Return the colour at the middle of the drawn icon."""
-    return status.build_image(colour, count).getpixel((status.ICON_SIZE // 2, status.ICON_SIZE // 2))
+    return pixel_at(status.build_image(colour, count), (status.ICON_SIZE // 2, status.ICON_SIZE // 2))
 
 
 def test_the_icon_is_filled_in_the_colour_it_is_given():
@@ -110,4 +121,4 @@ def test_the_icon_is_drawn_for_every_state():
         for count in (0, 1, 9, 10, 400):
             image = status.build_image(colour, count)
             assert image.size == (status.ICON_SIZE, status.ICON_SIZE)
-            assert image.getpixel((0, 0))[3] == 0, "the icon's corners must be transparent, not boxed"
+            assert pixel_at(image, (0, 0))[3] == 0, "the icon's corners must be transparent, not boxed"

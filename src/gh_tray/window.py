@@ -27,7 +27,7 @@ from tksheet import Sheet
 
 from . import APP_NAME
 from .config import POPUP_LOCK_PATH, POPUP_REQUEST_PATH, load_config
-from .environment import SingleInstance, make_dpi_aware, work_area
+from .environment import SingleInstance, make_dpi_aware, window_scaling, work_area
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -188,6 +188,8 @@ class Popup:
         self.regular.configure(size=FONT_SIZE)
         self.bold = self.regular.copy()
         self.bold.configure(weight="bold")
+        # How finely the display was drawing when the sizes below were worked out, so a change can be noticed.
+        self.drawn_at = window_scaling(self.root.winfo_id())
         self.build()
 
     def characters(self, count: int) -> int:
@@ -270,7 +272,7 @@ class Popup:
         self.sheet.pack(fill="both", expand=True, padx=6)
         # Only what a reader needs: resizing a column, moving about, and copying a cell out.
         self.sheet.enable_bindings("single_select", "column_width_resize", "double_click_column_resize", "arrowkeys", "copy")
-        self.sheet.set_column_widths([self.characters(width) for _key, _heading, width, _stretches in COLUMNS])
+        self.sheet.set_column_widths(iter([self.characters(width) for _key, _heading, width, _stretches in COLUMNS]))
         self.paint()
         self.sheet.bind("<Button-1>", self.on_click, add="+")
         self.sheet.bind(RIGHT_CLICK, self.on_right_click)
@@ -587,13 +589,14 @@ class Popup:
         self.root.after(WATCH_EVERY_MS, self.watch)
 
     def answer(self) -> None:
-        """Act on a note asking for the window: show it, put it away, or hand over to a window in the right colours."""
-        if self.just_dismissed():
-            # The click that asked for the window is the same one that took its focus away, so it means put it
-            # away rather than fetch it back.
+        """Act on a note asking for the window: show it, put it away, or hand over to one drawn for how things are now."""
+        if self.showing or self.just_dismissed():
+            # Asking for the window while it is up means put it away. Whether the click that asked has already
+            # dismissed it by taking its focus depends on the desktop, so both are treated the same.
             POPUP_REQUEST_PATH.unlink(missing_ok=True)
+            self.hide()
             return
-        if self.theme_changed():
+        if self.drawn_wrongly():
             self.hand_over()
             return
         POPUP_REQUEST_PATH.unlink(missing_ok=True)
@@ -608,18 +611,28 @@ class Popup:
         """
         return self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS
 
-    def theme_changed(self) -> bool:
-        """Return whether the desktop or the settings now ask for different colours than the window was drawn in."""
-        return palette(chosen_style()).dark != PALETTE.dark
+    def drawn_wrongly(self) -> bool:
+        """Return whether the window can no longer be shown as it stands.
+
+        Both the colours and the sizes are settled as the window is built and reach far enough into it that
+        changing either afterwards is not worth the tangle. Either changing means starting again.
+        """
+        if palette(chosen_style()).dark != PALETTE.dark:
+            logger.info("the theme changed")
+            return True
+        scaling = window_scaling(self.root.winfo_id())
+        if scaling is not None and self.drawn_at is not None and scaling != self.drawn_at:
+            logger.info("the display went from {} to {} dots per inch", self.drawn_at, scaling)
+            return True
+        return False
 
     def hand_over(self) -> None:
-        """Give way to a freshly built window, which will be drawn in the colours now wanted.
+        """Give way to a freshly built window, drawn for how the desktop is now.
 
-        The colours are read once, as the window is built, and they reach far enough into it that repainting is not
-        worth the tangle. The note asking for a window is left where it is, so the replacement answers it as soon
-        as it is ready and the click that arrived here is not lost.
+        The note asking for a window is left where it is, so the replacement answers it as soon as it is ready and
+        the click that arrived here is not lost.
         """
-        logger.info("the theme changed, handing over to a fresh window")
+        logger.info("handing over to a fresh window")
         self.waiting.release()
         start_window()
         self.root.destroy()

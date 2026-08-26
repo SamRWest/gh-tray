@@ -233,14 +233,16 @@ The jobs are named, and `uv run poe` on its own lists them:
 | Job        | Does                                                        |
 | ---------- | ----------------------------------------------------------- |
 | `test`     | Runs the tests                                              |
+| `ty`       | Runs the type checks                                        |
 | `lint`     | Runs the pre-commit checks on staged files                  |
 | `lint_all` | Runs them on every file, staged or not                      |
 | `run`      | Starts the tray                                             |
 | `once`     | Polls a single time and prints the result, without the tray |
 
-The checks are formatting and linting with [ruff](https://docs.astral.sh/ruff/), a workflow linter, a scan of the
-dependencies for known vulnerabilities, and the usual file hygiene. Ruff's security rules are on, which is the same set
-[bandit](https://bandit.readthedocs.io/) implements, so bandit is not installed separately.
+The checks are formatting and linting with [ruff](https://docs.astral.sh/ruff/), type checking with
+[ty](https://github.com/astral-sh/ty), a workflow linter, a scan of the dependencies for known vulnerabilities, and the
+usual file hygiene. Ruff's security rules are on, which is the same set [bandit](https://bandit.readthedocs.io/)
+implements, so bandit is not installed separately.
 
 Every push runs the tests on Linux and Windows and the checks once, in the **Checks and tests** workflow. Windows is
 where the awkward parts live: measuring the taskbar, locking against a second copy, and starting a window with no

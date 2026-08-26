@@ -17,6 +17,18 @@ repos:
         types_or: [ python, pyi ]
         args: [ --fix, --output-format=concise ]
 
+  # ty runs from the project's own environment rather than a copy of its own, since it needs the installed
+  # dependencies to check the code that calls them. Every diagnostic fails the commit; there is nothing downgraded
+  # to a warning, so anything it reports is meant to be fixed or explained with a `# ty: ignore[rule]` comment.
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty (type check)
+        entry: uv run ty check --output-format concise
+        language: system
+        pass_filenames: false
+        types: [ python ]
+
   # Security checks run as part of ruff-check above, through the flake8-bandit ("S") rules selected in
   # pyproject.toml. That is the same set bandit implements, so bandit itself is not installed. Add `# noqa: S###`
   # to a line to ignore one finding on it.

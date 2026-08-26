@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 from PIL import ImageColor
 
@@ -126,9 +128,17 @@ def test_the_mark_carries_its_three_colours_at_every_size_it_is_asked_for():
         drawn = app_icon(size).convert("RGB")
         for _middle, _width, colour in ICON_ROWS:
             wanted = ImageColor.getrgb(colour)
-            assert any(close_to(pixel, wanted) for pixel in drawn.get_flattened_data()), f"{colour} is missing at {size} pixels"
+            assert any(close_to(pixel, wanted) for pixel in channels(drawn)), f"{colour} is missing at {size} pixels"
 
 
-def close_to(pixel: tuple[int, int, int], wanted: tuple[int, int, int], allowance: int = 60) -> bool:
+def channels(image) -> list[tuple]:
+    """Return every pixel of a colour picture as its channels.
+
+    A picture holding one number per pixel has no channels to compare, so those are left out rather than guessed at.
+    """
+    return [pixel for pixel in image.get_flattened_data() if isinstance(pixel, tuple)]
+
+
+def close_to(pixel: Sequence[int], wanted: Sequence[int], allowance: int = 60) -> bool:
     """Return whether a drawn pixel is recognisably one of the mark's colours, after smoothing has moved it."""
     return all(abs(drawn - asked) <= allowance for drawn, asked in zip(pixel, wanted, strict=True))

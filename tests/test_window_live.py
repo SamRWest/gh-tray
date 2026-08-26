@@ -12,6 +12,7 @@ skipped where there is none.
 from __future__ import annotations
 
 import tkinter as tk
+from types import SimpleNamespace
 
 import pytest
 
@@ -127,9 +128,17 @@ def test_a_window_put_away_comes_back_when_asked_again(view):
     assert shown(view)
 
 
-def test_clicking_the_icon_while_the_window_is_up_puts_it_away_rather_than_fetching_it_back(view):
+def test_clicking_the_icon_while_the_window_is_up_puts_it_away(view):
+    # Some desktops take the focus from the window when the tray icon is clicked, and some do not, so the window
+    # may still be up when the note arrives. Either way the click means put it away.
     bring_up(view)
-    # Clicking the tray icon takes the focus from the window, which puts it away, and the note follows a moment later.
+    ask_for_it(view)
+    assert not shown(view), "the window stayed up, so the click did nothing"
+
+
+def test_a_click_that_dismissed_the_window_does_not_fetch_it_back(view):
+    bring_up(view)
+    # Where the click does take the focus, the window is already away by the time the note arrives.
     view.on_focus_out()
     assert not shown(view)
     ask_for_it(view)
@@ -142,6 +151,21 @@ def test_a_later_click_still_shows_the_window(view, monkeypatch):
     monkeypatch.setattr(window.time, "monotonic", lambda: view.dismissed_at + window.TOGGLE_WITHIN_SECONDS + 1)
     ask_for_it(view)
     assert shown(view)
+
+
+def test_a_window_drawn_at_a_different_scaling_hands_over_rather_than_showing(view, monkeypatch):
+    # Windows is told this process draws at the real resolution, so it does not rescale a window when the display
+    # changes; the sizes settled when the window was built come out wrong and it has to be built again.
+    replacements = []
+    monkeypatch.setattr(window, "start_window", lambda: replacements.append("a window"))
+    monkeypatch.setattr(window, "window_scaling", lambda _identifier: 192)
+    monkeypatch.setattr(view, "drawn_at", 96)
+    monkeypatch.setattr(view.root, "destroy", lambda: None)
+    monkeypatch.setattr(view, "waiting", SimpleNamespace(release=lambda: None), raising=False)
+    ask_for_it(view)
+    assert replacements == ["a window"]
+    assert not shown(view)
+    assert window.POPUP_REQUEST_PATH.exists(), "the replacement needs the note, or the click is lost"
 
 
 def test_losing_the_focus_while_arriving_does_not_dismiss_the_window(view):

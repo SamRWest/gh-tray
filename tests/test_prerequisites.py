@@ -64,7 +64,9 @@ def test_requirements_are_ordered_so_each_can_be_met_in_turn(nothing_installed):
 def test_windows_installs_the_tool_through_its_own_package_manager(monkeypatch):
     monkeypatch.setattr(prerequisites.sys, "platform", "win32")
     monkeypatch.setattr(prerequisites.shutil, "which", lambda name: "C:/winget.exe" if name == "winget" else None)
-    name, arguments = prerequisites.package_manager()
+    found = prerequisites.package_manager()
+    assert found is not None, "a package manager was named, so one should have been found"
+    name, arguments = found
     assert name == "winget"
     assert prerequisites.github_package() == "GitHub.cli"
     assert "--silent" in arguments

@@ -146,7 +146,7 @@ def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
         # Mixed against the field at this row's own height, since the field is lighter at the top than the bottom.
         behind = blend(ICON_TOP, ICON_BOTTOM, 1.0 - middle / ICON_REFERENCE)
         canvas.rounded_rectangle(bar, radius=half, fill=blend(colour, behind, ICON_BAR_STRENGTH))
-    return image.resize((size, size), Image.LANCZOS)
+    return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def write_app_icon(path: Path) -> Path:

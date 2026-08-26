@@ -26,7 +26,7 @@ build-backend = "hatchling.build"
 packages = ["src/gh_tray"]
 
 [dependency-groups]
-dev = ["poethepoet>=0.30", "prek>=0.2", "pytest>=8.0", "ruff>=0.6"]
+dev = ["poethepoet>=0.30", "prek>=0.2", "pytest>=8.0", "ruff>=0.6", "ty>=0.0.1a20"]
 
 # Named jobs, run as `uv run poe <name>`. `uv run poe` on its own lists them.
 [tool.poe.tasks]
@@ -36,6 +36,7 @@ once = { cmd = "uv run gh-tray once", help = "Poll a single time and print what 
 lint = { cmd = "uv run prek run", help = "Run the pre-commit checks on staged files" }
 lint_all = { cmd = "uv run prek run --all-files", help = "Run the pre-commit checks on every file, staged or not" }
 test = { cmd = "uv run pytest", help = "Run the tests" }
+ty = { cmd = "uv run ty check --output-format concise", help = "Run the type checks" }
 
 [tool.ruff]
 line-length = 150
@@ -56,6 +57,11 @@ ignore = ["D203", "D213", "S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"
+
+[tool.ty.environment]
+# Check against what the project actually installs, so a missing annotation in a dependency is not read as an error
+# in the code that calls it.
+python = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

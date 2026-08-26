@@ -48,10 +48,10 @@ class Notifier:
         self.app_name = app_name
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._backend = None
+        self._backend: DesktopNotifier | None = None
         self._stopped = False
 
-    def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, object]:
+    def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, DesktopNotifier | None]:
         """Return the running loop and backend, starting them on first use.
 
         Nothing slow or unpredictable happens while the lock is held: the icon is drawn first, and everything this

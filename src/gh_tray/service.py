@@ -41,15 +41,16 @@ def poll(config: dict) -> PollResult:
     :return: the status, the changes detected this cycle, and any error
     """
     digest, error = collect(config)
-    if error:
+    if digest is None or error:
         return PollResult(status=status_from({}, unread_events(), error), error=error)
 
     current = snapshot_of(digest)
     previous, damaged = read_snapshot()
     baseline_only = previous is None
-    if previous:
+    events: list[dict] = []
+    if previous is not None:
         current = carry_known_values(previous, current)
-    events = [] if baseline_only else detect_events(previous, current, digest, mention_urls(read_events()))
+        events = detect_events(previous, current, digest, mention_urls(read_events()))
     append_events(events)
     write_snapshot(carry_forward(previous or {}, current))
     if baseline_only and not damaged:
