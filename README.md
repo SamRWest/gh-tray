@@ -30,10 +30,9 @@ would leave it saying "nothing" on a quiet day while three reviews sat in the qu
 The window follows your desktop's light or dark theme, as does the settings window. The theme is read when the window
 opens, so changing it takes effect the next time you click.
 
-Click a row to mark it seen, and click it again to mark it unseen. Double-click to open it on GitHub, which says nothing
-either way about having seen it. A row you have marked comes back unmarked if anything happens to it afterwards, since
-marking means "I have read this", not "stop telling me about this pull request". **Mark all seen** in the right-click
-menu clears the lot.
+Click a row to open it on GitHub. Right-click it to mark it seen, and right-click again to mark it unseen. Nothing else
+marks a row: a row you have marked comes back unmarked if anything happens to it afterwards, since marking means "I have
+read this", not "stop telling me about this pull request". **Mark all seen** in the tray menu clears the lot.
 
 Each row keeps the colour of what it is: red when something is blocking, amber when it is worth a look, green when it is
 good news such as a pull request that could be merged. A row you have seen is dimmed and its mark goes hollow, and
@@ -163,8 +162,8 @@ Settings and history live in the platform's standard application data directory,
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
 against what you have actually looked at, so nothing is lost between the moment a change lands and the moment you read
-it. Clicking a row marks that one row; **Mark all seen** sets a single timestamp and anything older than it counts as
-seen without a mark of its own.
+it. Right-clicking a row marks that one row; **Mark all seen** sets a single timestamp and anything older than it counts
+as seen without a mark of its own.
 
 Every state file is written to a temporary file and then moved into place. A process stopped part way through a plain
 write would leave a truncated file, and a truncated state file is worse than a missing one: it reads as valid but

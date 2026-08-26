@@ -4,8 +4,7 @@ The table is a spreadsheet widget rather than the toolkit's own, because that on
 here each cell wants its own: a row says what it is in one colour and how stale it is in another, and neither
 should have to give way to the other.
 
-Clicking a row marks it seen, and clicking it again marks it unseen. Double-clicking opens it on GitHub without
-saying anything about whether it has been seen.
+Clicking a row opens it on GitHub. Right-clicking marks it seen, and right-clicking again marks it unseen.
 
 Having no frame means the window has none of the things a frame normally provides, so each is supplied here: it is
 moved by dragging its heading strip, resized from any edge or corner, and closed by Escape, the close mark, or
@@ -14,7 +13,6 @@ clicking anything else on screen.
 
 from __future__ import annotations
 
-import time
 import tkinter as tk
 import webbrowser
 from dataclasses import replace
@@ -71,11 +69,9 @@ TALLEST_SHARE_OF_SCREEN = 0.55
 # The date is drawn on a scale of its own, so it needs finding among the columns.
 DATE_COLUMN = "when"
 
-# How long after a click a second one may still be the other half of a double click. A double click reaches this
-# window as one click and then a double, so the first click has already marked the row by the time the second
-# arrives and the row has to be put back as it was. The toolkit counts 500ms as a double click, and this allows a
-# little more so a click pair either side of that figure is never left half-applied.
-PAIRED_CLICK_SECONDS = 0.7
+# What the table widget understands as a right click. It adds the other button macOS uses for one itself, so this
+# is the same everywhere.
+RIGHT_CLICK = "<3>"
 
 # Every edge and corner the window can be dragged by: which of the left, top, right and bottom edges it moves, the
 # pointer shape that says so, and where to put it. Corners come after edges so they sit on top where the two meet.
@@ -150,9 +146,6 @@ class Popup:
         self.newest_first = True
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
-        # Which row a click landed on, how it stood before that click, and when the click was, so the first half of
-        # a double click can be undone when the second half arrives.
-        self.before_click: tuple[int | None, bool, float] = (None, False, 0.0)
         self.root = tk.Tk()
         self.root.withdraw()
         # Points become the right physical size only once Tk knows the real resolution of the screen.
@@ -249,7 +242,7 @@ class Popup:
         self.sheet.set_column_widths([self.characters(width) for _key, _heading, width, _stretches in COLUMNS])
         self.paint()
         self.sheet.bind("<Button-1>", self.on_click, add="+")
-        self.sheet.bind("<Double-Button-1>", self.on_double_click, add="+")
+        self.sheet.bind(RIGHT_CLICK, self.on_right_click)
 
     def paint(self) -> None:
         """Colour every cell.
@@ -274,7 +267,7 @@ class Popup:
         self.sheet.redraw()
 
     def on_click(self, event: tk.Event) -> None:
-        """Act on a single click: a heading sorts by its column, a row marks itself seen or unseen.
+        """Act on a left click: a heading sorts by its column, a row opens on GitHub.
 
         :param event: the click
         """
@@ -282,25 +275,17 @@ class Popup:
             self.sort_from_heading(event)
             return
         row = self.clicked_row(event)
-        if row is None:
-            return
-        self.remember_click(row)
-        self.set_seen(row, not self.entries[row].seen)
+        if row is not None and self.entries[row].url:
+            self.open(self.entries[row].url)
 
-    def on_double_click(self, event: tk.Event) -> None:
-        """Open whichever row was double-clicked, undoing the mark its first click made.
+    def on_right_click(self, event: tk.Event) -> None:
+        """Mark whichever row was right-clicked seen, or unseen when it is already marked.
 
-        The first click of the pair arrives as an ordinary click and has already marked the row, so the row is put
-        back as it was before opening it. Opening something is not a statement about having seen it.
-
-        :param event: the second click of the pair
+        :param event: the click
         """
         row = self.clicked_row(event)
-        if row is None:
-            return
-        self.undo_click(row)
-        if self.entries[row].url:
-            self.open(self.entries[row].url)
+        if row is not None:
+            self.set_seen(row, not self.entries[row].seen)
 
     def clicked_row(self, event: tk.Event) -> int | None:
         """Return which row a click landed on, or nothing when it landed anywhere else.
@@ -311,25 +296,6 @@ class Popup:
             return None
         row = self.sheet.identify_row(event, allow_end=False)
         return row if row is not None and 0 <= row < len(self.entries) else None
-
-    def remember_click(self, row: int) -> None:
-        """Remember how a row stood before this click, unless the click continues one already remembered.
-
-        :param row: the row that was clicked
-        """
-        clicked, _was, when = self.before_click
-        if clicked != row or time.monotonic() - when > PAIRED_CLICK_SECONDS:
-            self.before_click = (row, self.entries[row].seen, time.monotonic())
-
-    def undo_click(self, row: int) -> None:
-        """Put a row back as it stood before the click that has just marked it.
-
-        :param row: the row being double-clicked
-        """
-        clicked, was, when = self.before_click
-        if clicked == row and time.monotonic() - when <= PAIRED_CLICK_SECONDS:
-            self.set_seen(row, was)
-        self.before_click = (None, False, 0.0)
 
     def set_seen(self, row: int, seen: bool) -> None:
         """Mark one row seen or unseen, remember it for next time, and redraw.
@@ -373,7 +339,7 @@ class Popup:
         strip.pack(fill="x", side="bottom")
         self.hint = tk.Label(
             strip,
-            text="Click a row to mark it seen, double-click to open it. Click a heading to sort, drag the title to move, an edge to resize.",
+            text="Click a row to open it, right-click to mark it seen. Click a heading to sort, drag the title to move, an edge to resize.",
             background=PALETTE.background,
             foreground=PALETTE.muted,
             font=self.regular,

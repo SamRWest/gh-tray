@@ -1,8 +1,7 @@
-"""Clicking a row in the window: once to mark it seen, twice to open it.
+"""Clicking a row in the window: left to open it, right to mark it seen.
 
-A double click reaches the window as an ordinary click followed by a double click, so the first half has already
-marked the row by the time the second half arrives and has to be undone. That is the part worth testing rather than
-eyeballing, so the handlers are exercised here against a stand-in table, with no display involved.
+Marking is a statement the user makes about one row, so it has a button of its own and nothing else changes it.
+The handlers are exercised here against a stand-in table, with no display involved.
 """
 
 from __future__ import annotations
@@ -35,10 +34,8 @@ class Clicks:
     """A stand-in window carrying only what the click handlers touch."""
 
     on_click = window.Popup.on_click
-    on_double_click = window.Popup.on_double_click
+    on_right_click = window.Popup.on_right_click
     clicked_row = window.Popup.clicked_row
-    remember_click = window.Popup.remember_click
-    undo_click = window.Popup.undo_click
     set_seen = window.Popup.set_seen
     heading_text = window.Popup.heading_text
 
@@ -46,7 +43,6 @@ class Clicks:
         """:param entries: the rows the table is showing."""
         self.entries = entries
         self.sheet = Table()
-        self.before_click: tuple[int | None, bool, float] = (None, False, 0.0)
         self.opened: list[str] = []
         self.sorted_by: list[object] = []
         self.name = self
@@ -91,83 +87,58 @@ def clicks(tmp_path, monkeypatch):
     return Clicks([row("#7"), row("#8", seen=True)])
 
 
-def test_one_click_marks_a_row_seen(clicks):
-    clicks.on_click(None)
+def test_a_right_click_marks_a_row_seen(clicks):
+    clicks.on_right_click(None)
     assert clicks.entries[0].seen is True
     assert clicks.opened == []
 
 
-def test_clicking_a_seen_row_marks_it_unseen(clicks):
+def test_right_clicking_a_seen_row_marks_it_unseen(clicks):
     clicks.sheet.row = 1
-    clicks.on_click(None)
+    clicks.on_right_click(None)
     assert clicks.entries[1].seen is False
 
 
 def test_a_mark_is_remembered_for_next_time(clicks):
-    clicks.on_click(None)
+    clicks.on_right_click(None)
     assert events.seen_marks()[clicks.entries[0].url]["seen"] is True
 
 
-def test_two_clicks_open_the_row_and_leave_its_mark_alone(clicks):
+def test_a_left_click_opens_a_row_and_leaves_its_mark_alone(clicks):
     clicks.on_click(None)
-    clicks.on_double_click(None)
-    assert clicks.entries[0].seen is False
     assert clicks.opened == [clicks.entries[0].url]
+    assert clicks.entries[0].seen is False
 
 
-def test_two_clicks_on_a_seen_row_leave_it_seen(clicks):
+def test_opening_a_seen_row_leaves_it_seen(clicks):
     clicks.sheet.row = 1
     clicks.on_click(None)
-    clicks.on_double_click(None)
     assert clicks.entries[1].seen is True
     assert clicks.opened == [clicks.entries[1].url]
 
 
-def test_the_row_is_left_alone_however_the_toolkit_reports_the_pair(clicks):
-    # Some toolkits report the second press as both a click and a double click, and some report only the double.
+def test_a_left_click_on_a_heading_sorts(clicks):
+    clicks.sheet.region = "header"
     clicks.on_click(None)
-    clicks.on_click(None)
-    clicks.on_double_click(None)
-    assert clicks.entries[0].seen is False
-    assert clicks.opened == [clicks.entries[0].url]
-
-
-def test_two_slow_clicks_are_two_marks_and_not_a_double_click(clicks, monkeypatch):
-    clock = [0.0]
-    monkeypatch.setattr(window.time, "monotonic", lambda: clock[0])
-    clicks.on_click(None)
-    clock[0] += window.PAIRED_CLICK_SECONDS * 3
-    clicks.on_click(None)
-    assert clicks.entries[0].seen is False
+    assert len(clicks.sorted_by) == 1
     assert clicks.opened == []
 
 
-def test_a_double_click_long_after_a_mark_does_not_undo_it(clicks, monkeypatch):
-    clock = [0.0]
-    monkeypatch.setattr(window.time, "monotonic", lambda: clock[0])
-    clicks.on_click(None)
-    clock[0] += window.PAIRED_CLICK_SECONDS * 3
-    clicks.on_double_click(None)
-    assert clicks.entries[0].seen is True
-    assert clicks.opened == [clicks.entries[0].url]
-
-
-def test_a_click_on_a_heading_sorts_rather_than_marking(clicks):
+def test_a_right_click_on_a_heading_marks_nothing(clicks):
     clicks.sheet.region = "header"
-    clicks.on_click(None)
-    assert clicks.entries[0].seen is False
-    assert len(clicks.sorted_by) == 1
+    clicks.on_right_click(None)
+    assert [entry.seen for entry in clicks.entries] == [False, True]
 
 
 def test_a_click_below_the_last_row_does_nothing(clicks):
     clicks.sheet.row = None
     clicks.on_click(None)
-    clicks.on_double_click(None)
+    clicks.on_right_click(None)
     assert [entry.seen for entry in clicks.entries] == [False, True]
     assert clicks.opened == []
 
 
 def test_the_heading_counts_the_rows_not_yet_marked(clicks):
     assert clicks.heading_text().endswith("1 notification")
-    clicks.on_click(None)
+    clicks.on_right_click(None)
     assert clicks.heading_text().endswith("nothing to do")
