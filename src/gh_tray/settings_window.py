@@ -1,4 +1,4 @@
-"""The settings window: polling, organisations, notification rules, paths, login start and GitHub sign-in.
+"""The settings window: polling, notification rules, the dashboard command, login start and GitHub sign-in.
 
 It runs as its own process so its user interface loop never shares a thread with the tray icon's.
 """
@@ -9,18 +9,15 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import APP_NAME
-from .config import TEXT_KEYS, bootstrap, save_config
-from .environment import autostart_enabled, detect_orgs, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
+from .config import TEXT_KEYS, load_config, save_config
+from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
     "poll_minutes": ("Poll every (minutes)", 8),
-    "orgs": ("Organisations (comma separated, blank = all of yours)", 46),
     "max_age_days": ("Hide pull requests older than (days, 0 = keep all)", 8),
     "popup_rows": ("Changes shown when you click the tray icon", 8),
-    "collector": ("Collector script (blank = the one shipped with this app)", 46),
-    "bash_path": ("Bash path (blank = auto-detect)", 46),
     "dashboard_command": ("Dashboard command (blank = gh dash)", 46),
 }
 
@@ -31,7 +28,7 @@ POINTS_PER_INCH = 72.0
 def run_settings() -> None:
     """Show the settings window and block until it is closed."""
     make_dpi_aware()
-    config = bootstrap()
+    config = load_config()
     root = tk.Tk()
     # Points become the right physical size only once Tk knows the real resolution of the screen.
     root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
@@ -75,14 +72,6 @@ def run_settings() -> None:
         except RuntimeError as error:
             messagebox.showerror(APP_NAME, str(error))
 
-    def detect_and_fill() -> None:
-        """Fill the organisation field from the account's memberships."""
-        found = detect_orgs()
-        if found:
-            entries["orgs"].set(found)
-        else:
-            messagebox.showinfo(APP_NAME, "No organisations found. Check that the GitHub CLI is installed and signed in.")
-
     def save_and_close() -> None:
         """Validate the numeric fields, persist the settings and close."""
         for key in NUMBER_FIELDS:
@@ -101,7 +90,6 @@ def run_settings() -> None:
     buttons.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
     for column, (text, command) in enumerate(
         (
-            ("Detect organisations", detect_and_fill),
             ("Sign in to GitHub", sign_in),
             ("Cancel", root.destroy),
             ("Save", save_and_close),

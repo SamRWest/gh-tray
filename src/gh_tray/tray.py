@@ -14,7 +14,7 @@ import pystray
 from loguru import logger
 
 from . import APP_NAME
-from .config import bootstrap, load_config
+from .config import load_config
 from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
@@ -53,7 +53,7 @@ class Tray:
 
     def __init__(self) -> None:
         """Load the settings and build the icon in its starting state."""
-        self.config = bootstrap()
+        self.config = load_config()
         self.status = Status()
         self.notifier = Notifier()
         self.stop_requested = threading.Event()

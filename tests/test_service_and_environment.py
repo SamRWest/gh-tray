@@ -43,7 +43,7 @@ def digest_with(ci: str = "SUCCESS", comments: int = 0) -> dict:
 
 def stub_collector(monkeypatch, digest: dict | None, error: str = ""):
     """Make the polling cycle read a fixed digest instead of running the collector."""
-    monkeypatch.setattr(service, "run_digest", lambda _config: (digest, error))
+    monkeypatch.setattr(service, "collect", lambda _config: (digest, error))
 
 
 def test_the_first_poll_establishes_a_baseline_without_inventing_changes(workspace, monkeypatch):
@@ -116,22 +116,6 @@ def test_a_still_unread_mention_is_only_reported_once(workspace, monkeypatch):
     stub_collector(monkeypatch, digest_with() | {"mentions": [mention]})
     assert [event["kind"] for event in service.poll({}).events] == ["mention"]
     assert service.poll({}).events == []
-
-
-def test_a_named_bash_that_exists_is_used(tmp_path):
-    interpreter = tmp_path / "bash"
-    interpreter.write_text("", encoding="utf-8")
-    assert environment.find_bash(str(interpreter)) == str(interpreter)
-
-
-def test_a_named_bash_that_does_not_exist_falls_back_to_discovery():
-    # A mistyped setting must be reported as a missing interpreter, not surface later as an operating system error.
-    assert environment.find_bash("/nowhere/at/all/bash") == environment.find_bash("")
-
-
-def test_bash_is_discovered_when_the_settings_name_none():
-    # Every platform this runs on has either bash or git, so discovery should return something.
-    assert environment.find_bash("") is not None
 
 
 def test_the_login_start_file_lives_under_the_home_directory():

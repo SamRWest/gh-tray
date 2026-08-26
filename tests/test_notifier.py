@@ -1,47 +1,8 @@
-"""Reporting a failed collection, and composing one notification out of several changes."""
+"""Composing one notification out of several changes, and deciding which page a click opens."""
 
 from __future__ import annotations
 
-from gh_tray import collector
 from gh_tray.notifier import MAX_LINES_PER_NOTIFICATION, Notifier
-
-USAGE_TAIL = """jq: error (at <stdin>:1): Cannot iterate over null (null)
-jq.exe: invalid JSON text passed to --argjson
-Use jq.exe --help for help with command-line options,
-or see the jq manpage, or online docs  at https://jqlang.github.io/jq"""
-
-
-def test_the_error_line_is_preferred_over_trailing_usage_help():
-    # The last line of a failed run is often generic help, which tells the user nothing about what went wrong.
-    assert collector.describe_failure(USAGE_TAIL).startswith("jq: error")
-
-
-def test_the_first_line_is_used_when_nothing_mentions_an_error():
-    assert collector.describe_failure("something odd happened\nand then stopped") == "something odd happened"
-
-
-def test_empty_error_output_still_describes_the_failure():
-    assert collector.describe_failure("") == "collector failed"
-    assert collector.describe_failure("   \n  \n") == "collector failed"
-
-
-def test_a_long_error_is_shortened():
-    assert len(collector.describe_failure("error: " + "x" * 500)) <= 120
-
-
-def test_a_missing_collector_is_reported_rather_than_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(collector, "find_bash", lambda _configured: "/bin/bash")
-    monkeypatch.setattr(collector, "collector_path", lambda _config: tmp_path / "absent.sh")
-    digest, error = collector.run_digest({"bash_path": "", "orgs": "", "max_age_days": 365})
-    assert digest is None
-    assert "collector missing" in error
-
-
-def test_a_missing_bash_is_reported_rather_than_run(monkeypatch):
-    monkeypatch.setattr(collector, "find_bash", lambda _configured: None)
-    digest, error = collector.run_digest({"bash_path": "", "orgs": "", "max_age_days": 365})
-    assert digest is None
-    assert "bash not found" in error
 
 
 def event(kind: str, key: str = "acme/widget#7", url: str = "https://example.test/7") -> dict:

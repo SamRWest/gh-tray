@@ -1,0 +1,200 @@
+"""Turning what GitHub returns into the flat records the rest of the application reads.
+
+GitHub omits a great deal rather than nulling it, and a login can go missing at any level: a deleted account, a
+commit by somebody with no GitHub user, a pull request with no reviews yet. So most of these cases are about a
+reply that is missing something, which is the normal case rather than the exception.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from gh_tray import collector, github
+
+NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+
+
+def node(**overrides) -> dict:
+    """Build a pull request as GitHub returns it, complete unless overridden."""
+    found = {
+        "number": 7,
+        "title": "Add a widget",
+        "url": "https://github.com/acme/widget/pull/7",
+        "isDraft": False,
+        "createdAt": "2026-05-01T00:00:00Z",
+        "updatedAt": "2026-05-30T00:00:00Z",
+        "totalCommentsCount": 3,
+        "mergeable": "MERGEABLE",
+        "reviewDecision": "APPROVED",
+        "repository": {"nameWithOwner": "acme/widget"},
+        "author": {"login": "someone"},
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}]},
+        "latestReviews": {"nodes": [{"author": {"login": "reviewer"}}]},
+        "comments": {"nodes": [{"author": {"login": "commenter"}}]},
+    }
+    found.update(overrides)
+    return found
+
+
+def test_a_complete_pull_request_is_read_in_full():
+    record = collector.normalise(node(), "authored")
+    assert record["key"] == "acme/widget#7"
+    assert record["side"] == "authored"
+    assert record["ci"] == "SUCCESS"
+    assert record["reviewDecision"] == "APPROVED"
+    assert (record["lastCommitBy"], record["lastReviewBy"], record["lastCommentBy"]) == ("committer", "reviewer", "commenter")
+
+
+def test_a_pull_request_with_no_reviews_or_comments_still_reads():
+    record = collector.normalise(node(latestReviews={"nodes": []}, comments={"nodes": []}), "reviewing")
+    assert record["lastReviewBy"] == ""
+    assert record["lastCommentBy"] == ""
+
+
+def test_a_pull_request_with_no_checks_reads_as_having_none():
+    record = collector.normalise(node(commits={"nodes": [{"commit": {"statusCheckRollup": None, "author": None}}]}), "authored")
+    assert record["ci"] == "NO_CHECKS"
+    assert record["lastCommitBy"] == ""
+
+
+def test_a_commit_by_somebody_with_no_github_account_names_nobody():
+    unlinked = {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": None}}}]}
+    record = collector.normalise(node(commits=unlinked), "authored")
+    assert record["lastCommitBy"] == ""
+    assert record["ci"] == "SUCCESS"
+
+
+def test_a_deleted_author_is_reported_as_unknown():
+    assert collector.normalise(node(author=None), "authored")["author"] == "unknown"
+
+
+def test_mergeability_github_has_not_worked_out_reads_as_unknown():
+    assert collector.normalise(node(mergeable=None), "authored")["mergeable"] == "UNKNOWN"
+
+
+def test_a_reply_missing_everything_optional_still_produces_a_record():
+    record = collector.normalise({"number": 7, "repository": {"nameWithOwner": "acme/widget"}}, "authored")
+    assert record["key"] == "acme/widget#7"
+    assert record["ci"] == "NO_CHECKS"
+    assert record["comments"] == 0
+    assert record["title"] == ""
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (("author", "login"), "someone"),
+        (("commits", "nodes", "commit", "author", "user", "login"), "committer"),
+        (("nothing", "here"), ""),
+        (("latestReviews", "nodes", "author", "login"), "reviewer"),
+    ],
+)
+def test_following_a_chain_of_keys_stops_at_the_first_gap(path, expected):
+    assert collector.nested(node(), *path) == expected
+
+
+def test_following_a_chain_into_an_empty_list_gives_nothing():
+    assert collector.nested(node(latestReviews={"nodes": []}), "latestReviews", "nodes", "author", "login") == ""
+
+
+def older(days: int) -> dict:
+    """Build a record last touched a given number of days before the reference moment."""
+    return {"updatedAt": (NOW - timedelta(days=days)).strftime(collector.TIMESTAMP_FORMAT)}
+
+
+def test_long_abandoned_pull_requests_are_dropped():
+    kept, hidden = collector.drop_stale([older(10), older(400)], max_age_days=365, now=NOW)
+    assert len(kept) == 1
+    assert hidden == 1
+
+
+def test_a_cutoff_of_zero_keeps_everything():
+    kept, hidden = collector.drop_stale([older(10), older(4000)], max_age_days=0, now=NOW)
+    assert len(kept) == 2
+    assert hidden == 0
+
+
+def test_a_pull_request_touched_today_is_never_dropped():
+    kept, hidden = collector.drop_stale([older(0)], max_age_days=1, now=NOW)
+    assert len(kept) == 1
+    assert hidden == 0
+
+
+def test_an_interface_address_becomes_a_page_a_person_can_open():
+    assert collector.page_url("https://api.github.com/repos/acme/widget/pulls/7") == "https://github.com/acme/widget/pull/7"
+
+
+def test_an_address_that_is_already_a_page_is_left_alone():
+    assert collector.page_url("https://github.com/acme/widget/pull/7") == "https://github.com/acme/widget/pull/7"
+
+
+def test_no_address_at_all_is_harmless():
+    assert collector.page_url("") == ""
+
+
+def test_the_error_line_is_preferred_over_trailing_usage_help():
+    # The last line of a failed call is often generic help, which tells the user nothing about what went wrong.
+    stderr = "error: HTTP 502 Service Unavailable\nUsage: gh api <endpoint>\nRun 'gh api --help' for more information."
+    assert github.first_error_line(stderr).startswith("error: HTTP 502")
+
+
+def test_the_first_line_is_used_when_nothing_mentions_an_error():
+    assert github.first_error_line("something odd happened\nand then stopped") == "something odd happened"
+
+
+def test_empty_error_output_still_describes_the_failure():
+    assert github.first_error_line("") == "the GitHub CLI failed without saying why"
+    assert github.first_error_line("  \n \n") == "the GitHub CLI failed without saying why"
+
+
+def test_a_long_error_is_shortened():
+    assert len(github.first_error_line("error: " + "x" * 500)) <= 120
+
+
+def test_unreadable_output_is_reported_as_such():
+    with pytest.raises(github.GitHubError, match="came back unreadable"):
+        github.parse("{ not json", "the search")
+
+
+def test_a_reply_carrying_only_errors_is_retried_and_then_reported(monkeypatch):
+    attempts = []
+
+    def failing(_arguments, timeout=0):
+        attempts.append(1)
+        return '{"errors": [{"message": "something was too expensive"}]}'
+
+    monkeypatch.setattr(github, "run", failing)
+    monkeypatch.setattr(github.time, "sleep", lambda _seconds: None)
+    with pytest.raises(github.GitHubError, match="too expensive"):
+        github.graphql("query", {"q": "is:pr"})
+    assert len(attempts) == github.RETRY_ATTEMPTS
+
+
+def test_a_reply_that_works_on_the_second_attempt_is_accepted(monkeypatch):
+    replies = ['{"errors": [{"message": "busy"}]}', '{"data": {"search": {"nodes": []}}}']
+    monkeypatch.setattr(github, "run", lambda _arguments, timeout=0: replies.pop(0))
+    monkeypatch.setattr(github.time, "sleep", lambda _seconds: None)
+    assert github.graphql("query", {"q": "is:pr"}) == {"search": {"nodes": []}}
+
+
+def test_every_page_of_results_is_collected(monkeypatch):
+    pages = [
+        {"search": {"nodes": [node(number=1)], "pageInfo": {"hasNextPage": True, "endCursor": "a"}}},
+        {"search": {"nodes": [node(number=2)], "pageInfo": {"hasNextPage": False, "endCursor": ""}}},
+    ]
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables: pages.pop(0))
+    assert [found["number"] for found in github.search_pull_requests("query", "is:pr")] == [1, 2]
+
+
+def test_paging_stops_rather_than_running_forever(monkeypatch):
+    endless = {"search": {"nodes": [node()], "pageInfo": {"hasNextPage": True, "endCursor": "always"}}}
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables: endless)
+    assert len(github.search_pull_requests("query", "is:pr")) == github.MAX_PAGES
+
+
+def test_something_that_is_not_a_pull_request_is_ignored(monkeypatch):
+    mixed = {"search": {"nodes": [node(), {}], "pageInfo": {"hasNextPage": False}}}
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables: mixed)
+    assert len(github.search_pull_requests("query", "is:pr")) == 1

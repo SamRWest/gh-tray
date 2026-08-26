@@ -1,0 +1,140 @@
+"""Talking to GitHub through the signed-in command line tool.
+
+The tool is used rather than the web interface directly so that this application never handles a token: it borrows
+whatever the user has already signed in with, and stops working the moment they sign out, which is what anyone
+would expect.
+
+Every call goes out and comes back as JSON. Failures are raised as one exception type carrying a description short
+enough to put in front of a user, since the caller turns them into a line of hover text.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+
+from loguru import logger
+
+from .environment import github_cli, hidden_window_flags
+
+CALL_TIMEOUT_SECONDS = 60
+# GitHub answers a heavy search with an error often enough that retrying is normal rather than exceptional.
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 3
+# A larger page provokes errors, and five pages is far more than a person can have open.
+PAGE_SIZE = 40
+MAX_PAGES = 5
+
+
+class GitHubError(RuntimeError):
+    """A call to GitHub failed, carrying a description fit to show a user."""
+
+
+def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
+    """Run the GitHub command line tool and return what it printed.
+
+    :param arguments: what to pass the tool, without the tool itself
+    :param timeout: how long to wait before giving up
+    :return: standard output
+    :raises GitHubError: when the tool is missing, fails, or takes too long
+    """
+    tool = github_cli()
+    if not tool:
+        raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
+    try:
+        done = subprocess.run([tool, *arguments], capture_output=True, text=True, timeout=timeout, check=False, **hidden_window_flags())
+    except subprocess.TimeoutExpired as expiry:
+        raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
+    except OSError as error:
+        raise GitHubError(f"could not run the GitHub CLI: {error.strerror or error}") from error
+    if done.returncode != 0:
+        raise GitHubError(first_error_line(done.stderr))
+    return done.stdout
+
+
+def first_error_line(stderr: str) -> str:
+    """Pick the most informative line out of a failed call.
+
+    :param stderr: everything the tool wrote to its error stream
+    :return: a short single-line description
+    """
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    if not lines:
+        return "the GitHub CLI failed without saying why"
+    return next((line for line in lines if "error" in line.lower()), lines[0])[:120]
+
+
+def parse(payload: str, what: str) -> object:
+    """Read JSON that GitHub returned.
+
+    :param payload: the text to read
+    :param what: what was being fetched, for the error message
+    :raises GitHubError: when the text is not readable JSON
+    """
+    try:
+        return json.loads(payload or "null")
+    except json.JSONDecodeError as error:
+        raise GitHubError(f"{what} came back unreadable") from error
+
+
+def api(path: str) -> object:
+    """Fetch one REST path.
+
+    :param path: the path to fetch, such as ``notifications?all=false``
+    """
+    return parse(run(["api", path]), path)
+
+
+def graphql(query: str, variables: dict[str, str]) -> dict:
+    """Run one GraphQL query, retrying while GitHub is unhappy.
+
+    An error from GitHub arrives as well-formed JSON carrying no data, so a reply counts as usable only once it
+    actually holds results. Accepting one that does not would abandon the whole collection rather than retry it.
+
+    :param query: the query text
+    :param variables: values for the query's variables
+    :return: the ``data`` object
+    :raises GitHubError: when every attempt fails
+    """
+    arguments = ["api", "graphql", "-f", f"query={query}"]
+    for name, value in variables.items():
+        arguments += ["-f", f"{name}={value}"]
+    last = "GitHub returned nothing usable"
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            answer = parse(run(arguments), "the search")
+        except GitHubError as error:
+            last = str(error)
+            answer = None
+        if isinstance(answer, dict) and isinstance(answer.get("data"), dict):
+            return answer["data"]
+        if isinstance(answer, dict) and answer.get("errors"):
+            last = str(answer["errors"][0].get("message", last))[:120]
+        logger.warning("GitHub call failed ({}), attempt {} of {}", last, attempt, RETRY_ATTEMPTS)
+        if attempt < RETRY_ATTEMPTS:
+            time.sleep(attempt * RETRY_BACKOFF_SECONDS)
+    raise GitHubError(last)
+
+
+def search_pull_requests(query: str, search: str) -> list[dict]:
+    """Run a paged pull request search and return every node it yields.
+
+    :param query: the GraphQL query text, which must accept ``q`` and ``cursor``
+    :param search: the GitHub search expression
+    :return: the pull request nodes, in the order GitHub gave them
+    """
+    nodes: list[dict] = []
+    cursor = ""
+    for _page in range(MAX_PAGES):
+        variables = {"q": search} | ({"cursor": cursor} if cursor else {})
+        data = graphql(query, variables)
+        found = data.get("search") or {}
+        nodes += [node for node in found.get("nodes", []) if node.get("number") is not None]
+        page = found.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        cursor = page.get("endCursor", "")
+        if not cursor:
+            break
+    return nodes

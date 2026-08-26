@@ -65,54 +65,6 @@ def github_cli() -> str | None:
     return shutil.which("gh")
 
 
-def find_bash(configured: str = "") -> str | None:
-    """Locate a bash interpreter.
-
-    A configured path that does not exist is rejected rather than passed on, so a mistyped setting is reported as a
-    missing interpreter instead of surfacing later as an operating system error from the collector.
-
-    :param configured: an explicit path from the settings, preferred when it points at something real
-    :return: a path to bash, or None when none can be found
-    """
-    if configured:
-        if Path(configured).expanduser().exists():
-            return str(Path(configured).expanduser())
-        logger.warning("the configured bash path does not exist, falling back to discovery: {}", configured)
-    found = shutil.which("bash")
-    if found:
-        return found
-    # Windows has no system bash, but Git for Windows ships one two levels up from git.exe.
-    git = shutil.which("git")
-    if git:
-        candidate = Path(git).resolve().parent.parent / "bin" / "bash.exe"
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
-def detect_orgs() -> str:
-    """Return the organisations the signed-in account belongs to, as a comma separated list.
-
-    Used to fill the setting on first run so the application is useful before anyone opens the settings window.
-
-    :return: comma separated organisation logins, empty when the tool is missing or the call fails
-    """
-    github = github_cli()
-    if not github:
-        return ""
-    done = subprocess.run(
-        [github, "api", "user/orgs", "--jq", '[.[].login] | join(",")'],
-        capture_output=True,
-        text=True,
-        check=False,
-        **hidden_window_flags(),
-    )
-    if done.returncode != 0:
-        logger.warning("could not read organisation memberships: {}", done.stderr.strip()[:200])
-        return ""
-    return done.stdout.strip()
-
-
 def github_auth_summary() -> str:
     """Return a one-line description of the GitHub sign-in state, for the settings window."""
     github = github_cli()

@@ -44,7 +44,7 @@ def digest_with(ci: str = "SUCCESS", comments: int = 0, reviewing: bool = False)
 
 def stub_collector(monkeypatch, digest: dict | None, error: str = ""):
     """Make the polling cycle read a fixed digest instead of running the collector."""
-    monkeypatch.setattr(service, "run_digest", lambda _config: (digest, error))
+    monkeypatch.setattr(service, "collect", lambda _config: (digest, error))
 
 
 def test_a_damaged_snapshot_does_not_mark_unread_changes_as_seen(workspace, monkeypatch):

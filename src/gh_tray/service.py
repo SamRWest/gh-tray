@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from .collector import run_digest
+from .collector import collect
 from .config import SNAPSHOT_PATH
 from .events import (
     append_events,
@@ -68,7 +68,7 @@ def poll(config: dict) -> PollResult:
     :param config: current settings
     :return: the status, the changes detected this cycle, and any error
     """
-    digest, error = run_digest(config)
+    digest, error = collect(config)
     if error:
         return PollResult(status=status_from({}, unread_events(), error), error=error)
 

@@ -30,8 +30,9 @@ The click-through window lists one change per row under column headings:
 Who is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of
 somebody else's merge into the branch.
 
-It lists the last 20 changes by default, which is a setting. The window has no frame, so drag its title to move it and
-its corner mark to resize it. Press Escape, click the close mark, or click anything else on screen to dismiss it.
+It lists the last 20 changes by default, which is a setting, and the list scrolls with the wheel. The window has no
+frame, so drag its title strip to move it and its bottom strip or right edge to resize it. Making it taller shows more
+rows. Press Escape, click the close mark, or click anything else on screen to dismiss it.
 
 ## What counts as a change
 
@@ -57,9 +58,11 @@ and where it covers several changes, the one listed first.
 ## Requirements
 
 - [GitHub CLI](https://cli.github.com/) (`gh`), signed in
-- `bash` and `jq`, which the collector script uses. On Windows both ship with Git for Windows
 - [uv](https://docs.astral.sh/uv/), which fetches Python and the dependencies
 - [gh-dash](https://github.com/dlvhdr/gh-dash) for the dashboard: `gh extension install dlvhdr/gh-dash`
+
+Nothing else: no shell, and no command line tools beyond the GitHub one. The application never handles a token of its
+own. It borrows whatever you have already signed in with, and stops working the moment you sign out.
 
 ## Running it
 
@@ -100,13 +103,9 @@ file.
 
 ## Settings
 
-The settings window covers the poll interval, which organisations to sweep for newly opened pull requests, how old a
-pull request has to be before it is ignored, how many changes the click-through window lists, which changes raise a
-notification, whether to start at login, and the paths to the collector, `bash` and the dashboard command. Every path
-field may be left blank, in which case the application works it out at runtime.
-
-The organisation list is filled in from your account's memberships the first time the application runs, and the **Detect
-organisations** button refills it later.
+The settings window covers the poll interval, how old a pull request has to be before it is ignored, how many changes
+the click-through window lists, which changes raise a notification, whether to start at login, and the command that
+opens the dashboard. Leaving the dashboard command blank runs `gh dash` in whichever terminal this platform provides.
 
 Settings are re-read on every poll, so a change takes effect without restarting the tray.
 
@@ -119,12 +118,10 @@ Settings and history live in the platform's standard application data directory,
 | File             | Contents                                                                    |
 | ---------------- | --------------------------------------------------------------------------- |
 | `config.json`    | Settings, written by the settings window                                    |
-| `state.json`     | The collector's own baseline                                                |
+| `state.json`     | When the last collection ran, which is the window mentions are asked for    |
 | `snapshot.json`  | Last poll's pull request fields, used to detect the next change             |
 | `events.jsonl`   | Changes detected, kept until you have seen them and trimmed to a tail after |
 | `seen.json`      | When you last looked, which is what clears the unread count                 |
-| `latest.json`    | The last full collector result, written by the collector itself             |
-| `summary.json`   | A compact tally of that result, written by the collector itself             |
 | `gh-tray.log`    | Rotating diagnostics                                                        |
 | `last_error.log` | Everything written when the last collection failed                          |
 | `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
@@ -139,19 +136,20 @@ incomplete, so the change history it describes would be silently wrong.
 
 ## How the code is arranged
 
-| Module               | Responsibility                                                            |
-| -------------------- | ------------------------------------------------------------------------- |
-| `config.py`          | Settings, defaults, repair of hand-edited files, data locations           |
-| `storage.py`         | Reading state files, and writing them so a reader never sees half a file  |
-| `environment.py`     | Everything platform-specific: bash, terminals, login start, instance lock |
-| `collector.py`       | Running the collector script and reading its output                       |
-| `events.py`          | Detecting changes between polls, and the event history                    |
-| `service.py`         | One polling cycle: collect, diff, record, summarise                       |
-| `status.py`          | Turning a poll result into a colour, a count and hover text               |
-| `notifier.py`        | Desktop notifications and their click actions                             |
-| `tray.py`            | The icon, its menu, and the polling timer                                 |
-| `popup.py`           | The frameless window a single click opens                                 |
-| `settings_window.py` | The settings window                                                       |
+| Module               | Responsibility                                                           |
+| -------------------- | ------------------------------------------------------------------------ |
+| `config.py`          | Settings, defaults, repair of hand-edited files, data locations          |
+| `storage.py`         | Reading state files, and writing them so a reader never sees half a file |
+| `environment.py`     | Everything platform-specific: terminals, login start, instance lock, DPI |
+| `github.py`          | Talking to GitHub through the signed-in command line tool                |
+| `collector.py`       | Asking GitHub what is true now, and flattening the answer                |
+| `events.py`          | Detecting changes between polls, and the event history                   |
+| `service.py`         | One polling cycle: collect, diff, record, summarise                      |
+| `status.py`          | Turning a poll result into a colour, a count and hover text              |
+| `notifier.py`        | Desktop notifications and their click actions                            |
+| `tray.py`            | The icon, its menu, and the polling timer                                |
+| `popup.py`           | The frameless window a single click opens                                |
+| `settings_window.py` | The settings window                                                      |
 
 Notifications run on a long-lived event loop of their own. The platform backend calls back into the sending loop when a
 notification is clicked, which can happen long after the send returns, so a loop closed straight after sending would
@@ -159,14 +157,21 @@ raise on that callback and no click could ever be handled.
 
 ## The collector
 
-`src/gh_tray/data/digest.sh` gathers everything in one pass and prints a single JSON document: your open pull requests,
-the ones awaiting your review, newly opened pull requests across your organisations, mentions, and check status
-transitions. It takes its baseline file as an argument, so it can be pointed at a different one to run without
-disturbing this application's.
+One poll makes two searches, one for your open pull requests and one for those awaiting your review, and one read of the
+notifications feed. Each search asks for the state of every pull request along with the last commit's author, the most
+recent review's author and the most recent comment's author, since those are what name the person behind a change. The
+notifications feed identifies a mention only by the comment it points at, so the first few of those are looked up one at
+a time.
 
-Its GitHub queries fail and truncate intermittently, which is why a pull request missing from a single result is held
-for a few polls before being treated as gone: without that, one transient failure would report everything that came back
-as newly arrived.
+Collecting knows nothing about what was true last time: it reports only what is true now, and comparing is somebody
+else's job. That is what lets a poll fail without disturbing anything already recorded.
+
+GitHub answers a heavy search with an error often enough that retrying is normal rather than exceptional, and an error
+arrives as well-formed JSON carrying no results. A reply therefore counts as usable only once it actually holds results,
+and each page is retried three times before the collection gives up.
+
+The same unreliability is why a pull request missing from a single result is held for a few polls before being treated
+as gone: without that, one transient failure would report everything that came back as newly arrived.
 
 ## Development
 

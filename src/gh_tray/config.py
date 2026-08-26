@@ -7,17 +7,12 @@ is written into the code.
 from __future__ import annotations
 
 import copy
-from pathlib import Path
 
 from loguru import logger
 from platformdirs import user_data_path
 
 from . import APP_NAME
-from .environment import detect_orgs
 from .storage import read_json, write_json_atomic
-
-PACKAGE_ROOT = Path(__file__).resolve().parent
-BUNDLED_COLLECTOR = PACKAGE_ROOT / "data" / "digest.sh"
 
 APP_DIR = user_data_path(APP_NAME, appauthor=False)
 CONFIG_PATH = APP_DIR / "config.json"
@@ -29,14 +24,10 @@ LOG_PATH = APP_DIR / "gh-tray.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 
-# Blank values mean "work it out at runtime": the collector shipped with this package, every organisation the
-# signed-in account belongs to, whichever bash and terminal this platform provides.
+# A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
-    "collector": "",
-    "bash_path": "",
     "dashboard_command": "",
     "poll_minutes": 10,
-    "orgs": "",
     "max_age_days": 365,
     "popup_rows": 20,
     "toasts": {
@@ -50,7 +41,7 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-TEXT_KEYS = ("orgs", "collector", "bash_path", "dashboard_command")
+TEXT_KEYS = ("dashboard_command",)
 
 # Each numeric setting and the range it must fall in. A popup taller than this stops being a popup, and a poll
 # interval below a minute would hammer the GitHub API for no benefit.
@@ -120,17 +111,3 @@ def save_config(config: dict) -> None:
     write_json_atomic(CONFIG_PATH, normalise(config), indent=2)
 
 
-def collector_path(config: dict) -> Path:
-    """Return the collector script to run, defaulting to the copy shipped with this package."""
-    return Path(config["collector"]).expanduser() if config.get("collector") else BUNDLED_COLLECTOR
-
-
-def bootstrap() -> dict:
-    """Load the settings, discovering the organisation list the first time so the app works before configuration."""
-    first_run = not CONFIG_PATH.exists()
-    config = load_config()
-    if first_run:
-        config["orgs"] = detect_orgs()
-        save_config(config)
-        logger.info("first run: organisations set to {}", config["orgs"] or "(none found)")
-    return config

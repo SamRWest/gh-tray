@@ -12,7 +12,7 @@ import cyclopts
 from loguru import logger
 
 from . import APP_NAME, __version__
-from .config import APP_DIR, LOCK_PATH, LOG_PATH, bootstrap
+from .config import APP_DIR, LOCK_PATH, LOG_PATH, load_config
 from .environment import SingleInstance
 from .events import label_for
 from .service import poll
@@ -83,7 +83,7 @@ def report_one_poll() -> int:
 
     :return: process exit code, non-zero when the poll failed
     """
-    result = poll(bootstrap())
+    result = poll(load_config())
     if result.error:
         print(f"poll failed: {result.error}", file=sys.stderr)
         return 1
