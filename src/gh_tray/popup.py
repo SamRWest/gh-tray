@@ -21,10 +21,11 @@ from tkinter import font as tkfont
 from tkinter import ttk
 
 from . import APP_NAME
-from .config import load_config
-from .environment import make_dpi_aware
-from .events import BROKEN_CI, age_in_words, is_urgent, label_for, last_seen, mergeable_now, moment, recent_events
+from .config import LOCK_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH, load_config
+from .environment import SingleInstance, make_dpi_aware
+from .events import BROKEN_CI, age_in_words, is_urgent, label_for, last_seen, mergeable_now, moment, recent_events, utc_now
 from .snapshot import read_snapshot
+from .storage import write_text_atomic
 
 EDGE_MARGIN = 12
 # The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
@@ -135,6 +136,11 @@ EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] =
 )
 
 TITLE_LIMIT = 90
+# How many log entries to read per row shown, since several entries about one pull request collapse into one row.
+ROWS_READ_DEEPLY = 5
+# How long to keep re-reading after asking for a poll, and how often, while waiting for the tray to finish one.
+RELOAD_ATTEMPTS = 20
+RELOAD_EVERY_MS = 1000
 
 
 @dataclass(frozen=True)
@@ -310,21 +316,60 @@ def sorted_rows(rows: list[Row], column: str = DEFAULT_SORT, newest_first: bool 
     return sorted(rows, key=SORT_KEYS.get(column, SORT_KEYS[DEFAULT_SORT]), reverse=newest_first)
 
 
+def snapshot_changed_at() -> float:
+    """Return when the stored pull request state last changed, or zero when there is none.
+
+    Used to notice that a poll has finished, since the window has no other way of hearing about one.
+    """
+    return SNAPSHOT_PATH.stat().st_mtime if SNAPSHOT_PATH.exists() else 0.0
+
+
+def request_refresh() -> bool:
+    """Leave the tray a note asking it to poll now.
+
+    :return: whether anybody is running to read it
+    """
+    if SingleInstance(LOCK_PATH).acquire():
+        # The lock was free, so no tray is running and the note would sit there unread.
+        return False
+    write_text_atomic(REFRESH_REQUEST_PATH, utc_now())
+    return True
+
+
+def one_per_pull_request(rows: list[Row]) -> list[Row]:
+    """Keep only the first row for each pull request.
+
+    This is a list of what wants attention, not a history, so three comments on one pull request are one thing to
+    look at and not three. Given rows already in order, the one kept is the most recent.
+
+    :param rows: the rows to thin out, in the order they should be considered
+    """
+    kept, seen = [], set()
+    for row in rows:
+        identity = row.url or f"{row.repo}{row.number}"
+        if identity in seen:
+            continue
+        seen.add(identity)
+        kept.append(row)
+    return kept
+
+
 def rows_to_show(count: int) -> list[Row]:
     """Return the lines to list: what changed since the user last looked, plus what is waiting on them.
 
     Standing state is included, so the window is useful even on a quiet day and never disagrees with the hover
     summary about whether anything wants attention. The whole list is then ordered newest first, so the most recent
-    thing is at the top wherever it came from.
+    thing is at the top wherever it came from, and thinned to one row per pull request.
 
     :param count: how many rows to return at most
     """
     marker = last_seen()
     since = moment(marker) if marker else None
-    changes = [row_from_event(event, since is None or moment(event["at"]) > since) for event in recent_events(count)]
+    # The log is read deeply rather than to the row count, since several entries can collapse into one row.
+    changes = [row_from_event(event, since is None or moment(event["at"]) > since) for event in recent_events(count * ROWS_READ_DEEPLY)]
     listed = {row.url for row in changes if row.url}
     entries, _damaged = read_snapshot()
-    return sorted_rows(changes + rows_from_snapshot(entries or {}, listed))[:count]
+    return one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed)))[:count]
 
 
 class Popup:
@@ -484,10 +529,10 @@ class Popup:
             self.open(url)
 
     def footer(self) -> None:
-        """Draw the closing hint."""
+        """Draw the closing hint and the button that asks for a fresh look."""
         strip = tk.Frame(self.body, background=BACKGROUND)
         strip.pack(fill="x", side="bottom")
-        tk.Label(
+        self.hint = tk.Label(
             strip,
             text="Click a row to open it. Drag a heading divider to resize a column, the title to move, any edge to resize.",
             background=BACKGROUND,
@@ -496,7 +541,58 @@ class Popup:
             anchor="w",
             padx=12,
             pady=6,
-        ).pack(side="left")
+        )
+        self.hint.pack(side="left")
+        self.refresh_button = tk.Label(
+            strip,
+            text="Refresh",
+            background=BORDER,
+            foreground=HEADING,
+            font=self.bold,
+            cursor="hand2",
+            padx=10,
+            pady=2,
+        )
+        self.refresh_button.pack(side="right", padx=12, pady=4)
+        self.refresh_button.bind("<Button-1>", lambda _event: self.refresh())
+
+    def refresh(self) -> None:
+        """Ask for a fresh look at GitHub, and keep re-reading until it arrives.
+
+        The tray is a separate process and the only one allowed to poll, so this leaves it a note rather than
+        polling itself. With no tray running there is nobody to answer, and the window says so instead of waiting
+        for something that will never come.
+        """
+        if not request_refresh():
+            self.hint.configure(text="Nothing is polling. Start gh-tray for this to fetch anything new.")
+            self.reload()
+            return
+        self.refresh_button.configure(text="Refreshing", foreground=MUTED)
+        self.hint.configure(text="Asked for a fresh look. This will update when it arrives.")
+        self.await_update(RELOAD_ATTEMPTS, snapshot_changed_at())
+
+    def await_update(self, attempts_left: int, was: float) -> None:
+        """Re-read until the stored data changes or waiting has gone on long enough.
+
+        :param attempts_left: how many more times to look
+        :param was: when the stored data last changed, as it stood before asking
+        """
+        if snapshot_changed_at() != was:
+            self.reload()
+            self.refresh_button.configure(text="Refresh", foreground=HEADING)
+            self.hint.configure(text="Up to date.")
+            return
+        if attempts_left <= 0:
+            self.refresh_button.configure(text="Refresh", foreground=HEADING)
+            self.hint.configure(text="No answer yet. The tray may be busy or unable to reach GitHub.")
+            return
+        self.root.after(RELOAD_EVERY_MS, lambda: self.await_update(attempts_left - 1, was))
+
+    def reload(self) -> None:
+        """Read the stored data again and redraw the table in the order currently chosen."""
+        self.entries = sorted_rows(rows_to_show(load_config()["popup_rows"]), self.sort_column, self.newest_first)
+        if hasattr(self, "tree"):
+            self.fill()
 
     def edge_handles(self) -> None:
         """Put a grab strip along every edge and corner, so the window resizes from wherever the pointer lands."""

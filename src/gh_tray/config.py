@@ -23,6 +23,9 @@ SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
+# Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
+# of what one needs to say to the other.
+REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {

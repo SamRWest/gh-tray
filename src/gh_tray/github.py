@@ -86,6 +86,17 @@ def api(path: str) -> object:
     return parse(run(["api", path]), path)
 
 
+def viewer() -> str:
+    """Return the login of the signed-in account.
+
+    Asked afresh each poll rather than remembered, since somebody can sign in as a different account at any time.
+
+    :return: the login, or an empty string when it cannot be read
+    """
+    found = api("user")
+    return str(found.get("login", "")) if isinstance(found, dict) else ""
+
+
 def graphql(query: str, variables: dict[str, str]) -> dict:
     """Run one GraphQL query, retrying while GitHub is unhappy.
 

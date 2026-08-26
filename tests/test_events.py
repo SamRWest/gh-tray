@@ -210,3 +210,37 @@ def test_events_are_written_one_json_document_per_line(event_log):
     lines = (event_log / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
     assert all(json.loads(line)["kind"] == "mention" for line in lines)
+
+
+def test_a_comment_the_user_wrote_themselves_is_not_reported_to_them():
+    # Their own comment is not news to them, and it was cluttering the list with rows they had just caused.
+    previous = {"authored:acme/widget#7": pull_request(comments=1, lastCommentBy="them")}
+    current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="them")}
+    digest = {"viewer": "them", "mentions": []}
+    assert events.detect_events(previous, current, digest) == []
+
+
+def test_a_comment_somebody_else_wrote_is_still_reported():
+    previous = {"authored:acme/widget#7": pull_request(comments=1, lastCommentBy="them")}
+    current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="somebody")}
+    digest = {"viewer": "them", "mentions": []}
+    assert [event["kind"] for event in events.detect_events(previous, current, digest)] == ["new_comment"]
+
+
+def test_the_users_own_commit_breaking_the_checks_is_still_reported():
+    # They caused it, but they still need to know: doing it and knowing about it are not the same act.
+    previous = {"authored:acme/widget#7": pull_request(ci="SUCCESS", lastCommitBy="them")}
+    current = {"authored:acme/widget#7": pull_request(ci="FAILURE", lastCommitBy="them")}
+    digest = {"viewer": "them", "mentions": []}
+    assert [event["kind"] for event in events.detect_events(previous, current, digest)] == ["ci_broken"]
+
+
+def test_nothing_is_suppressed_when_who_is_signed_in_is_unknown():
+    previous = {"authored:acme/widget#7": pull_request(comments=1, lastCommentBy="them")}
+    current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="them")}
+    assert [event["kind"] for event in events.detect_events(previous, current, {"mentions": []})] == ["new_comment"]
+
+
+def test_a_mention_the_user_wrote_themselves_is_not_reported():
+    digest = {"viewer": "them", "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "them"}]}
+    assert events.detect_events({}, {}, digest) == []

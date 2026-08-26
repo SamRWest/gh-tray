@@ -318,3 +318,30 @@ def test_fading_keeps_the_hue_and_only_dims_it():
     assert faded != popup.URGENT
     assert popup.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
     assert popup.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND
+
+
+def test_several_comments_on_one_pull_request_are_one_row(event_log):
+    # The list is what wants attention, not a history: three comments on one pull request are one thing to look at.
+    for _ in range(3):
+        events.append_events([change("new_comment", key="acme/widget#7")])
+    assert len(popup.rows_to_show(10)) == 1
+
+
+def test_the_most_recent_of_several_rows_for_one_pull_request_is_the_one_kept(event_log):
+    events.append_events([change("new_comment", key="acme/widget#7", at="2020-01-01T00:00:00.000000Z")])
+    events.append_events([change("ci_broken", key="acme/widget#7", at="2026-01-01T00:00:00.000000Z")])
+    assert [row.label for row in popup.rows_to_show(10)] == ["Checks broke"]
+
+
+def test_different_pull_requests_are_not_folded_together(event_log):
+    events.append_events([change("new_comment", key="acme/widget#7"), change("new_comment", key="acme/widget#8")])
+    assert len(popup.rows_to_show(10)) == 2
+
+
+def test_rows_with_no_address_are_told_apart_by_repository_and_number():
+    rows = [
+        popup.Row("", "acme/widget", "#7", "", "", "", "", popup.URGENT),
+        popup.Row("", "acme/widget", "#8", "", "", "", "", popup.URGENT),
+        popup.Row("", "acme/widget", "#7", "", "", "", "", popup.URGENT),
+    ]
+    assert len(popup.one_per_pull_request(rows)) == 2

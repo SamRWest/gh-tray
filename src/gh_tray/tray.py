@@ -14,7 +14,7 @@ import pystray
 from loguru import logger
 
 from . import APP_NAME
-from .config import load_config
+from .config import REFRESH_REQUEST_PATH, load_config
 from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
@@ -28,6 +28,8 @@ TITLE_LIMIT = 50
 # A failed poll is usually a transient GitHub error, so the next attempt comes sooner than a normal interval.
 RETRY_FRACTION = 4
 MINIMUM_WAIT_SECONDS = 60
+# How often to look for a window asking for a poll while waiting for the next one.
+REQUEST_CHECK_SECONDS = 3
 # How close together two clicks on the icon must be to count as one double click. The tray library reports every
 # left click and offers no double click of its own, so the pair is recognised here.
 DOUBLE_CLICK_SECONDS = 0.5
@@ -55,6 +57,7 @@ class Tray:
     def __init__(self) -> None:
         """Load the settings and build the icon in its starting state."""
         self.config = load_config()
+        REFRESH_REQUEST_PATH.unlink(missing_ok=True)
         self.status = Status()
         self.notifier = Notifier()
         self.stop_requested = threading.Event()
@@ -153,7 +156,24 @@ class Tray:
                 logger.exception("poll failed unexpectedly")
                 self.status = Status(colour=GREY, error=str(error)[:100])
                 self.repaint()
-            self.stop_requested.wait(self.wait_seconds(succeeded))
+            self.wait_or_be_asked(self.wait_seconds(succeeded))
+
+    def wait_or_be_asked(self, seconds: int) -> None:
+        """Wait until the next poll is due, or until a window asks for one sooner.
+
+        The waiting is broken into short spells so a request left by another process is noticed within a few
+        seconds rather than at the end of the interval, which is the difference between a Refresh button that
+        works and one that appears to do nothing.
+
+        :param seconds: how long to wait if nobody asks
+        """
+        for _spell in range(max(1, seconds // REQUEST_CHECK_SECONDS)):
+            if self.stop_requested.wait(REQUEST_CHECK_SECONDS):
+                return
+            if REFRESH_REQUEST_PATH.exists():
+                REFRESH_REQUEST_PATH.unlink(missing_ok=True)
+                logger.info("a window asked for a fresh look")
+                return
 
     def on_click(self, *_) -> None:
         """Handle a click on the icon: one click shows the recent changes, two open the dashboard.

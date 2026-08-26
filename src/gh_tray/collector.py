@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from loguru import logger
 
 from .config import ERROR_LOG_PATH, STATE_PATH
-from .github import GitHubError, api, search_pull_requests
+from .github import GitHubError, api, search_pull_requests, viewer
 from .storage import read_json, write_json_atomic, write_text_atomic
 
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -181,6 +181,7 @@ def collect(config: dict) -> tuple[dict | None, str]:
     started = datetime.now(UTC)
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
     try:
+        signed_in_as = viewer()
         authored = [normalise(node, "authored") for node in search_pull_requests(SEARCH_QUERY, AUTHORED)]
         reviewing = [normalise(node, "reviewing") for node in search_pull_requests(SEARCH_QUERY, REVIEWING)]
         mentions = collect_mentions(since)
@@ -203,6 +204,8 @@ def collect(config: dict) -> tuple[dict | None, str]:
     return {
         "window": {"since": since, "until": started.strftime(TIMESTAMP_FORMAT)},
         "staleFilter": {"maxAgeDays": cutoff, "hiddenAuthored": hidden_authored, "hiddenReviewing": hidden_reviewing},
+        # Who is signed in, so that changes the user caused themselves can be told apart from ones done to them.
+        "viewer": signed_in_as,
         "authored": authored,
         "reviewing": reviewing,
         "mentions": mentions,

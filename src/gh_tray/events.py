@@ -31,6 +31,10 @@ RULE_LABELS: dict[str, tuple[str, bool]] = {
 
 BROKEN_CI = frozenset({"FAILURE", "ERROR"})
 
+# Changes that are not worth telling the user about when the user is the one who made them. A comment they wrote
+# themselves is not news; their own commit breaking the checks still is, so only these two are dropped.
+SELF_CAUSED_KINDS = frozenset({"new_comment", "mention"})
+
 # Field values that mean "not worked out yet" rather than a real state, and so must never be compared against.
 UNINFORMATIVE_VALUES: dict[str, frozenset[str]] = {"mergeable": frozenset({"UNKNOWN"})}
 
@@ -296,11 +300,24 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
 
     :param previous: the snapshot written by the last poll
     :param current: the snapshot just built
-    :param digest: the full collector result, read for mentions
+    :param digest: the full collector result, read for mentions and for who is signed in
     :param seen_urls: mention addresses already recorded, so a still-unread mention is not reported twice
     """
     at = utc_now()
-    return detect_pull_request_events(previous, current, at) + detect_mention_events(digest, seen_urls or set(), at)
+    found = detect_pull_request_events(previous, current, at) + detect_mention_events(digest, seen_urls or set(), at)
+    return [event for event in found if not caused_by(event, str(digest.get("viewer", "")))]
+
+
+def caused_by(event: dict, login: str) -> bool:
+    """Return whether a change is one the user brought about themselves.
+
+    Their own comment is not news to them. Their own commit breaking the checks is, so only the kinds where the
+    doing and the knowing are the same act are dropped.
+
+    :param event: the change to judge
+    :param login: the signed-in account, or empty when it is not known
+    """
+    return bool(login) and event["kind"] in SELF_CAUSED_KINDS and event.get("actor") == login
 
 
 def read_events(limit: int | None = None) -> list[dict]:

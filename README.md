@@ -35,6 +35,10 @@ conflict: it is a consequence of somebody else's merge into the branch.
 These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
 for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
 
+One row per pull request: three comments on the same one are one thing to look at, not three. Changes you caused
+yourself are left out, since your own comment is not news to you, though your own commit breaking the checks still is.
+**Refresh** asks the tray to look again, since it is the only thing allowed to poll.
+
 Newest is at the top. Click a heading to sort by that column and again to turn the order around. It lists 20 rows by
 default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window has no
 frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the close mark, or
