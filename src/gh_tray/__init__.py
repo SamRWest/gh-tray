@@ -7,3 +7,6 @@ terminal dashboard, and the right-click menu reaches recent changes, the review 
 __version__ = "0.1.0"
 
 APP_NAME = "gh-tray"
+# The name to start this package under, for the windows that run as processes of their own. Taken from the package
+# rather than written out, so a rename cannot leave a spelling behind that only fails once a window is opened.
+APP_MODULE = __name__

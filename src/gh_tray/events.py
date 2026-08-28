@@ -59,17 +59,20 @@ SNAPSHOT_DEFAULTS: dict = {
     "lastCommitBy": "",
     "lastReviewBy": "",
     "lastCommentBy": "",
+    "lastCommentAnswers": "",
 }
 
 # Whose name to show against each kind of change. The collector reports the last person to act in each of these
-# ways, so the rule that fired decides which of them is the one worth naming. A conflict has nobody to name: it is
-# a consequence of somebody else's merge into the branch, which GitHub does not attribute.
+# ways, so the rule that fired decides which of them is the one worth naming. A conflict names the pull request's
+# author, whose branch has to take the rebase: it is a consequence of somebody else's merge into the base branch,
+# and GitHub does not record whose, so the one name that means something is the one on the door.
 ACTOR_FIELDS: dict[str, str] = {
     "review_requested": "author",
     "ci_broken": "lastCommitBy",
     "changes_requested": "lastReviewBy",
     "ready_to_merge": "lastReviewBy",
     "new_comment": "lastCommentBy",
+    "conflict": "author",
 }
 SNAPSHOT_FIELDS = tuple(SNAPSHOT_DEFAULTS)
 
@@ -245,12 +248,27 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
     }
 
 
-def detect_pull_request_events(previous: dict, current: dict, at: str) -> list[dict]:
+def comment_concerns_user(pull_request: dict, login: str) -> bool:
+    """Return whether a new comment on a pull request is one the user would want to hear about.
+
+    On their own, every comment is. On one they merely review, only an answer to one of their own review comments
+    is: the rest is a conversation between the author and the other reviewers.
+
+    :param pull_request: the pull request as the snapshot records it
+    :param login: the signed-in account, or empty when it is not known
+    """
+    if pull_request.get("side") == "authored":
+        return True
+    return bool(login) and pull_request.get("lastCommentAnswers") == login
+
+
+def detect_pull_request_events(previous: dict, current: dict, at: str, login: str = "") -> list[dict]:
     """Compare two pull request snapshots and return one event per change worth reporting.
 
     :param previous: the snapshot written by the last poll
     :param current: the snapshot just built
     :param at: timestamp to stamp on every event
+    :param login: the signed-in account, which decides whose comments are worth reporting
     :return: events, in no particular order
     """
     events: list[dict] = []
@@ -267,9 +285,11 @@ def detect_pull_request_events(previous: dict, current: dict, at: str) -> list[d
                 events.append(_event("changes_requested", pull_request, "a reviewer asked for changes", at))
             if mergeable_now(pull_request) and not mergeable_now(was):
                 events.append(_event("ready_to_merge", pull_request, "approved, green and conflict free", at))
-        if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
-            events.append(_event("conflict", pull_request, "needs a rebase", at))
-        if (pull_request.get("comments") or 0) > (was.get("comments") or 0):
+            # Only on the user's own: a conflict is for whoever has to rebase, and on a pull request they are
+            # merely reviewing that is somebody else.
+            if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
+                events.append(_event("conflict", pull_request, "needs a rebase", at))
+        if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(pull_request, login):
             events.append(_event("new_comment", pull_request, f"{pull_request['comments'] - (was.get('comments') or 0)} new", at))
     return events
 
@@ -314,8 +334,9 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
     :param seen_urls: mention addresses already recorded, so a still-unread mention is not reported twice
     """
     at = utc_now()
-    found = detect_pull_request_events(previous, current, at) + detect_mention_events(digest, seen_urls or set(), at)
-    return [event for event in found if not caused_by(event, str(digest.get("viewer", "")))]
+    login = str(digest.get("viewer", ""))
+    found = detect_pull_request_events(previous, current, at, login) + detect_mention_events(digest, seen_urls or set(), at)
+    return [event for event in found if not caused_by(event, login)]
 
 
 def caused_by(event: dict, login: str) -> bool:

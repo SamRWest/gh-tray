@@ -255,9 +255,10 @@ def test_the_person_behind_each_kind_of_change_is_named():
         assert events._event(kind, record, "", events.utc_now())["actor"] == "someone"
 
 
-def test_a_conflict_names_nobody_because_github_attributes_it_to_nobody():
+def test_a_conflict_names_the_author_whose_branch_takes_the_rebase():
+    # GitHub does not record whose merge caused a conflict, so the one name that means something is the author's.
     record = {"repo": "acme/widget", "number": 7, "author": "someone"}
-    assert events._event("conflict", record, "", events.utc_now())["actor"] == ""
+    assert events._event("conflict", record, "", events.utc_now())["actor"] == "someone"
 
 
 def test_a_mention_names_whoever_wrote_it():
@@ -401,3 +402,63 @@ def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
     store(event_log, waiting())
     popup.remember_row_seen(popup.rows_to_show(10)[0], True)
     assert popup.rows_to_show(10)[0].seen is True
+
+
+@pytest.fixture
+def layout(tmp_path, monkeypatch):
+    """Point the remembered window shape at a temporary directory."""
+    monkeypatch.setattr(popup, "LAYOUT_PATH", tmp_path / "layout.json")
+    return tmp_path
+
+
+def test_nothing_is_remembered_until_the_user_drags_something(layout):
+    assert popup.remembered_width(96) is None
+    assert popup.remembered_column_widths(96) == {}
+
+
+def test_a_dragged_width_comes_back_as_it_was_on_the_same_display(layout):
+    popup.remember_width(800, 96)
+    assert popup.remembered_width(96) == 800
+
+
+def test_a_dragged_width_scales_with_the_display_it_comes_back_on(layout):
+    # Remembered at standard scaling and played back on a display drawing twice as finely, the window should take
+    # the same share of the screen, which means twice the pixels.
+    popup.remember_width(800, 96)
+    assert popup.remembered_width(192) == 1600
+
+
+def test_column_widths_are_remembered_by_name(layout):
+    popup.remember_column_widths({"repo": 300, "title": 400}, 96)
+    assert popup.remembered_column_widths(96) == {"repo": 300, "title": 400}
+    assert popup.remembered_column_widths(48) == {"repo": 150, "title": 200}
+
+
+def test_remembering_columns_keeps_the_window_width_and_the_other_way_round(layout):
+    popup.remember_width(800, 96)
+    popup.remember_column_widths({"repo": 300}, 96)
+    assert popup.remembered_width(96) == 800
+    popup.remember_width(900, 96)
+    assert popup.remembered_column_widths(96) == {"repo": 300}
+
+
+def test_a_hand_damaged_layout_reads_as_nothing_remembered(layout):
+    (layout / "layout.json").write_text('{"window": {"width": "wide", "dots": 0}, "columns": []}', encoding="utf-8")
+    assert popup.remembered_width(96) is None
+    assert popup.remembered_column_widths(96) == {}
+
+
+def test_the_same_name_is_always_dealt_the_same_colour():
+    assert popup.who_colour("SamRWest") == popup.who_colour("SamRWest")
+    assert popup.who_colour("SamRWest") in popup.NAME_COLOURS
+
+
+def test_names_spread_across_the_colours_rather_than_sharing_one():
+    # The dealing is a digest, so a small sample lands unevenly; what matters is that names do spread, and that a
+    # large enough sample reaches every colour there is.
+    dealt = {popup.who_colour(f"reviewer-{number}") for number in range(200)}
+    assert dealt == set(popup.NAME_COLOURS)
+
+
+def test_a_missing_name_gets_the_quiet_ink():
+    assert popup.who_colour("") == popup.PALETTE.muted

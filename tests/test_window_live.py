@@ -40,7 +40,10 @@ ROWS = [
 def built(tmp_path_factory):
     """Build one real window against made-up rows, or skip where there is no display to build it on."""
     patch = pytest.MonkeyPatch()
-    patch.setattr(window, "POPUP_REQUEST_PATH", tmp_path_factory.mktemp("window") / "popup.request")
+    holding = tmp_path_factory.mktemp("window")
+    patch.setattr(window, "POPUP_REQUEST_PATH", holding / "popup.request")
+    patch.setattr(popup, "POPUP_REQUEST_PATH", holding / "popup.request")
+    patch.setattr(popup, "LAYOUT_PATH", holding / "layout.json")
     patch.setattr(window, "rows_to_show", lambda _count: list(ROWS))
     patch.setattr(window, "load_config", lambda: {"popup_rows": len(ROWS)})
     patch.setattr(window, "remember_row_seen", lambda *_arguments: None)
@@ -52,6 +55,10 @@ def built(tmp_path_factory):
     view.edge_handles()
     view.root.bind("<Escape>", view.hide)
     view.root.bind("<FocusOut>", view.on_focus_out)
+    # The window asks where the focus went before putting itself away. A test runner rarely holds the focus at all,
+    # which would answer "somewhere else" and dismiss the window in the middle of whatever is being tested, so the
+    # answer is fixed here and the tests that care about losing it say so themselves.
+    patch.setattr(view.root, "focus_displayof", lambda: view.root)
     yield view
     view.root.destroy()
     patch.undo()
@@ -63,6 +70,7 @@ def view(built):
     built.hide()
     built.dismissed_at = None
     window.POPUP_REQUEST_PATH.unlink(missing_ok=True)
+    popup.LAYOUT_PATH.unlink(missing_ok=True)
     built.root.update()
     return built
 
@@ -85,9 +93,17 @@ def bring_up(view: window.Popup) -> None:
     view.root.update()
 
 
-def ask_for_it(view: window.Popup) -> None:
+def lose_the_focus(view: window.Popup, monkeypatch) -> None:
+    """Take the focus away to another application, as clicking one does."""
+    monkeypatch.setattr(view.root, "focus_displayof", lambda: None)
+    view.on_focus_out()
+    view.root.update()
+    view.root.update_idletasks()
+
+
+def ask_for_it(view: window.Popup, spot: tuple[int, int] | None = None) -> None:
     """Leave the note the tray leaves, and let the window answer it."""
-    window.POPUP_REQUEST_PATH.write_text("asked", encoding="utf-8")
+    popup.request_popup(spot)
     view.watch()
     view.root.update()
 
@@ -136,10 +152,10 @@ def test_clicking_the_icon_while_the_window_is_up_puts_it_away(view):
     assert not shown(view), "the window stayed up, so the click did nothing"
 
 
-def test_a_click_that_dismissed_the_window_does_not_fetch_it_back(view):
+def test_a_click_that_dismissed_the_window_does_not_fetch_it_back(view, monkeypatch):
     bring_up(view)
     # Where the click does take the focus, the window is already away by the time the note arrives.
-    view.on_focus_out()
+    lose_the_focus(view, monkeypatch)
     assert not shown(view)
     ask_for_it(view)
     assert not shown(view), "the click that dismissed the window brought it straight back"
@@ -147,25 +163,32 @@ def test_a_click_that_dismissed_the_window_does_not_fetch_it_back(view):
 
 def test_a_later_click_still_shows_the_window(view, monkeypatch):
     bring_up(view)
-    view.on_focus_out()
+    lose_the_focus(view, monkeypatch)
     monkeypatch.setattr(window.time, "monotonic", lambda: view.dismissed_at + window.TOGGLE_WITHIN_SECONDS + 1)
     ask_for_it(view)
     assert shown(view)
 
 
-def test_a_window_drawn_at_a_different_scaling_hands_over_rather_than_showing(view, monkeypatch):
-    # Windows is told this process draws at the real resolution, so it does not rescale a window when the display
-    # changes; the sizes settled when the window was built come out wrong and it has to be built again.
-    replacements = []
-    monkeypatch.setattr(window, "start_window", lambda: replacements.append("a window"))
-    monkeypatch.setattr(window, "window_scaling", lambda _identifier: 192)
-    monkeypatch.setattr(view, "drawn_at", 96)
-    monkeypatch.setattr(view.root, "destroy", lambda: None)
-    monkeypatch.setattr(view, "waiting", SimpleNamespace(release=lambda: None), raising=False)
-    ask_for_it(view)
-    assert replacements == ["a window"]
-    assert not shown(view)
-    assert window.POPUP_REQUEST_PATH.exists(), "the replacement needs the note, or the click is lost"
+def test_clicking_inside_the_window_does_not_dismiss_it(view):
+    # Clicking a heading hands the focus to the table, which the toolkit reports exactly as it reports the focus
+    # leaving for another application. Sorting a column used to make the window vanish.
+    bring_up(view)
+    view.sheet.CH.event_generate("<Button-1>", x=60, y=view.row_height() // 2, time=5000)
+    view.root.update()
+    view.root.update_idletasks()
+    assert shown(view), "the window went away when the focus moved inside it"
+
+
+def test_a_display_drawing_at_a_different_size_has_the_window_built_again(view, monkeypatch):
+    # The text follows the display's scaling by itself; the column widths and row heights measured from it do not,
+    # so they have to be worked out again. A locked screen coming back differently is enough to need this.
+    was_tall, was_table = view.built_for, view.sheet
+    finer = 2 * (window.pointer_scaling() or 96)
+    monkeypatch.setattr(window, "pointer_scaling", lambda: finer)
+    bring_up(view)
+    assert view.built_for > was_tall, "the rows should have grown with the display"
+    assert view.sheet is not was_table, "the table was left at the size it was first built for"
+    assert shown(view)
 
 
 def test_losing_the_focus_while_arriving_does_not_dismiss_the_window(view):
@@ -173,3 +196,77 @@ def test_losing_the_focus_while_arriving_does_not_dismiss_the_window(view):
     view.root.update()
     view.on_focus_out()
     assert shown(view), "the window dismissed itself before it had finished appearing"
+
+
+def test_a_dragged_width_is_remembered_and_a_dragged_height_is_not(view):
+    # The height always follows the rows, so keeping a dragged one would only ever add blank table or hide rows.
+    bring_up(view)
+    snug = view.root.winfo_height()
+    view.start_drag(SimpleNamespace(x_root=0, y_root=0))
+    view.resize_edges(SimpleNamespace(x_root=90, y_root=70), (False, False, True, True))
+    view.root.update()
+    view.on_resize_finished()
+    dragged_wide = view.root.winfo_width()
+    assert popup.remembered_width(view.dots) == dragged_wide
+    view.hide()
+    bring_up(view)
+    assert view.root.winfo_width() == dragged_wide
+    assert view.root.winfo_height() == snug, "the height should have gone back to hugging the rows"
+
+
+def test_a_click_on_an_edge_that_moves_nothing_remembers_nothing(view):
+    bring_up(view)
+    view.start_drag(SimpleNamespace(x_root=0, y_root=0))
+    view.on_resize_finished()
+    assert popup.remembered_width(view.dots) is None
+
+
+def test_a_dragged_column_width_is_remembered_and_used_next_time(view):
+    bring_up(view)
+    view.sheet.set_column_widths(iter([260, 260, 60, 260, 120, 90]))
+    view.on_column_dragged()
+    assert popup.remembered_column_widths(view.dots)["change"] == 260
+    # A fresh window, as after a restart, starts at the dragged widths rather than the stated ones.
+    view.suit_the_display()
+    view.sheet.set_column_widths(iter(view.column_widths()))
+    assert round(view.sheet.get_column_widths()[0]) == 260
+
+
+def snug_row(number: int) -> popup.Row:
+    """Build one row for the height tests."""
+    return popup.Row(
+        "New comment", "acme/widgets", f"#{number}", "Add a widget", "alice", "1h ago", f"u{number}", popup.URGENT, at="2026-01-01T00:00:00.000000Z"
+    )
+
+
+def test_a_quiet_day_gets_a_window_snug_around_its_rows(view, monkeypatch):
+    # The table widget asks for a fixed minimum height of its own, which used to pad the window with empty table.
+    monkeypatch.setattr(window, "rows_to_show", lambda _count: [snug_row(n) for n in range(3)])
+    bring_up(view)
+    assert view.sheet.winfo_height() == view.table_height(), "the table should hold exactly its rows"
+    assert view.hint.winfo_viewable(), "the bottom strip should survive the snug height"
+
+
+def test_many_rows_grow_the_window_only_to_its_ceiling(view, monkeypatch):
+    monkeypatch.setattr(window, "rows_to_show", lambda _count: [snug_row(n) for n in range(60)])
+    bring_up(view)
+    _width, usable_height = view.usable_screen()
+    assert view.root.winfo_height() <= int(usable_height * window.TALLEST_SHARE_OF_SCREEN)
+    assert view.sheet.winfo_height() < view.table_height(), "sixty rows should overflow into scrolling, not height"
+    assert view.hint.winfo_viewable(), "the ceiling must squeeze the table, never the bottom strip"
+
+
+def test_the_window_comes_up_by_the_click_not_the_pointer(view):
+    # The window comes up half a second after the click that asked for it, and used to follow wherever the pointer
+    # had wandered to in between. A spot near the bottom right, where a tray icon lives, leaves it room to open.
+    usable_width, usable_height = view.usable_screen()
+    spot = (usable_width - 40, usable_height - 40)
+    ask_for_it(view, spot=spot)
+    assert shown(view)
+    assert abs((view.root.winfo_x() + view.root.winfo_width() - window.POINTER_OFFSET) - spot[0]) <= 2
+    assert abs((view.root.winfo_y() + view.root.winfo_height() + window.POINTER_GAP) - spot[1]) <= 2
+
+
+def test_a_note_without_a_spot_still_shows_the_window(view):
+    ask_for_it(view, spot=None)
+    assert shown(view)

@@ -48,56 +48,58 @@ class Palette:
     blue: str
     violet: str
     pink: str
-    # The two ends of the scale a date is drawn on, from something that just happened to something long forgotten.
+    # The two ends of the scale a date is drawn on: blue for something that just happened, through to red for
+    # something long forgotten, so age reads at a glance rather than as two shades of the same thing.
     fresh: str
     stale: str
 
 
-# Dark greys rather than blacks: a near-black window is a hole in the desktop, and the borders between its parts
-# disappear into it.
+# Neutral near-black greys in the manner of an IDE's high-contrast dark scheme, with the accents kept muted rather
+# than neon. Every ink here reads at 4.5 to 1 or better against both the background and the surface, which a test
+# holds it to, so nothing depends on a well-adjusted monitor.
 DARK = Palette(
     dark=True,
-    background="#22272e",
-    surface="#2d333b",
-    border="#444c56",
-    heading="#f0f6fc",
-    text="#e8eef4",
-    muted="#adbac7",
-    link="#6cb6ff",
-    hover="#373e47",
-    selection="#4184e4",
-    red="#ff7b72",
-    orange="#ffa657",
-    amber="#f2cc60",
-    green="#5ddb6f",
-    blue="#79c0ff",
-    violet="#d2a8ff",
-    pink="#ff9bce",
-    fresh="#a5d6ff",
-    stale="#7c8fbf",
+    background="#1e1f22",
+    surface="#2b2d30",
+    border="#43454a",
+    heading="#dfe1e5",
+    text="#ced0d6",
+    muted="#9da3ae",
+    link="#589df6",
+    hover="#323438",
+    selection="#2e436e",
+    red="#f86270",
+    orange="#e08855",
+    amber="#d6b85a",
+    green="#73bd79",
+    blue="#56a8f5",
+    violet="#b189f5",
+    pink="#e578c2",
+    fresh="#56a8f5",
+    stale="#f86270",
 )
 
-# Darker inks throughout: the same hues at dark-mode brightness are unreadable on white.
+# The same hues taken dark enough to read on white, held to the same contrast floor.
 LIGHT = Palette(
     dark=False,
     background="#ffffff",
-    surface="#f2f5f8",
-    border="#ccd5de",
-    heading="#111a24",
-    text="#1f2937",
-    muted="#4f5b67",
-    link="#0969da",
-    hover="#e8eef4",
-    selection="#ddf4ff",
-    red="#cf222e",
-    orange="#bc4c00",
-    amber="#8a6400",
-    green="#1a7f37",
-    blue="#0969da",
-    violet="#8250df",
-    pink="#bf3989",
-    fresh="#0550ae",
-    stale="#6e83a8",
+    surface="#f2f3f5",
+    border="#c9ccd6",
+    heading="#111318",
+    text="#27282e",
+    muted="#575b66",
+    link="#2e55a3",
+    hover="#e6e8ec",
+    selection="#d4e2ff",
+    red="#c22b41",
+    orange="#a45017",
+    amber="#7a6011",
+    green="#1e7d33",
+    blue="#2467c0",
+    violet="#7b3fd4",
+    pink="#b02c86",
+    fresh="#2467c0",
+    stale="#c22b41",
 )
 
 

@@ -3,6 +3,8 @@
 A system tray icon that watches your GitHub pull requests, tells you when something changes, and opens a terminal
 dashboard when you want the full picture.
 
+![The changes window, listing what wants attention](docs/popup.png)
+
 The icon carries a count of changes you have not seen yet.
 
 | Doing this to the icon | Gets you                                                                   |
@@ -41,9 +43,13 @@ read this", not "stop telling me about this pull request". **Mark all seen** in 
 
 Each row keeps the colour of what it is: red when something is blocking, amber when it is worth a look, green when it is
 good news such as a pull request that could be merged. A row you have seen is dimmed and its mark goes hollow, and
-nothing else dims it. Age has a scale of its own in the date column, running from just-happened to long-forgotten. Who
-is left blank where GitHub attributes the change to nobody, which is the case for a conflict: it is a consequence of
-somebody else's merge into the branch.
+nothing else dims it. Age has a scale of its own in the date column, running from blue for just-happened, through
+violet, to red for long-forgotten. Names have a colour of their own too, dealt once and kept, so the same person reads
+as the same colour in every row and every showing.
+
+A conflict names the pull request's author, whose branch has to take the rebase: the conflict itself is a consequence of
+somebody else's merge into the base branch, and GitHub does not record whose. Who is blank only where nobody can be
+found at all, such as a mention whose comment has since been deleted.
 
 These are the states counted as waiting on you: a pull request in your review queue, one of yours where a reviewer asked
 for changes, one of yours whose checks are failing, and one of yours that could be merged as it stands.
@@ -57,20 +63,24 @@ default, which is a setting, and the rest scroll. Drag a divider in the headings
 frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the close mark, or
 click anything else on screen to dismiss it.
 
+A width you drag, of the window or of a column, is kept across showings and restarts, and stays the same physical size
+when the display's scaling changes. The height always follows the rows: snug around a few, and no more than its ceiling
+over many, with the rest scrolling.
+
 ## What counts as a change
 
 Only transitions raise a notification, never standing state. A pull request that was already failing when the last poll
 ran is not reported again, so a large backlog of red pull requests does not become a wall of notifications.
 
-| Change            | Meaning                                          | Notified by default |
-| ----------------- | ------------------------------------------------ | ------------------- |
-| Review requested  | A pull request joined your review queue          | yes                 |
-| Checks broke      | One of yours went from passing to failing        | yes                 |
-| Changes requested | A reviewer asked for changes on one of yours     | yes                 |
-| Mentioned         | Someone mentioned you or a team you belong to    | yes                 |
-| Ready to merge    | Approved, passing, conflict free and not a draft | yes                 |
-| Conflict appeared | A pull request now needs a rebase                | no                  |
-| New comment       | The comment count went up                        | no                  |
+| Change            | Meaning                                                                  | Notified by default |
+| ----------------- | ------------------------------------------------------------------------ | ------------------- |
+| Review requested  | A pull request joined your review queue                                  | yes                 |
+| Checks broke      | One of yours went from passing to failing                                | yes                 |
+| Changes requested | A reviewer asked for changes on one of yours                             | yes                 |
+| Mentioned         | Someone mentioned you or a team you belong to                            | yes                 |
+| Ready to merge    | Approved, passing, conflict free and not a draft                         | yes                 |
+| Conflict appeared | One of yours now needs a rebase                                          | no                  |
+| New comment       | Someone commented on one of yours, or answered a review comment of yours | no                  |
 
 The icon is red when an unread change is blocking someone or something of yours is broken, amber for anything else
 unread, green when there is nothing to look at, and grey when the last poll failed.
@@ -163,6 +173,7 @@ Settings and history live in the platform's standard application data directory,
 | `seen.json`      | The rows you have marked, and when you last marked everything seen          |
 | `gh-tray.log`    | Rotating diagnostics                                                        |
 | `last_error.log` | Everything written when the last collection failed                          |
+| `layout.json`    | The window size and column widths you last dragged                          |
 | `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
 | `popup.lock`     | Held open by the hidden changes window, so only one waits                   |
 

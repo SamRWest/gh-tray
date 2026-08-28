@@ -59,7 +59,8 @@ query($q: String!, $cursor: String) {
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
         latestReviews(last: 1) { nodes { author { login } } }
-        comments(last: 1) { nodes { author { login } } }
+        comments(last: 1) { nodes { author { login } createdAt } }
+        reviews(last: 1) { nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } } }
       }
     }
   }
@@ -94,6 +95,50 @@ def nested(node: dict, *path: str) -> str:
     return "" if current is None else str(current)
 
 
+def newest_comment_is_marginal(node: dict) -> bool:
+    """Return whether a pull request's newest comment sits against the diff rather than in the conversation.
+
+    The comment count GitHub reports covers both, but the list of comments it returns holds only the conversation.
+    A pull request reviewed entirely in the margin therefore has a count that moves with nothing to show for it,
+    so the margin has to be asked about separately: the newest comment of the last review, since a reply arrives
+    wrapped in a fresh review of its own. A review submitted with no comments in the margin carries no time here
+    and never wins.
+
+    :param node: a pull request as GitHub returned it
+    """
+    said_at = nested(node, "comments", "nodes", "createdAt")
+    margin_at = nested(node, "reviews", "nodes", "comments", "nodes", "createdAt")
+    return margin_at > said_at
+
+
+def last_commenter(node: dict) -> str:
+    """Return whoever commented last on a pull request, whether in the conversation or against the diff.
+
+    Without the diff's half, the window can neither say who commented nor tell the user's own comments from
+    anyone else's.
+
+    :param node: a pull request as GitHub returned it
+    :return: a login, or an empty string when neither can be found
+    """
+    if newest_comment_is_marginal(node):
+        return nested(node, "reviews", "nodes", "author", "login")
+    return nested(node, "comments", "nodes", "author", "login")
+
+
+def last_comment_answers(node: dict) -> str:
+    """Return whose comment the newest comment answers, where it answers one at all.
+
+    Only a comment against the diff can be an answer; conversation comments stand alone. This is what lets a
+    comment on somebody else's pull request matter when it answers one of the user's own review comments.
+
+    :param node: a pull request as GitHub returned it
+    :return: the login answered, or an empty string where the newest comment answers nobody
+    """
+    if not newest_comment_is_marginal(node):
+        return ""
+    return nested(node, "reviews", "nodes", "comments", "nodes", "replyTo", "author", "login")
+
+
 def normalise(node: dict, side: str) -> dict:
     """Turn one pull request from GitHub's shape into the flat record the rest of the application reads.
 
@@ -119,7 +164,8 @@ def normalise(node: dict, side: str) -> dict:
         "ci": nested(node, "commits", "nodes", "commit", "statusCheckRollup", "state") or "NO_CHECKS",
         "lastCommitBy": nested(node, "commits", "nodes", "commit", "author", "user", "login"),
         "lastReviewBy": nested(node, "latestReviews", "nodes", "author", "login"),
-        "lastCommentBy": nested(node, "comments", "nodes", "author", "login"),
+        "lastCommentBy": last_commenter(node),
+        "lastCommentAnswers": last_comment_answers(node),
     }
 
 
@@ -160,7 +206,7 @@ def comment_author(comment_url: str) -> str:
     try:
         comment = api(comment_url.replace("https://api.github.com/", ""))
     except GitHubError as error:
-        logger.debug("could not find out who wrote a mention: {}", error)
+        logger.warning("could not find out who wrote a mention: {}", error)
         return ""
     return nested(comment, "user", "login") if isinstance(comment, dict) else ""
 

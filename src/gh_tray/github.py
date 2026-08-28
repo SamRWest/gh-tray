@@ -16,7 +16,7 @@ import time
 
 from loguru import logger
 
-from .environment import capture_text, github_cli, hidden_window_flags
+from .environment import github_cli, run_quietly
 
 CALL_TIMEOUT_SECONDS = 60
 # GitHub answers a heavy search with an error often enough that retrying is normal rather than exceptional.
@@ -43,7 +43,7 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
     if not tool:
         raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
     try:
-        done = subprocess.run([tool, *arguments], timeout=timeout, check=False, **capture_text(), **hidden_window_flags())
+        done = run_quietly([tool, *arguments], timeout=timeout)
     except subprocess.TimeoutExpired as expiry:
         raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
     except OSError as error:
@@ -78,12 +78,40 @@ def parse(payload: str, what: str) -> object:
         raise GitHubError(f"{what} came back unreadable") from error
 
 
+def looks_permanent(description: str) -> bool:
+    """Return whether a failure is one a retry cannot fix.
+
+    GitHub names the status it answered with. Anything in the client-error range means the request itself is the
+    problem - the thing is deleted, private, or never existed - and asking again gets the same answer. The one
+    exception is the too-many-requests status, which is exactly what retrying with a pause is for.
+
+    :param description: the failure as :func:`first_error_line` reported it
+    """
+    return "HTTP 4" in description and "HTTP 429" not in description
+
+
 def api(path: str) -> object:
-    """Fetch one REST path.
+    """Fetch one REST path, retrying while GitHub is unhappy.
+
+    Retried for the same reason the query path is: GitHub fails transiently often enough that one failure says
+    nothing, and a lookup that silently comes back empty loses a name for good. A failure naming a client error is
+    raised at once instead, since a deleted comment stays deleted however many times it is asked for.
 
     :param path: the path to fetch, such as ``notifications?all=false``
+    :raises GitHubError: when every attempt fails, or the failure is one retrying cannot fix
     """
-    return parse(run(["api", path]), path)
+    last = "GitHub returned nothing usable"
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        try:
+            return parse(run(["api", path]), path)
+        except GitHubError as error:
+            last = str(error)
+            if looks_permanent(last):
+                raise
+        logger.warning("GitHub call failed ({}), attempt {} of {}", last, attempt, RETRY_ATTEMPTS)
+        if attempt < RETRY_ATTEMPTS:
+            time.sleep(attempt * RETRY_BACKOFF_SECONDS)
+    raise GitHubError(last)
 
 
 def viewer() -> str:

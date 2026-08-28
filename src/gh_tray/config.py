@@ -34,6 +34,8 @@ REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
 # takes to start. Its lock is what says one is already waiting.
 POPUP_REQUEST_PATH = APP_DIR / "popup.request"
 POPUP_LOCK_PATH = APP_DIR / "popup.lock"
+# The size the user last dragged the changes window to, and its column widths, so both survive a restart.
+LAYOUT_PATH = APP_DIR / "layout.json"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
