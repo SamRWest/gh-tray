@@ -8,12 +8,15 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from loguru import logger
+
 from . import APP_NAME
-from .config import TEXT_KEYS, THEME_KEY, load_config, save_config
+from .config import APP_ICON_PATH, TEXT_KEYS, THEME_KEY, load_config, save_config
 from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 from .prerequisites import signed_in
-from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, PALETTE
+from .status import write_app_icon
+from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, PALETTE, blend
 
 NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
 FIELDS = {
@@ -51,8 +54,15 @@ def apply_theme(root: tk.Tk) -> None:
         indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
     )
     style.configure("TEntry", fieldbackground=PALETTE.surface, foreground=PALETTE.text, insertcolor=PALETTE.text, bordercolor=PALETTE.border)
-    style.configure("TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface)
+    style.configure(
+        "TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface, padding=(10, 4)
+    )
     style.map("TButton", background=[("active", PALETTE.hover)])
+    # The one button that commits stands out from the ones that do not, so the eye lands on it first.
+    style.configure("Accent.TButton", background=PALETTE.selection, foreground=PALETTE.heading, focuscolor=PALETTE.selection, padding=(10, 4))
+    style.map("Accent.TButton", background=[("active", blend(PALETTE.selection, PALETTE.heading, 0.85))])
+    # Section names carry the window's structure, so they read a step heavier than what sits under them.
+    style.configure("Heading.TLabel", background=PALETTE.background, foreground=PALETTE.heading, font=("TkDefaultFont", 10, "bold"))
     style.configure("TSeparator", background=PALETTE.border)
     style.configure("TRadiobutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
     style.map(
@@ -71,33 +81,38 @@ def run_settings() -> None:
     root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
     root.title(f"{APP_NAME} settings")
     root.resizable(False, False)
+    try:
+        # The application's own mark in the title bar, in place of the toolkit's default.
+        root.iconbitmap(str(write_app_icon(APP_ICON_PATH)))
+    except (tk.TclError, OSError) as error:
+        logger.debug("could not put the application's mark on the settings window: {}", error)
     apply_theme(root)
-    frame = ttk.Frame(root, padding=12)
+    frame = ttk.Frame(root, padding=16)
     frame.grid(sticky="nsew")
 
     entries: dict[str, tk.StringVar] = {}
     row = 0
     for key, (label, width) in FIELDS.items():
-        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
+        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 12))
         variable = tk.StringVar(value=str(config[key]))
-        ttk.Entry(frame, textvariable=variable, width=width).grid(row=row, column=1, sticky="w", pady=2)
+        ttk.Entry(frame, textvariable=variable, width=width).grid(row=row, column=1, sticky="w", pady=3)
         entries[key] = variable
         row += 1
 
     ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
     row += 1
-    ttk.Label(frame, text="Notify me about").grid(row=row, column=0, sticky="w")
+    ttk.Label(frame, text="Notify me about", style="Heading.TLabel").grid(row=row, column=0, sticky="w", pady=(0, 4))
     row += 1
     toggles: dict[str, tk.BooleanVar] = {}
     for kind, (label, _urgent) in RULE_LABELS.items():
-        variable = tk.BooleanVar(value=bool(config["toasts"].get(kind)))
-        ttk.Checkbutton(frame, text=label, variable=variable).grid(row=row, column=0, columnspan=2, sticky="w")
-        toggles[kind] = variable
+        switch = tk.BooleanVar(value=bool(config["toasts"].get(kind)))
+        ttk.Checkbutton(frame, text=label, variable=switch).grid(row=row, column=0, columnspan=2, sticky="w")
+        toggles[kind] = switch
         row += 1
 
     ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
     row += 1
-    ttk.Label(frame, text="Colours").grid(row=row, column=0, sticky="w")
+    ttk.Label(frame, text="Colours", style="Heading.TLabel").grid(row=row, column=0, sticky="w")
     style_choice = tk.StringVar(value=config[THEME_KEY])
     styles = ttk.Frame(frame)
     styles.grid(row=row, column=1, sticky="w")
@@ -142,12 +157,12 @@ def run_settings() -> None:
 
     buttons = ttk.Frame(frame)
     buttons.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
-    for column, (text, command) in enumerate(
+    for column, (text, command, kind) in enumerate(
         (
-            ("Sign in to GitHub", sign_in),
-            ("Cancel", root.destroy),
-            ("Save", save_and_close),
+            ("Sign in to GitHub", sign_in, "TButton"),
+            ("Cancel", root.destroy, "TButton"),
+            ("Save", save_and_close, "Accent.TButton"),
         )
     ):
-        ttk.Button(buttons, text=text, command=command).grid(row=0, column=column, padx=4)
+        ttk.Button(buttons, text=text, command=command, style=kind).grid(row=0, column=column, padx=4)
     root.mainloop()

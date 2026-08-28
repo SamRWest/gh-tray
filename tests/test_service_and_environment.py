@@ -136,9 +136,20 @@ def test_switching_login_start_off_twice_is_harmless(tmp_path, monkeypatch):
     environment.set_autostart(False)
 
 
-def test_hidden_window_flags_are_only_used_on_windows():
-    flags = environment.hidden_window_flags()
-    assert ("creationflags" in flags) is (sys.platform == "win32")
+def test_a_console_is_only_hidden_on_windows():
+    # Anywhere else the flag has to be nothing at all: a command refuses to start if asked for one it cannot give.
+    assert (environment.no_console_flag() != 0) is (sys.platform == "win32")
+
+
+def test_a_command_is_read_as_utf8_whatever_the_console_uses():
+    # Written as bytes, which is how the GitHub tool writes: it says UTF-8 whatever codepage the console is on, and
+    # reading that as the local one turns a tick into "a-hat" and mangles any title that is not plain English.
+    written = "import sys; sys.stdout.buffer.write('✓ café'.encode())"
+    assert environment.run_quietly([sys.executable, "-c", written]).stdout == "✓ café"
+
+
+def test_a_command_that_fails_is_returned_rather_than_raised_on():
+    assert environment.run_quietly([sys.executable, "-c", "raise SystemExit(3)"]).returncode == 3
 
 
 def test_only_one_instance_can_hold_the_lock(tmp_path):

@@ -18,11 +18,13 @@ from __future__ import annotations
 import math
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .config import LOCK_PATH, POPUP_LOCK_PATH, POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
-from .environment import SingleInstance, hidden_window_flags
+from . import APP_MODULE
+from .config import LAYOUT_PATH, LOCK_PATH, POPUP_LOCK_PATH, POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, SNAPSHOT_PATH
+from .environment import SingleInstance, no_console_flag
 from .events import (
     BROKEN_CI,
     age_in_words,
@@ -40,7 +42,7 @@ from .events import (
     utc_now,
 )
 from .snapshot import read_snapshot
-from .storage import write_text_atomic
+from .storage import read_json, write_json_atomic, write_text_atomic
 from .theme import PALETTE, blend
 
 BACKGROUND = PALETTE.background
@@ -124,6 +126,23 @@ class Row:
     seen: bool = False
 
 
+# The colours a name can be drawn in. Every name is dealt one, by a stable digest of its spelling, so the same
+# person reads as the same colour in every row, every showing and every restart. These are the palette's hues
+# rather than a set of its own, so they suit both themes; in this column a colour is an identity tag and carries
+# none of the meaning the Change column gives it.
+NAME_COLOURS: tuple[str, ...] = (PALETTE.blue, PALETTE.green, PALETTE.violet, PALETTE.orange, PALETTE.pink, PALETTE.amber, PALETTE.red)
+
+
+def who_colour(login: str) -> str:
+    """Return the colour a name is drawn in, the same one every time for the same name.
+
+    :param login: the name to colour; an empty one gets the quiet ink, though there is nothing to draw anyway
+    """
+    if not login:
+        return PALETTE.muted
+    return NAME_COLOURS[zlib.crc32(login.encode("utf-8")) % len(NAME_COLOURS)]
+
+
 # The mark at the head of a row: filled while it still wants attention, hollow once seen. A plain shape rather than
 # a coloured emoji, because the toolkit draws emoji from the font in one colour whatever the character is, so they
 # came out as outlines. Drawn in the row's own colour, this one is the filled colour those were meant to be.
@@ -172,16 +191,20 @@ def days_old(stamp: str, now: datetime | None = None) -> float:
 
 
 def age_colour(stamp: str, now: datetime | None = None) -> str:
-    """Return the colour a date is drawn in, on a scale from just-happened to long-forgotten.
+    """Return the colour a date is drawn in: blue for just-happened, through violet, to red for long-forgotten.
 
     The scale is by the logarithm of the age rather than the age itself, because the difference between an hour and
-    a day matters and the difference between forty and fifty weeks does not.
+    a day matters and the difference between forty and fifty weeks does not. It runs through violet rather than
+    straight from one end to the other, because mixing blue directly into red passes through grey and the middle of
+    the scale stops saying anything.
 
     :param stamp: when it happened
     :param now: the moment to measure against, defaulting to the present
     """
     along = min(1.0, math.log1p(days_old(stamp, now)) / math.log1p(AGE_RAMP_DAYS))
-    return blend(PALETTE.fresh, PALETTE.stale, 1.0 - along)
+    if along < 0.5:
+        return blend(PALETTE.fresh, PALETTE.violet, 1.0 - along * 2)
+    return blend(PALETTE.violet, PALETTE.stale, 2.0 - along * 2)
 
 
 def repo_and_number(event: dict) -> tuple[str, str]:
@@ -324,6 +347,85 @@ def request_refresh() -> bool:
     return True
 
 
+def read_layout() -> dict:
+    """Return what is remembered of the window's shape, or an empty record when nothing is."""
+    stored, _damaged = read_json(LAYOUT_PATH)
+    return stored if isinstance(stored, dict) else {}
+
+
+def rescaled(value: object, was_dots: object, dots: float) -> int:
+    """Return a remembered length made right for the display now drawing.
+
+    Lengths are remembered in pixels along with how finely the display was drawing at the time. Played back on a
+    display drawing at another fineness they would come out the wrong physical size, so they are scaled by the
+    ratio of the two.
+
+    :param value: the remembered length in pixels
+    :param was_dots: the dots per inch it was remembered at
+    :param dots: the dots per inch the display draws at now
+    :return: the length in pixels for the current display, or zero when the record is unreadable
+    """
+    if not isinstance(value, int | float | str) or not isinstance(was_dots, int | float | str):
+        return 0
+    try:
+        length, was = float(value), float(was_dots)
+    except ValueError:
+        return 0
+    if length <= 0 or was <= 0:
+        return 0
+    return round(length * dots / was)
+
+
+def remembered_width(dots: float) -> int | None:
+    """Return the width the user last dragged the window to, or None when they never have.
+
+    Only the width is remembered. The height always follows how many rows there are, snug around a few and capped
+    at its ceiling over many, so a remembered height would only ever add blank table or hide rows.
+
+    :param dots: the dots per inch the display draws at now
+    """
+    stored = read_layout().get("window")
+    if not isinstance(stored, dict):
+        return None
+    return rescaled(stored.get("width"), stored.get("dots"), dots) or None
+
+
+def remember_width(width: int, dots: float) -> None:
+    """Record the width the user dragged the window to.
+
+    :param width: the width in pixels
+    :param dots: the dots per inch the display draws at, so the width can be played back on another
+    """
+    layout = read_layout()
+    layout["window"] = {"width": int(width), "dots": dots}
+    write_json_atomic(LAYOUT_PATH, layout, indent=2)
+
+
+def remembered_column_widths(dots: float) -> dict[str, int]:
+    """Return the column widths the user last dragged, by column name, leaving out any that cannot be read.
+
+    :param dots: the dots per inch the display draws at now
+    """
+    stored = read_layout().get("columns")
+    if not isinstance(stored, dict) or not isinstance(stored.get("widths"), dict):
+        return {}
+    widths = {name: rescaled(width, stored.get("dots"), dots) for name, width in stored["widths"].items()}
+    return {name: width for name, width in widths.items() if width}
+
+
+def remember_column_widths(widths: dict[str, int], dots: float) -> None:
+    """Record the column widths the user dragged, by column name.
+
+    Named rather than positional, so a column added or moved later cannot inherit the wrong width.
+
+    :param widths: pixels per column name
+    :param dots: the dots per inch the display draws at
+    """
+    layout = read_layout()
+    layout["columns"] = {"widths": {name: int(width) for name, width in widths.items()}, "dots": dots}
+    write_json_atomic(LAYOUT_PATH, layout, indent=2)
+
+
 def window_waiting() -> bool:
     """Return whether a changes window is already loaded and waiting to be asked to show itself."""
     waiting = SingleInstance(POPUP_LOCK_PATH)
@@ -333,13 +435,30 @@ def window_waiting() -> bool:
     return False
 
 
-def request_popup() -> None:
+def request_popup(spot: tuple[int, int] | None = None) -> None:
     """Leave the waiting window a note asking it to show itself.
 
     One note serves any number of clicks, which is what stops a handful of impatient ones producing a handful of
-    windows.
+    windows. The note carries where the click was, since the window comes up half a second later and the pointer
+    may have wandered on by then.
+
+    :param spot: where on screen the click that asked was, or None where nobody can say
     """
-    write_text_atomic(POPUP_REQUEST_PATH, utc_now())
+    note: dict = {"at": utc_now()}
+    if spot:
+        note["x"], note["y"] = int(spot[0]), int(spot[1])
+    write_json_atomic(POPUP_REQUEST_PATH, note)
+
+
+def requested_spot() -> tuple[int, int] | None:
+    """Return where the click that asked for the window was, or None when the note does not say.
+
+    :return: the click's x and y in screen pixels
+    """
+    stored, _damaged = read_json(POPUP_REQUEST_PATH)
+    if not isinstance(stored, dict) or not isinstance(stored.get("x"), int) or not isinstance(stored.get("y"), int):
+        return None
+    return stored["x"], stored["y"]
 
 
 def start_window() -> subprocess.Popen:
@@ -351,9 +470,7 @@ def start_window() -> subprocess.Popen:
 
     :return: the started process
     """
-    # The checker cannot pick an overload through keyword arguments handed over as a mapping, which is how the
-    # flag that hides the console reaches here, so it is told to let this one be.
-    return subprocess.Popen([sys.executable, "-m", __package__, "popup"], **hidden_window_flags())  # ty: ignore[no-matching-overload]
+    return subprocess.Popen([sys.executable, "-m", APP_MODULE, "popup"], creationflags=no_console_flag())
 
 
 def one_per_pull_request(rows: list[Row]) -> list[Row]:

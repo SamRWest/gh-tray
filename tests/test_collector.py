@@ -32,7 +32,8 @@ def node(**overrides) -> dict:
         "author": {"login": "someone"},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}]},
         "latestReviews": {"nodes": [{"author": {"login": "reviewer"}}]},
-        "comments": {"nodes": [{"author": {"login": "commenter"}}]},
+        "comments": {"nodes": [{"author": {"login": "commenter"}, "createdAt": "2026-05-30T00:00:00Z"}]},
+        "reviews": {"nodes": [{"author": {"login": "reviewer"}, "comments": {"nodes": [{"createdAt": "2026-05-29T00:00:00Z", "replyTo": None}]}}]},
     }
     found.update(overrides)
     return found
@@ -48,9 +49,45 @@ def test_a_complete_pull_request_is_read_in_full():
 
 
 def test_a_pull_request_with_no_reviews_or_comments_still_reads():
-    record = collector.normalise(node(latestReviews={"nodes": []}, comments={"nodes": []}), "reviewing")
+    record = collector.normalise(node(latestReviews={"nodes": []}, comments={"nodes": []}, reviews={"nodes": []}), "reviewing")
     assert record["lastReviewBy"] == ""
     assert record["lastCommentBy"] == ""
+
+
+def margin(login: str, at: str, answering: str = "") -> dict:
+    """Build the last review as GitHub returns it, holding one comment against the diff."""
+    reply_to = {"author": {"login": answering}} if answering else None
+    return {"nodes": [{"author": {"login": login}, "comments": {"nodes": [{"createdAt": at, "replyTo": reply_to}]}}]}
+
+
+def test_a_pull_request_commented_on_only_in_the_margin_still_names_who_did_it():
+    # GitHub counts comments against the diff but does not list them, so a pull request reviewed entirely that way
+    # used to have a comment count that moved with nobody to name for it.
+    margin_only = node(comments={"nodes": []}, reviews=margin("MattAmos", "2026-05-30T00:00:00Z"))
+    assert collector.normalise(margin_only, "authored")["lastCommentBy"] == "MattAmos"
+
+
+def test_whichever_of_the_two_came_last_is_the_one_named():
+    later_review = node(reviews=margin("reviewer", "2026-05-31T00:00:00Z"))
+    assert collector.normalise(later_review, "authored")["lastCommentBy"] == "reviewer"
+    assert collector.normalise(node(), "authored")["lastCommentBy"] == "commenter"
+
+
+def test_a_review_without_comments_in_the_margin_never_outranks_the_conversation():
+    # A review submitted with only a summary body holds nothing in the margin, so it carries no time and never wins.
+    bodyless = node(reviews={"nodes": [{"author": {"login": "reviewer"}, "comments": {"nodes": []}}]})
+    assert collector.normalise(bodyless, "authored")["lastCommentBy"] == "commenter"
+
+
+def test_a_reply_in_the_margin_names_whose_comment_it_answers():
+    answering = node(comments={"nodes": []}, reviews=margin("author", "2026-05-31T00:00:00Z", answering="SamRWest"))
+    assert collector.normalise(answering, "reviewing")["lastCommentAnswers"] == "SamRWest"
+
+
+def test_a_comment_that_answers_nobody_reads_as_answering_nobody():
+    assert collector.normalise(node(), "reviewing")["lastCommentAnswers"] == ""
+    thread_start = node(comments={"nodes": []}, reviews=margin("author", "2026-05-31T00:00:00Z"))
+    assert collector.normalise(thread_start, "reviewing")["lastCommentAnswers"] == ""
 
 
 def test_a_pull_request_with_no_checks_reads_as_having_none():
@@ -170,6 +207,41 @@ def test_a_reply_carrying_only_errors_is_retried_and_then_reported(monkeypatch):
     with pytest.raises(github.GitHubError, match="too expensive"):
         github.graphql("query", {"q": "is:pr"})
     assert len(attempts) == github.RETRY_ATTEMPTS
+
+
+def test_a_plain_fetch_that_works_on_the_second_attempt_is_accepted(monkeypatch):
+    # A failed lookup used to be swallowed after one attempt, which is how a mention lost its author for good.
+    answers = [github.GitHubError("something transient"), '{"user": {"login": "someone"}}']
+
+    def flaky(_arguments, timeout=0):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(github, "run", flaky)
+    monkeypatch.setattr(github.time, "sleep", lambda _seconds: None)
+    assert github.api("user") == {"user": {"login": "someone"}}
+
+
+def test_a_fetch_of_something_deleted_is_not_retried(monkeypatch):
+    # Asking again for a deleted comment gets the same answer, and each retry would sleep between attempts.
+    attempts = []
+
+    def gone(_arguments, timeout=0):
+        attempts.append(1)
+        raise github.GitHubError("gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(github, "run", gone)
+    with pytest.raises(github.GitHubError, match="404"):
+        github.api("repos/acme/widget/issues/comments/1")
+    assert len(attempts) == 1
+
+
+def test_being_asked_to_slow_down_is_the_one_client_error_worth_retrying():
+    assert github.looks_permanent("gh: Not Found (HTTP 404)") is True
+    assert github.looks_permanent("gh: was submitted too quickly (HTTP 429)") is False
+    assert github.looks_permanent("HTTP 502 bad gateway") is False
 
 
 def test_a_reply_that_works_on_the_second_attempt_is_accepted(monkeypatch):

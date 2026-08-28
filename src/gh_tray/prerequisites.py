@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from .environment import capture_text, github_cli, hidden_window_flags
+from .environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
 
@@ -59,7 +59,7 @@ def gh_dash_installed() -> bool:
     tool = github_cli()
     if not tool:
         return False
-    done = subprocess.run([tool, "extension", "list"], check=False, **capture_text(), **hidden_window_flags())
+    done = run_quietly([tool, "extension", "list"])
     return "dlvhdr/gh-dash" in done.stdout
 
 
@@ -68,7 +68,7 @@ def signed_in() -> bool:
     tool = github_cli()
     if not tool:
         return False
-    return subprocess.run([tool, "auth", "status"], check=False, **capture_text(), **hidden_window_flags()).returncode == 0
+    return run_quietly([tool, "auth", "status"]).returncode == 0
 
 
 def requirements() -> list[tuple[Requirement, bool]]:

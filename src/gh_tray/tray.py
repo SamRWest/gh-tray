@@ -13,9 +13,9 @@ from dataclasses import replace
 import pystray
 from loguru import logger
 
-from . import APP_NAME
+from . import APP_MODULE, APP_NAME
 from .config import POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, load_config
-from .environment import autostart_enabled, hidden_window_flags, open_in_terminal, set_autostart
+from .environment import autostart_enabled, cursor_position, make_dpi_aware, no_console_flag, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
 from .popup import request_popup, start_window, window_waiting
@@ -51,7 +51,7 @@ def open_dashboard(config: dict) -> None:
 
 def open_settings() -> None:
     """Open the settings window as its own process, keeping its event loop clear of the tray's."""
-    subprocess.Popen([sys.executable, "-m", "gh_tray", "settings"], **hidden_window_flags())  # ty: ignore[no-matching-overload]
+    subprocess.Popen([sys.executable, "-m", APP_MODULE, "settings"], creationflags=no_console_flag())
 
 
 class Tray:
@@ -59,6 +59,9 @@ class Tray:
 
     def __init__(self) -> None:
         """Load the settings and build the icon in its starting state."""
+        # The tray measures the screen when it records where a click was. An unaware process is lied to about
+        # coordinates on a scaled display, and the window, which is aware, then opens where the lie says.
+        make_dpi_aware()
         self.config = load_config()
         REFRESH_REQUEST_PATH.unlink(missing_ok=True)
         POPUP_REQUEST_PATH.unlink(missing_ok=True)
@@ -98,15 +101,16 @@ class Tray:
     def reviews_menu(self) -> pystray.Menu:
         """Return a submenu of the pull requests waiting on the user's review."""
         item, menu = pystray.MenuItem, pystray.Menu
-        entries, _damaged = read_snapshot()
-        waiting = [entry for entry in (entries or {}).values() if entry.get("side") == "reviewing"]
+        stored, _damaged = read_snapshot()
+        waiting = [entry for entry in (stored or {}).values() if entry.get("side") == "reviewing"]
         if not waiting:
             return menu(item("nobody is waiting", None, enabled=False))
-        entries = [
-            item(f"{entry['repo']}#{entry['number']} - {str(entry.get('title', ''))[:TITLE_LIMIT]}", self.opener(entry.get("url", "")))
-            for entry in waiting[:MENU_ENTRY_LIMIT]
-        ]
-        return menu(*entries)
+        return menu(
+            *(
+                item(f"{entry['repo']}#{entry['number']} - {str(entry.get('title', ''))[:TITLE_LIMIT]}", self.opener(entry.get("url", "")))
+                for entry in waiting[:MENU_ENTRY_LIMIT]
+            )
+        )
 
     def opener(self, url: str) -> Callable[..., None]:
         """Return a menu action that opens a page in the default browser.
@@ -214,7 +218,7 @@ class Tray:
         The window is a separate process that stays loaded and hidden, so this is a note rather than a launch. One
         note serves any number of clicks, which is what stops several impatient ones opening several windows.
         """
-        request_popup()
+        request_popup(cursor_position())
         if not window_waiting():
             self.window = start_window()
 

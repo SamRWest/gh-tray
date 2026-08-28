@@ -37,7 +37,22 @@ def test_the_command_always_reaches_the_terminal(monkeypatch):
     for present in ("wt", None):
         monkeypatch.setattr(environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None)
         for maximised in (True, False):
-            assert COMMAND in environment.terminal_command(COMMAND, "gh-dash", maximised=maximised)
+            assert any(COMMAND in part for part in environment.terminal_command(COMMAND, "gh-dash", maximised=maximised))
+
+
+def test_a_windows_console_is_put_into_utf8_first(monkeypatch):
+    # A dashboard drawn out of box characters and icons comes out as rubbish on the regional code page.
+    monkeypatch.setattr(environment.sys, "platform", "win32")
+    for present in ("wt", None):
+        monkeypatch.setattr(environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None)
+        arguments = environment.terminal_command(COMMAND, "gh-dash", maximised=True)
+        assert arguments[-1] == f"chcp {environment.UTF8_CODE_PAGE} >nul && {COMMAND}"
+
+
+def test_only_windows_needs_telling_about_utf8(monkeypatch):
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    only("xterm", monkeypatch)
+    assert environment.terminal_command(COMMAND, "gh-dash", maximised=False)[-1] == COMMAND
 
 
 def test_macos_zooms_the_window_only_when_asked(monkeypatch):

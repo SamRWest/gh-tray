@@ -27,10 +27,10 @@ def pull_request(**overrides) -> dict:
     return record
 
 
-def detect(before: dict | None, after: dict) -> list[str]:
+def detect(before: dict | None, after: dict, login: str = "") -> list[str]:
     """Return the kinds of event produced by moving one pull request from one state to another."""
     previous = {} if before is None else {"acme/widget#7": before}
-    found = events.detect_pull_request_events(previous, {"acme/widget#7": after}, "2026-01-01T00:00:00Z")
+    found = events.detect_pull_request_events(previous, {"acme/widget#7": after}, "2026-01-01T00:00:00Z", login)
     return [event["kind"] for event in found]
 
 
@@ -288,3 +288,30 @@ def test_only_the_newest_marks_are_kept():
     kept = events.newest_marks(marks, keep=3)
     assert set(kept) == {"row-8", "row-7", "row-6"}
     assert events.newest_marks(marks, keep=20) == marks
+
+
+def test_a_conflict_on_someone_else_s_pull_request_is_left_to_them():
+    # A conflict is for whoever has to rebase. On a pull request you are only reviewing, that is not you.
+    reviewing = {"side": "reviewing"}
+    assert detect(pull_request(**reviewing), pull_request(mergeable="CONFLICTING", **reviewing)) == []
+
+
+def test_a_comment_on_your_own_pull_request_is_reported():
+    assert detect(pull_request(comments=1), pull_request(comments=2), login="me") == ["new_comment"]
+
+
+def test_a_comment_on_a_pull_request_you_merely_review_is_left_to_its_author():
+    reviewing = {"side": "reviewing"}
+    assert detect(pull_request(comments=1, **reviewing), pull_request(comments=2, **reviewing), login="me") == []
+
+
+def test_an_answer_to_one_of_your_review_comments_is_reported_wherever_it_is():
+    reviewing = {"side": "reviewing"}
+    answered = pull_request(comments=2, lastCommentAnswers="me", **reviewing)
+    assert detect(pull_request(comments=1, **reviewing), answered, login="me") == ["new_comment"]
+
+
+def test_an_answer_to_somebody_else_is_not_yours_to_hear_about():
+    reviewing = {"side": "reviewing"}
+    answered = pull_request(comments=2, lastCommentAnswers="them", **reviewing)
+    assert detect(pull_request(comments=1, **reviewing), answered, login="me") == []

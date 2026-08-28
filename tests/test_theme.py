@@ -142,3 +142,28 @@ def channels(image) -> list[tuple]:
 def close_to(pixel: Sequence[int], wanted: Sequence[int], allowance: int = 60) -> bool:
     """Return whether a drawn pixel is recognisably one of the mark's colours, after smoothing has moved it."""
     return all(abs(drawn - asked) <= allowance for drawn, asked in zip(pixel, wanted, strict=True))
+
+
+def wcag_contrast(ink: str, ground: str) -> float:
+    """Return the WCAG contrast ratio between an ink and what it is drawn on."""
+
+    def luminance(colour: str) -> float:
+        def channel(value: int) -> float:
+            share = value / 255
+            return share / 12.92 if share <= 0.04045 else ((share + 0.055) / 1.055) ** 2.4
+
+        red, green, blue = (channel(int(colour[index : index + 2], 16)) for index in (1, 3, 5))
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    brighter, darker = sorted((luminance(ink), luminance(ground)), reverse=True)
+    return (brighter + 0.05) / (darker + 0.05)
+
+
+@pytest.mark.parametrize("name", ["heading", "text", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink", "fresh", "stale"])
+def test_every_ink_reads_at_wcag_aa_on_both_grounds(name):
+    # 4.5 to 1 is the WCAG AA floor for ordinary text, held against both surfaces an ink can be drawn on, in both
+    # palettes, so readability does not depend on a well-adjusted monitor or a forgiving theme choice.
+    for palette in (theme.DARK, theme.LIGHT):
+        for ground in (palette.background, palette.surface):
+            found = wcag_contrast(getattr(palette, name), ground)
+            assert found >= 4.5, f"{name} reads at {found:.2f}:1 on {ground} in the {'dark' if palette.dark else 'light'} palette"

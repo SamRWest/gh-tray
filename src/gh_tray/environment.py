@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TextIO
 
 from loguru import logger
 
@@ -18,6 +19,12 @@ from . import APP_NAME
 
 # What Windows calls the part of the screen a window may use, with the taskbar left out.
 SPI_GETWORKAREA = 0x0030
+# What Windows calls the display closest to a point, and the scaling a display is actually drawing at as opposed to
+# the one its hardware could manage.
+NEAREST_MONITOR = 2
+MONITOR_SCALING = 0
+# What Windows calls UTF-8, which a console has to be put into by number.
+UTF8_CODE_PAGE = 65001
 
 # Terminals tried in order on Linux: the name to look for, the flag that opens it maximised where it has one, and
 # the arguments it takes before a command. The first one present wins, except that a request to maximise prefers a
@@ -33,24 +40,38 @@ LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
 )
 
 
-def hidden_window_flags() -> dict[str, int]:
-    """Return subprocess keyword arguments that stop Windows flashing a console for a background command.
+def no_console_flag() -> int:
+    """Return the flag that stops Windows flashing up a console for a background command.
 
-    :return: flags to splat into a subprocess call, empty on platforms that need none
+    :return: the flag, or nothing to ask for on platforms that need none
     """
-    if sys.platform == "win32":
-        return {"creationflags": subprocess.CREATE_NO_WINDOW}
-    return {}
+    return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
-def capture_text() -> dict:
-    """Return subprocess keyword arguments for reading a command's output as text.
+def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    """Run a command without a console window and return what it printed.
 
     The encoding is named rather than left to the system. The GitHub tool writes UTF-8 whatever the machine's
     locale says, so on a Windows console reading it as the local codepage turns a tick into ``a-hat`` and would
     mangle any non-English pull request title on its way through.
+
+    A command that fails is returned rather than raised on: every caller here reads the exit code itself, since a
+    tool that is missing, signed out or rate limited says so on the way out.
+
+    :param command: the program and its arguments
+    :param timeout: how long to wait, or None to wait as long as it takes
+    :return: the finished command, with its output as text
     """
-    return {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace"}
+    return subprocess.run(
+        command,
+        check=False,
+        timeout=timeout,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=no_console_flag(),
+    )
 
 
 def make_dpi_aware() -> None:
@@ -73,28 +94,56 @@ def make_dpi_aware() -> None:
     logger.debug("could not ask Windows for a sharp window, text may look soft")
 
 
-def window_scaling(window_id: int) -> int | None:
-    """Return how finely the display holding a window is drawing, in dots per inch.
+def pointer_scaling() -> int | None:
+    """Return how finely the display under the pointer draws, in dots per inch.
 
-    Telling Windows this process draws at the real resolution also tells it not to rescale anything when that
-    resolution changes: a window is expected to notice and redraw itself. The toolkit used here does not, so a
-    window built at one scaling keeps those sizes and comes out tiny at a coarser one. Reading the number lets the
-    window be rebuilt instead. Locking and unlocking is enough to change it, since the display can come back
-    differently to how it went away.
+    The changes window appears where the pointer is, so that display is the one its text and spacing have to suit.
+    The number is asked of the platform rather than worked out from the toolkit's own idea of the screen, which is
+    settled when it starts and can be left behind by a display that goes away and comes back. A locked screen does
+    exactly that, which is how a window ends up drawing text for a display that is no longer there.
 
-    :param window_id: the window to ask about
     :return: dots per inch, or None where the platform cannot say
     """
     if sys.platform != "win32":
         return None
     import ctypes
+    import ctypes.wintypes
 
     try:
-        # Windows 10 and later. Anything older is left alone rather than guessed at.
-        found = int(ctypes.windll.user32.GetDpiForWindow(window_id))
+        spot = ctypes.wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
+        display = ctypes.windll.user32.MonitorFromPoint(spot, NEAREST_MONITOR)
+        across, down = ctypes.c_uint(), ctypes.c_uint()
+        # Windows 8.1 and later. Anything older is left alone rather than guessed at.
+        ctypes.windll.shcore.GetDpiForMonitor(display, MONITOR_SCALING, ctypes.byref(across), ctypes.byref(down))
     except (AttributeError, OSError):
         return None
-    return found or None
+    return across.value or None
+
+
+def cursor_position() -> tuple[int, int] | None:
+    """Return where the pointer is on screen right now, or None where the platform cannot say.
+
+    Asked of the platform directly because the caller may have no window of its own to ask through, and the moment
+    matters: a window opened half a second after a click should appear where the click was, not wherever the
+    pointer has wandered since.
+
+    Only meaningful from a process that has called :func:`make_dpi_aware`. An unaware one is handed scaled-down
+    coordinates on a scaled display, and a window placed by those lands well away from the click.
+
+    :return: the pointer's x and y in screen pixels
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    import ctypes.wintypes
+
+    spot = ctypes.wintypes.POINT()
+    try:
+        told = ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
+    except (AttributeError, OSError):
+        return None
+    return (spot.x, spot.y) if told else None
 
 
 def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
@@ -133,11 +182,22 @@ def github_auth_summary() -> str:
     github = github_cli()
     if not github:
         return "GitHub CLI (gh) not found on PATH"
-    done = subprocess.run([github, "auth", "status"], check=False, **capture_text(), **hidden_window_flags())
+    done = run_quietly([github, "auth", "status"])
     lines = (done.stdout + done.stderr).splitlines()
     summary = next((line.strip() for line in lines if "Logged in" in line), "")
     # The tool prefixes the line with a tick, which says nothing the words do not.
     return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
+
+
+def in_utf8(command: str) -> str:
+    """Return a Windows command that puts the console into UTF-8 before running.
+
+    A console starts on whatever code page the machine's region asks for, while a program that draws itself out of
+    box characters and icons writes UTF-8 regardless. The two then disagree and the drawing arrives as rubbish.
+
+    :param command: the shell command to run
+    """
+    return f"chcp {UTF8_CODE_PAGE} >nul && {command}"
 
 
 def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
@@ -155,8 +215,8 @@ def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
     if sys.platform == "win32":
         windows_terminal = shutil.which("wt")
         if windows_terminal:
-            return [windows_terminal, *(["--maximized"] if maximised else []), "--title", title, "cmd", "/c", command]
-        return ["cmd", "/c", "start", *(["/max"] if maximised else []), title, "cmd", "/k", command]
+            return [windows_terminal, *(["--maximized"] if maximised else []), "--title", title, "cmd", "/c", in_utf8(command)]
+        return ["cmd", "/c", "start", *(["/max"] if maximised else []), title, "cmd", "/k", in_utf8(command)]
     if sys.platform == "darwin":
         zoom = "\nset zoomed of front window to true" if maximised else ""
         return ["osascript", "-e", f'tell application "Terminal"\ndo script "{command}"\nactivate{zoom}\nend tell']
@@ -286,7 +346,8 @@ class SingleInstance:
     def __init__(self, path: Path) -> None:
         """:param path: the lock file, created if absent."""
         self.path = path
-        self._handle = None
+        # Held open for as long as the lock is, since closing it is what releases it.
+        self._handle: TextIO | None = None
 
     def acquire(self) -> bool:
         """Take the lock.

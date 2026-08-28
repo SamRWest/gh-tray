@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 import tkinter as tk
 import webbrowser
+from collections.abc import Callable
 from dataclasses import replace
 from tkinter import font as tkfont
 
@@ -27,7 +28,7 @@ from tksheet import Sheet
 
 from . import APP_NAME
 from .config import POPUP_LOCK_PATH, POPUP_REQUEST_PATH, load_config
-from .environment import SingleInstance, make_dpi_aware, window_scaling, work_area
+from .environment import SingleInstance, make_dpi_aware, pointer_scaling, work_area
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -38,12 +39,18 @@ from .popup import (
     Row,
     age_colour,
     glyph_for,
+    remember_column_widths,
     remember_row_seen,
+    remember_width,
+    remembered_column_widths,
+    remembered_width,
     request_refresh,
+    requested_spot,
     rows_to_show,
     snapshot_changed_at,
     sorted_rows,
     start_window,
+    who_colour,
 )
 from .theme import PALETTE, blend, chosen_style, palette
 
@@ -70,8 +77,9 @@ CORNER_HANDLE_SIZE = 14
 TABLE_TRIM = 8
 TALLEST_SHARE_OF_SCREEN = 0.55
 
-# The date is drawn on a scale of its own, so it needs finding among the columns.
+# The date and the name are each drawn on a scale of their own, so both need finding among the columns.
 DATE_COLUMN = "when"
+WHO_COLUMN = "who"
 
 # What the table widget understands as a right click. It adds the other button macOS uses for one itself, so this
 # is the same everywhere.
@@ -133,6 +141,14 @@ EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] =
 )
 
 
+def column_of(key: str) -> int:
+    """Return where a named column sits in the table.
+
+    :param key: the name a column is known by
+    """
+    return next(index for index, (name, *_rest) in enumerate(COLUMNS) if name == key)
+
+
 def cells_of(entry: Row, glyphs: bool) -> list[str]:
     """Return one row's text, in column order.
 
@@ -173,24 +189,22 @@ class Popup:
         # could legitimately occur.
         self.showing = False
         self.dismissed_at: float | None = None
+        # Where the click that last asked for the window was, which is where it comes up.
+        self.spot: tuple[int, int] | None = None
         # The pending change of mind about the window having arrived, cancelled if it goes away first.
         self.settling: str | None = None
         self.root = tk.Tk()
         self.root.withdraw()
-        # Points become the right physical size only once Tk knows the real resolution of the screen.
-        self.root.tk.call("tk", "scaling", self.root.winfo_fpixels("1i") / POINTS_PER_INCH)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.configure(background=PALETTE.border)
         self.body = tk.Frame(self.root, background=PALETTE.background)
         self.body.pack(padx=1, pady=1, fill="both", expand=True)
-        self.regular = tkfont.nametofont("TkDefaultFont").copy()
-        self.regular.configure(size=FONT_SIZE)
-        self.bold = self.regular.copy()
-        self.bold.configure(weight="bold")
-        # How finely the display was drawing when the sizes below were worked out, so a change can be noticed.
-        self.drawn_at = window_scaling(self.root.winfo_id())
+        self.apply_scaling()
+        self.prepare_fonts()
         self.build()
+        # How tall a row came out, which is the whole of what the display's scaling decides for this window.
+        self.built_for = self.row_height()
 
     def characters(self, count: int) -> int:
         """Return how wide a number of characters is in this window's font, which is what column widths are given in."""
@@ -199,6 +213,52 @@ class Popup:
     def row_height(self) -> int:
         """Return how tall one row of the table is."""
         return self.regular.metrics("linespace") + ROW_PADDING
+
+    def apply_scaling(self) -> None:
+        """Tell the toolkit how finely the display under the pointer draws.
+
+        The number is asked of the platform rather than taken from the toolkit's own reckoning of the screen, which
+        is settled when it starts and a display that goes away and comes back can leave it behind. Where the
+        platform cannot say, that reckoning is all there is.
+        """
+        # Kept for the remembered sizes, which are recorded against how finely the display was drawing at the time.
+        self.dots = pointer_scaling() or self.root.winfo_fpixels("1i")
+        self.root.tk.call("tk", "scaling", self.dots / POINTS_PER_INCH)
+
+    def prepare_fonts(self) -> None:
+        """Take fresh copies of the toolkit's own font, in the size and at the scaling this window draws in.
+
+        Fresh copies rather than resized ones: a font already made carries the size in pixels it was made with, and
+        changing the scaling underneath it does not move that. A copy taken afterwards measures itself anew, so the
+        same display always gives the same sizes however many times this has been done.
+        """
+        self.regular = tkfont.nametofont("TkDefaultFont").copy()
+        self.regular.configure(size=FONT_SIZE)
+        self.bold = self.regular.copy()
+        self.bold.configure(weight="bold")
+
+    def text_height(self) -> int:
+        """Return how tall a line of this window's text would be, drawn at the display's current scaling."""
+        measuring = tkfont.nametofont("TkDefaultFont").copy()
+        measuring.configure(size=FONT_SIZE)
+        return measuring.metrics("linespace") + ROW_PADDING
+
+    def suit_the_display(self) -> None:
+        """Put the window back in step with the display, which can change while the window is hidden away.
+
+        Column widths, row heights and the size of the window are all measured from the text once, when the window
+        is built. When the display starts drawing text at another size they are all wrong together, and the only
+        way back is to build the contents again.
+        """
+        self.apply_scaling()
+        if self.text_height() == self.built_for:
+            return
+        logger.info("the display now wants rows {} tall rather than {}, building again", self.text_height(), self.built_for)
+        for part in self.body.winfo_children():
+            part.destroy()
+        self.prepare_fonts()
+        self.build()
+        self.built_for = self.row_height()
 
     def heading_text(self) -> str:
         """Return the line at the top of the window, which counts the rows not yet marked seen."""
@@ -229,8 +289,13 @@ class Popup:
         strip.pack(fill="x", padx=12, pady=(8, 6))
         self.name = name = tk.Label(strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold)
         name.pack(side="left")
-        self.close_mark = close = tk.Label(strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2")
+        self.close_mark = close = tk.Label(
+            strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2", padx=6
+        )
         close.pack(side="right")
+        # Brightening under the pointer, so the mark answers before it is clicked.
+        close.bind("<Enter>", lambda _event: close.configure(foreground=PALETTE.heading))
+        close.bind("<Leave>", lambda _event: close.configure(foreground=PALETTE.muted))
         # Bound to the method itself rather than through a lambda, so a name that no longer exists fails here while
         # the window is being built rather than silently doing nothing when the mark is clicked.
         close.bind("<Button-1>", self.hide)
@@ -272,10 +337,26 @@ class Popup:
         self.sheet.pack(fill="both", expand=True, padx=6)
         # Only what a reader needs: resizing a column, moving about, and copying a cell out.
         self.sheet.enable_bindings("single_select", "column_width_resize", "double_click_column_resize", "arrowkeys", "copy")
-        self.sheet.set_column_widths(iter([self.characters(width) for _key, _heading, width, _stretches in COLUMNS]))
+        self.sheet.set_column_widths(iter(self.column_widths()))
         self.paint()
         self.sheet.bind("<Button-1>", self.on_click, add="+")
         self.sheet.bind(RIGHT_CLICK, self.on_right_click)
+        self.sheet.extra_bindings("column_width_resize", self.on_column_dragged)
+        # The widget asks for a fixed minimum height of its own, however few rows it holds, which padded the window
+        # with empty table on a quiet day. Its height is decided here from the rows, so its own say is switched off
+        # and it takes whatever it is given.
+        self.sheet.grid_propagate(False)
+        self.sheet.configure(height=self.table_height())
+
+    def column_widths(self) -> list[int]:
+        """Return each column's width in pixels: the one the user last dragged it to, or its stated starting size."""
+        dragged = remembered_column_widths(self.dots)
+        return [dragged.get(key) or self.characters(width) for key, _heading, width, _stretches in COLUMNS]
+
+    def on_column_dragged(self, _event: object = None) -> None:
+        """Remember every column's width, now that the user has dragged one of them."""
+        widths = {key: round(width) for (key, *_rest), width in zip(COLUMNS, self.sheet.get_column_widths(), strict=True)}
+        remember_column_widths(widths, self.dots)
 
     def paint(self) -> None:
         """Colour every cell.
@@ -284,14 +365,20 @@ class Popup:
         That is the only thing that dims it: how old something is has a scale of its own in the date column, which
         runs from just-happened to long-forgotten and reads as a gradient down the window. Dimming for age as well
         left two rows of the same sort looking different for a reason nobody could name.
+
+        The name has a colour of its own too, dealt to it and kept, so the same person reads as the same colour in
+        every row. It dims with the rest of the row once seen, unlike the date, whose scale is the point of it.
         """
         self.sheet.dehighlight_cells(all_=True)
-        date_column = next(index for index, (key, *_rest) in enumerate(COLUMNS) if key == DATE_COLUMN)
+        date_column = column_of(DATE_COLUMN)
+        who_column = column_of(WHO_COLUMN)
         for row, entry in enumerate(self.entries):
-            body = blend(entry.colour, PALETTE.background, SEEN_STRENGTH) if entry.seen else entry.colour
-            date = age_colour(entry.at)
+            inks = {date_column: age_colour(entry.at), who_column: who_colour(entry.who)}
             for column in range(len(COLUMNS)):
-                self.sheet.highlight_cells(row=row, column=column, fg=date if column == date_column else body)
+                ink = inks.get(column, entry.colour)
+                if entry.seen and column != date_column:
+                    ink = blend(ink, PALETTE.background, SEEN_STRENGTH)
+                self.sheet.highlight_cells(row=row, column=column, fg=ink)
 
     def refill(self) -> None:
         """Put the rows into the table in their current order, and colour them again."""
@@ -384,15 +471,17 @@ class Popup:
         self.refresh_button = tk.Label(
             strip,
             text="Refresh",
-            background=PALETTE.surface,
+            background=PALETTE.selection,
             foreground=PALETTE.heading,
             font=self.bold,
             cursor="hand2",
-            padx=10,
-            pady=2,
+            padx=12,
+            pady=3,
         )
-        self.refresh_button.pack(side="right", padx=12, pady=4)
+        self.refresh_button.pack(side="right", padx=12, pady=6)
         self.refresh_button.bind("<Button-1>", lambda _event: self.refresh())
+        self.refresh_button.bind("<Enter>", lambda _event: self.refresh_button.configure(background=blend(PALETTE.selection, PALETTE.heading, 0.85)))
+        self.refresh_button.bind("<Leave>", lambda _event: self.refresh_button.configure(background=PALETTE.selection))
 
     def refresh(self) -> None:
         """Ask for a fresh look at GitHub, and keep re-reading until it arrives.
@@ -438,8 +527,36 @@ class Popup:
             handle = tk.Frame(self.root, background=PALETTE.border, cursor=cursor)
             handle.place(**place)
             handle.bind("<Button-1>", self.start_drag)
-            handle.bind("<B1-Motion>", lambda event, moving=edges: self.resize_edges(event, moving))
+            handle.bind("<B1-Motion>", self.dragger(edges))
+            handle.bind("<ButtonRelease-1>", self.on_resize_finished)
             handle.lift()
+
+    def on_resize_finished(self, _event: object = None) -> None:
+        """Remember the width the user dragged the window to, once the drag lets go.
+
+        On the release rather than during the drag, so a resize is one write and not hundreds. A drag that moved
+        only the height says nothing worth keeping: the height follows the rows on the next showing, so keeping it
+        would only ever add blank table or hide rows.
+        """
+        _x, _y, was_width, _was_height = self.drag_origin
+        width = self.root.winfo_width()
+        if width != was_width:
+            remember_width(width, self.dots)
+
+    def dragger(self, edges: tuple[bool, bool, bool, bool]) -> Callable[[tk.Event], None]:
+        """Return the handler that resizes the window by one particular edge or corner.
+
+        Built here rather than in the loop that binds it, so each handler keeps the edges it was made for instead
+        of all of them sharing whichever came last.
+
+        :param edges: which of the left, top, right and bottom edges this handle moves
+        """
+
+        def drag(event: tk.Event) -> None:
+            """Resize the window by however far this handle has been dragged."""
+            self.resize_edges(event, edges)
+
+        return drag
 
     def start_drag(self, event: tk.Event) -> None:
         """Remember where a drag began, and how big and where the window was when it did."""
@@ -486,14 +603,21 @@ class Popup:
         self.root.withdraw()
 
     def on_focus_out(self, *_) -> None:
-        """Put the window away when the user clicks something else, remembering that this is why it went.
+        """Consider putting the window away, now that something has taken the focus from it.
 
-        Coming up takes the focus in a couple of steps, and the window is not treated as shown until that has
-        settled, so its own arrival does not dismiss it.
+        Clicking a heading or a row hands the focus to that part of the window, which the toolkit reports exactly
+        as it reports the focus leaving for another application. Asking where the focus ended up tells the two
+        apart, and asking once the move has finished is what makes the answer trustworthy.
         """
         if self.showing:
-            self.hide()
-            self.dismissed_at = time.monotonic()
+            self.root.after_idle(self.hide_if_the_focus_left)
+
+    def hide_if_the_focus_left(self) -> None:
+        """Put the window away if the focus has gone to another application rather than into this window."""
+        if not self.showing or self.root.focus_displayof() is not None:
+            return
+        self.hide()
+        self.dismissed_at = time.monotonic()
 
     def preferred_width(self) -> int:
         """Return the width every column needs at its stated size, capped so the window stays a popup."""
@@ -524,28 +648,58 @@ class Popup:
         return work_area((width, height))
 
     def place(self) -> None:
-        """Put the window near the pointer, sized to its contents and kept clear of the desktop's own bars.
+        """Put the window by the click that asked for it, sized to its contents and clear of the desktop's own bars.
+
+        By the click, not the pointer: the window comes up half a second after the click that asked for it, and a
+        pointer already moving would otherwise drag the window off to wherever it had got to.
 
         The height follows how many rows there actually are, so a quiet day gets a small window rather than a tall
-        one mostly full of nothing.
+        one mostly full of nothing. That holds only until the user drags the window to a size of their own, which
+        is then used instead, however many rows there are.
         """
         self.root.update_idletasks()
         usable_width, usable_height = self.usable_screen()
         tallest = int(usable_height * TALLEST_SHARE_OF_SCREEN)
         if hasattr(self, "sheet"):
-            self.sheet.configure(height=min(self.table_height(), tallest))
+            # The cap leaves room for everything around the table. Capping the table alone lets the whole window
+            # outgrow the ceiling, and the desktop answers that by quietly unpacking whatever no longer fits,
+            # which is how a window can lose its bottom strip.
+            around = self.root.winfo_reqheight() - self.sheet.winfo_reqheight()
+            self.sheet.configure(height=min(self.table_height(), tallest - around))
             self.root.update_idletasks()
-        width = min(max(MINIMUM_WIDTH, self.preferred_width()), usable_width - 2 * EDGE_MARGIN)
-        height = min(max(MINIMUM_HEIGHT, self.root.winfo_reqheight()), tallest)
-        left = min(max(EDGE_MARGIN, self.root.winfo_pointerx() - width + POINTER_OFFSET), usable_width - width - EDGE_MARGIN)
-        # The window sits above the pointer, and never below what the desktop says is usable, so a click low on the
+        width, height = self.wanted_size(usable_width, usable_height, tallest)
+        at_x, at_y = self.spot or (self.root.winfo_pointerx(), self.root.winfo_pointery())
+        left = min(max(EDGE_MARGIN, at_x - width + POINTER_OFFSET), usable_width - width - EDGE_MARGIN)
+        # The window sits above the click, and never below what the desktop says is usable, so a click low on the
         # screen does not put it behind the taskbar.
-        top = min(max(EDGE_MARGIN, self.root.winfo_pointery() - height - POINTER_GAP), usable_height - height - EDGE_MARGIN)
+        top = min(max(EDGE_MARGIN, at_y - height - POINTER_GAP), usable_height - height - EDGE_MARGIN)
         self.root.geometry(f"{width}x{height}+{int(left)}+{int(top)}")
 
-    def show(self) -> None:
-        """Bring the window up beside the pointer, with whatever is currently waiting."""
+    def wanted_size(self, usable_width: int, usable_height: int, tallest: int) -> tuple[int, int]:
+        """Return how big the window should come up.
+
+        The width is the one the user dragged it to, where they have, kept on the screen since it may have been
+        dragged out on a larger display than this one. The height always follows the rows: snug around a few, and
+        no more than its ceiling over many.
+
+        :param usable_width: how wide the screen is with the desktop's own bars left out
+        :param usable_height: the same for its height
+        :param tallest: the most height the window may take
+        """
+        dragged = remembered_width(self.dots)
+        wanted = dragged if dragged else self.preferred_width()
+        width = min(max(MINIMUM_WIDTH, wanted), usable_width - 2 * EDGE_MARGIN)
+        height = min(max(MINIMUM_HEIGHT, self.root.winfo_reqheight()), tallest)
+        return width, height
+
+    def show(self, spot: tuple[int, int] | None = None) -> None:
+        """Bring the window up beside a click, with whatever is currently waiting.
+
+        :param spot: where on screen the click that asked was, or None to use the pointer
+        """
+        self.spot = spot
         self.dismissed_at = None
+        self.suit_the_display()
         self.reload()
         self.place()
         self.root.deiconify()
@@ -596,11 +750,12 @@ class Popup:
             POPUP_REQUEST_PATH.unlink(missing_ok=True)
             self.hide()
             return
-        if self.drawn_wrongly():
+        if self.theme_changed():
             self.hand_over()
             return
+        spot = requested_spot()
         POPUP_REQUEST_PATH.unlink(missing_ok=True)
-        self.show()
+        self.show(spot)
 
     def just_dismissed(self) -> bool:
         """Return whether losing the focus has this moment put the window away.
@@ -611,20 +766,13 @@ class Popup:
         """
         return self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS
 
-    def drawn_wrongly(self) -> bool:
-        """Return whether the window can no longer be shown as it stands.
+    def theme_changed(self) -> bool:
+        """Return whether the desktop or the settings now ask for different colours than the window was drawn in.
 
-        Both the colours and the sizes are settled as the window is built and reach far enough into it that
-        changing either afterwards is not worth the tangle. Either changing means starting again.
+        Sizes can be put right where the window stands, but colours cannot: they are read once, as the module
+        loads, and reach into every part of it.
         """
-        if palette(chosen_style()).dark != PALETTE.dark:
-            logger.info("the theme changed")
-            return True
-        scaling = window_scaling(self.root.winfo_id())
-        if scaling is not None and self.drawn_at is not None and scaling != self.drawn_at:
-            logger.info("the display went from {} to {} dots per inch", self.drawn_at, scaling)
-            return True
-        return False
+        return palette(chosen_style()).dark != PALETTE.dark
 
     def hand_over(self) -> None:
         """Give way to a freshly built window, drawn for how the desktop is now.
