@@ -89,9 +89,9 @@ yourself are left out, since your own comment is not news to you, though your ow
 **Refresh** asks the tray to look again, since it is the only thing allowed to poll.
 
 Newest is at the top. Click a column heading to sort by it and again to turn the order around. It lists 20 rows by
-default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window wears
-the desktop's own frame: move it, resize it and close it as you would any window. Press Escape, click the close button,
-or click the tray icon again to put it away.
+default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window has no
+frame: drag its title strip to move it and any edge or corner to resize it, which the desktop does as it would for any
+window. Press Escape, click the close mark, click the tray icon again, or click anything else on screen to put it away.
 
 A width you drag, of the window or of a column, is kept across showings and restarts, in characters of the text rather
 than in pixels. Ctrl and the mouse wheel make the text larger or smaller in every window at once, and Ctrl+0 puts it

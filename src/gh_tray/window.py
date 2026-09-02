@@ -4,27 +4,44 @@ Each cell is coloured on its own: a row says what it is in one colour and how st
 has to give way to the other. Clicking a row opens it on GitHub. Right-clicking marks it seen, and right-clicking
 again marks it unseen.
 
-The window is built once, when the tray starts, and hidden rather than closed, so showing it costs nothing. It wears
-the desktop's own frame, so moving, resizing and closing it are the desktop's business. What is decided here is
-where it comes up, how tall it is, and what it remembers of the width it was dragged to.
+The window is built once, when the tray starts, and hidden rather than closed, so showing it costs nothing.
+
+It has no frame, so the little a frame provides is supplied here: a strip at the top to drag it by, edges to resize
+it from, and a close mark. The dragging and resizing themselves are handed to the desktop, which does them as it
+does for any window. Escape, the close mark, a click on the tray icon, or a click anywhere else on screen put it
+away.
 """
 
 from __future__ import annotations
 
+import time
 import webbrowser
 from dataclasses import replace
 
 from loguru import logger
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, Qt, Signal
-from PySide6.QtGui import QBrush, QCloseEvent, QColor, QGuiApplication, QIcon, QKeyEvent, QMouseEvent, QResizeEvent
+from PySide6.QtGui import (
+    QBrush,
+    QCloseEvent,
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -75,6 +92,15 @@ SHORTEST_COLUMN = 4
 TALLEST_SHARE_OF_SCREEN = 0.55
 # What a row has around its text, so rows read as rows rather than as lines.
 ROW_PADDING = 10
+# How wide the border is that the window can be resized from. It is also the margin around the contents, so that
+# a press anywhere in the margin takes an edge.
+GRIP = 8
+# How long the window takes to finish coming up and settle on the focus. Until then a loss of focus is part of it
+# arriving rather than the user clicking elsewhere, and dismissing on that would mean it never appeared at all.
+FOCUS_SETTLE_SECONDS = 0.3
+# How soon after the window loses the focus a click on the tray icon counts as the click that took it. That click
+# means put the window away, and answering it by showing the window again would leave it having done nothing.
+TOGGLE_WITHIN_SECONDS = 0.5
 
 # The date, the status and the two name columns are each drawn on a scale of their own, so they need finding among
 # the columns.
@@ -90,7 +116,10 @@ STATUS_COLUMN = "status"
 WIDTH_KEY = "window/characters"
 COLUMN_KEY = "columns/{}/characters"
 
-HINT = "Click a row to open it, right-click to mark it seen. Click a heading to sort. Ctrl and the wheel size the text."
+HINT = (
+    "Click a row to open it, right-click to mark it seen. Click a heading to sort. "
+    "Drag the title to move, an edge to resize. Ctrl and the wheel size the text."
+)
 
 
 def column_of(key: str) -> int:
@@ -136,7 +165,11 @@ class ChangesWindow(QWidget):
         :param entries: the lines to list, in the order they should appear
         :param layout: where remembered sizes are kept, defaulting to the application's own layout file
         """
-        super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        super().__init__(
+            None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        )
+        # So the pointer changes shape over an edge before anything is pressed.
+        self.setMouseTracking(True)
         # Everything on offer, and the part of it the chosen filters let through, which is what the table shows.
         # Marks are written to both, so switching filters does not forget them.
         self.all_entries = list(entries)
@@ -154,6 +187,11 @@ class ChangesWindow(QWidget):
         self.awaiting_poll = False
         # Whether the columns are being sized by this code, whose sizes are not the user's and are not remembered.
         self.fitting = False
+        # When the window last came up, and when a click elsewhere last put it away. No sentinel number for the
+        # second: the reference point of a monotonic clock is undefined, so any number chosen to mean "never" could
+        # legitimately occur.
+        self.shown_at = 0.0
+        self.dismissed_at: float | None = None
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
@@ -164,9 +202,10 @@ class ChangesWindow(QWidget):
         QGuiApplication.styleHints().colorSchemeChanged.connect(self.on_scheme_changed)
 
     def build(self) -> None:
-        """Lay out the table, the strip of controls under it, and the hint at the bottom."""
+        """Lay out the title strip, the table, the strip of controls under it, and the hint at the bottom."""
         column = QVBoxLayout(self)
-        column.setContentsMargins(8, 8, 8, 4)
+        column.setContentsMargins(GRIP, GRIP, GRIP, GRIP)
+        column.addWidget(self.title_strip())
         self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
@@ -193,6 +232,27 @@ class ChangesWindow(QWidget):
         column.addLayout(self.controls())
         self.hint = QLabel(HINT, self)
         column.addWidget(self.hint)
+
+    def title_strip(self) -> QWidget:
+        """Lay out the strip at the top: it names the window, is what it is dragged by, and carries the close mark."""
+        self.strip = QWidget(self)
+        self.strip.setCursor(Qt.CursorShape.SizeAllCursor)
+        row = QHBoxLayout(self.strip)
+        row.setContentsMargins(4, 0, 0, 2)
+        self.name = QLabel(self.heading_text(), self.strip)
+        bold = self.name.font()
+        bold.setBold(True)
+        self.name.setFont(bold)
+        row.addWidget(self.name)
+        row.addStretch(1)
+        self.close_mark = QToolButton(self.strip)
+        self.close_mark.setAutoRaise(True)
+        self.close_mark.setCursor(Qt.CursorShape.ArrowCursor)
+        self.close_mark.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        self.close_mark.setToolTip("Put the window away")
+        self.close_mark.clicked.connect(self.hide)
+        row.addWidget(self.close_mark)
+        return self.strip
 
     def controls(self) -> QHBoxLayout:
         """Lay out the quick filters, the closed toggle, and the dashboard and refresh buttons."""
@@ -335,6 +395,7 @@ class ChangesWindow(QWidget):
                 self.table.setItem(row, column, QTableWidgetItem(text))
         self.paint()
         self.setWindowTitle(self.heading_text())
+        self.name.setText(self.heading_text())
 
     def paint(self) -> None:
         """Colour every cell.
@@ -581,6 +642,8 @@ class ChangesWindow(QWidget):
             usable.top() + EDGE_MARGIN, min(spot.y() - height - POINTER_GAP, usable.bottom() - height - EDGE_MARGIN)
         )
         self.place(QRect(left, top, width, height))
+        self.shown_at = time.monotonic()
+        self.dismissed_at = None
         self.show()
         self.raise_()
         self.activateWindow()
@@ -611,12 +674,19 @@ class ChangesWindow(QWidget):
     def toggle(self, spot: QPoint) -> None:
         """Show the window by a click, or put it away if it is already up.
 
+        Clicking the tray icon while the window is up takes the focus from it, which puts it away before the click
+        is heard here. Answering that click by showing the window again would leave it having done nothing at all,
+        so a click this soon after a dismissal is taken as the one that did the dismissing.
+
         :param spot: where on screen the click was
         """
         if self.isVisible():
             self.hide()
-        else:
-            self.show_by(spot)
+            return
+        if self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS:
+            self.dismissed_at = None
+            return
+        self.show_by(spot)
 
     def open(self, url: str) -> None:
         """Open a change on GitHub and put the window away.
@@ -649,6 +719,110 @@ class ChangesWindow(QWidget):
         if self.isVisible() and width != self.placed_width and not forced:
             self.placed_width = width
             self.remember(WIDTH_KEY, width)
+
+    def edges_at(self, spot: QPoint) -> Qt.Edge:
+        """Return which edges of the window a point is within the grip of, which is none for most of it.
+
+        :param spot: a point in the window's own coordinates
+        """
+        edges = Qt.Edge(0)
+        if spot.x() < GRIP:
+            edges |= Qt.Edge.LeftEdge
+        if spot.x() >= self.width() - GRIP:
+            edges |= Qt.Edge.RightEdge
+        if spot.y() < GRIP:
+            edges |= Qt.Edge.TopEdge
+        if spot.y() >= self.height() - GRIP:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def start_system_move(self) -> None:
+        """Hand the desktop a drag of the whole window, which it carries on until the button is released."""
+        handle = self.windowHandle()
+        if handle is None or not handle.startSystemMove():
+            logger.debug("this desktop does not move a window on the application's behalf")
+
+    def start_system_resize(self, edges: Qt.Edge) -> None:
+        """Hand the desktop a resize of the window by some of its edges.
+
+        :param edges: which edges are being dragged
+        """
+        handle = self.windowHandle()
+        if handle is None or not handle.startSystemResize(edges):
+            logger.debug("this desktop does not resize a window on the application's behalf")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Start a move from the title strip or a resize from an edge. Presses anywhere else are the contents' own.
+
+        :param event: the press
+        """
+        spot = event.position().toPoint()
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        edges = self.edges_at(spot)
+        if edges:
+            self.start_system_resize(edges)
+        elif self.strip.geometry().contains(spot):
+            self.start_system_move()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Shape the pointer for the edge it is over, so the window says where it can be resized from.
+
+        :param event: the movement
+        """
+        edges = self.edges_at(event.position().toPoint())
+        shapes = {
+            Qt.Edge.LeftEdge | Qt.Edge.TopEdge: Qt.CursorShape.SizeFDiagCursor,
+            Qt.Edge.RightEdge | Qt.Edge.BottomEdge: Qt.CursorShape.SizeFDiagCursor,
+            Qt.Edge.RightEdge | Qt.Edge.TopEdge: Qt.CursorShape.SizeBDiagCursor,
+            Qt.Edge.LeftEdge | Qt.Edge.BottomEdge: Qt.CursorShape.SizeBDiagCursor,
+            Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
+            Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+            Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
+            Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+        }
+        shape = shapes.get(edges)
+        if shape is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(shape)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        """Put the pointer back to its usual shape once it leaves the window.
+
+        :param event: the leaving
+        """
+        self.unsetCursor()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        """Draw a line around the window, since without a frame nothing else says where it ends.
+
+        :param event: what needs painting
+        """
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(self.palette().mid().color())
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.end()
+
+    def event(self, event: QEvent) -> bool:
+        """Put the window away when something else takes the focus, once it has settled after coming up.
+
+        A window with no frame has no other way of being clicked away: clicking anything else on screen is what
+        takes the focus. A loss of focus in the window's first moments is part of its arriving, not a dismissal.
+
+        :param event: any event the window is sent
+        """
+        deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
+        if deactivated and time.monotonic() - self.shown_at >= FOCUS_SETTLE_SECONDS:
+            self.hide()
+            self.dismissed_at = time.monotonic()
+        return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Put the window away on Escape. Every other key is the table's.
