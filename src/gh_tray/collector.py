@@ -7,6 +7,9 @@ The pull request search asks for the last commit's author, the most recent revie
 comment's author alongside the state of each pull request, because those are what name the person behind a change.
 The notifications feed identifies a mention only by the comment it points at, so the first few of those are looked
 up one by one.
+
+Recently closed pull requests are collected too, kept apart from the open ones: they raise no notifications, but a
+row about one can then say it is merged or closed rather than guessing.
 """
 
 from __future__ import annotations
@@ -31,6 +34,13 @@ CONCURRENT_LOOKUPS = 4
 
 AUTHORED = "is:pr is:open author:@me archived:false"
 REVIEWING = "is:pr is:open review-requested:@me archived:false"
+# Closed pull requests the user had a hand in, so a row about one can say it is finished rather than guessing.
+# Asked for newest first, because the search stops after a few pages and GitHub's best-match order can drop a
+# freshly closed pull request while keeping old history. Newest first, the cap only ever drops the oldest.
+CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
+# How far back to look for closed pull requests, regardless of the configured age cutoff. Rows referencing one
+# live in the event log, which is trimmed to a short tail, so anything older than this has left the window.
+CLOSED_LOOKBACK_DAYS = 30
 
 
 def search_for(base: str, max_age_days: int, now: datetime) -> str:
@@ -54,7 +64,7 @@ query($q: String!, $cursor: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt totalCommentsCount mergeable reviewDecision
+        number title url state isDraft createdAt updatedAt totalCommentsCount mergeable reviewDecision
         repository { nameWithOwner }
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
@@ -143,7 +153,7 @@ def normalise(node: dict, side: str) -> dict:
     """Turn one pull request from GitHub's shape into the flat record the rest of the application reads.
 
     :param node: a pull request as GitHub returned it
-    :param side: ``authored`` or ``reviewing``
+    :param side: ``authored``, ``reviewing`` or ``closed``
     """
     repo = nested(node, "repository", "nameWithOwner")
     number = node.get("number")
@@ -154,6 +164,7 @@ def normalise(node: dict, side: str) -> dict:
         "number": number,
         "title": node.get("title") or "",
         "url": node.get("url") or "",
+        "state": node.get("state") or "OPEN",
         "isDraft": bool(node.get("isDraft")),
         "createdAt": node.get("createdAt") or "",
         "updatedAt": node.get("updatedAt") or "",
@@ -211,6 +222,21 @@ def comment_author(comment_url: str) -> str:
     return nested(comment, "user", "login") if isinstance(comment, dict) else ""
 
 
+def thread_author(subject_url: str) -> str:
+    """Return whose thread a notification is about, or nothing if it cannot be read.
+
+    :param subject_url: the thread's address on GitHub's interface
+    """
+    if not subject_url:
+        return ""
+    try:
+        thread = api(subject_url.replace("https://api.github.com/", ""))
+    except GitHubError as error:
+        logger.warning("could not find out whose thread a mention is on: {}", error)
+        return ""
+    return nested(thread, "user", "login") if isinstance(thread, dict) else ""
+
+
 def collect_mentions(since: str) -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
@@ -220,24 +246,33 @@ def collect_mentions(since: str) -> list[dict]:
     if not isinstance(feed, list):
         return []
     raised = [notification for notification in feed if notification.get("reason") in ("mention", "team_mention")]
-    # One request each to find out who wrote them, so only the first few are traced and those go out together.
+    # One request each to find out who wrote them and whose thread it is, so only the first few are traced and
+    # those go out together. Whose thread it is cannot come from the poll's own lists: a mention often lands on a
+    # pull request the user neither wrote nor reviews, or on one already closed.
     traced = [(notification.get("subject") or {}).get("latest_comment_url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
+    threads = [(notification.get("subject") or {}).get("url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
     with ThreadPoolExecutor(max_workers=CONCURRENT_LOOKUPS, thread_name_prefix="gh-tray-mentions") as pool:
         authors = list(pool.map(comment_author, traced))
+        owners = list(pool.map(thread_author, threads))
     authors += [""] * (len(raised) - len(authors))
+    owners += [""] * (len(raised) - len(owners))
 
     mentions = []
-    for notification, actor in zip(raised, authors, strict=True):
+    for notification, actor, owner in zip(raised, authors, owners, strict=True):
         subject = notification.get("subject") or {}
+        address = subject.get("url") or ""
         mentions.append(
             {
                 "repo": nested(notification, "repository", "full_name"),
+                # The number is the tail of the thread's address, which is the one place the feed carries it.
+                "number": address.rstrip("/").rsplit("/", 1)[-1] if address.rstrip("/").rsplit("/", 1)[-1].isdigit() else "",
                 "title": subject.get("title") or "",
                 "type": subject.get("type") or "",
                 "reason": notification.get("reason") or "mention",
                 "updatedAt": notification.get("updated_at") or "",
-                "url": page_url(subject.get("url") or ""),
+                "url": page_url(address),
                 "actor": actor,
+                "author": owner,
             }
         )
     return mentions
@@ -260,17 +295,20 @@ def collect(config: dict) -> tuple[dict | None, str]:
     cutoff = config.get("max_age_days", 0)
     authored_search = search_for(AUTHORED, cutoff, started)
     reviewing_search = search_for(REVIEWING, cutoff, started)
+    closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started)
     try:
-        # The four askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
+        # The askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
         # they go out together. The poll then takes about as long as its slowest part rather than their sum.
         with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
             signed_in = pool.submit(viewer)
             own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
             to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
+            finished = pool.submit(search_pull_requests, SEARCH_QUERY, closed_search)
             mentioning = pool.submit(collect_mentions, since)
             signed_in_as = signed_in.result()
             authored = [normalise(node, "authored") for node in own.result()]
             reviewing = [normalise(node, "reviewing") for node in to_review.result()]
+            closed = [normalise(node, "closed") for node in finished.result()]
             mentions = mentioning.result()
     except GitHubError as error:
         write_text_atomic(ERROR_LOG_PATH, f"{started.isoformat()}\n{error}\n")
@@ -281,9 +319,10 @@ def collect(config: dict) -> tuple[dict | None, str]:
     reviewing, hidden_reviewing = drop_stale(reviewing, cutoff, started)
     write_json_atomic(STATE_PATH, {"lastRunAt": started.strftime(TIMESTAMP_FORMAT)})
     logger.info(
-        "collected {} authored and {} awaiting review, {} mention(s), {} hidden as stale",
+        "collected {} authored and {} awaiting review, {} closed, {} mention(s), {} hidden as stale",
         len(authored),
         len(reviewing),
+        len(closed),
         len(mentions),
         hidden_authored + hidden_reviewing,
     )
@@ -294,5 +333,6 @@ def collect(config: dict) -> tuple[dict | None, str]:
         "viewer": signed_in_as,
         "authored": authored,
         "reviewing": reviewing,
+        "closed": closed,
         "mentions": mentions,
     }, ""

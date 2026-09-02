@@ -67,6 +67,35 @@ def test_a_pull_request_commented_on_only_in_the_margin_still_names_who_did_it()
     assert collector.normalise(margin_only, "authored")["lastCommentBy"] == "MattAmos"
 
 
+def test_the_state_of_a_pull_request_travels_through():
+    assert collector.normalise(node(), "authored")["state"] == "OPEN"
+    assert collector.normalise(node(state="MERGED"), "closed")["state"] == "MERGED"
+
+
+def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkeypatch, tmp_path):
+    searches: list[str] = []
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since: [])
+
+    def fake_search(_query: str, q: str) -> list[dict]:
+        searches.append(q)
+        return [node(state="MERGED")] if "is:closed" in q else []
+
+    monkeypatch.setattr(collector, "search_pull_requests", fake_search)
+    digest, error = collector.collect({"max_age_days": 365})
+    assert error == "" and digest is not None
+    closed_search = next(q for q in searches if "is:closed" in q)
+    # Newest first and bounded to its own short window, whatever the age cutoff: the search stops after a few
+    # pages, and either omission would let a freshly closed pull request fall off the end of the results.
+    assert "sort:updated-desc" in closed_search
+    stamp = closed_search.rsplit("updated:>", 1)[1].split()[0]
+    window = datetime.now(UTC) - datetime.strptime(stamp, "%Y-%m-%d").replace(tzinfo=UTC)
+    assert window <= timedelta(days=collector.CLOSED_LOOKBACK_DAYS + 1)
+    assert [entry["side"] for entry in digest["closed"]] == ["closed"]
+    assert digest["closed"][0]["state"] == "MERGED"
+
+
 def test_whichever_of_the_two_came_last_is_the_one_named():
     later_review = node(reviews=margin("reviewer", "2026-05-31T00:00:00Z"))
     assert collector.normalise(later_review, "authored")["lastCommentBy"] == "reviewer"
@@ -270,3 +299,25 @@ def test_something_that_is_not_a_pull_request_is_ignored(monkeypatch):
     mixed = {"search": {"nodes": [node(), {}], "pageInfo": {"hasNextPage": False}}}
     monkeypatch.setattr(github, "graphql", lambda _query, _variables: mixed)
     assert len(github.search_pull_requests("query", "is:pr")) == 1
+
+
+def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
+    feed = [
+        {
+            "reason": "mention",
+            "repository": {"full_name": "acme/widget"},
+            "subject": {"title": "look at this", "url": "https://api.github.com/repos/acme/widget/pulls/217", "type": "PullRequest"},
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "reason": "team_mention",
+            "repository": {"full_name": "acme/widget"},
+            "subject": {"title": "a discussion with no number", "url": "https://api.github.com/repos/acme/widget", "type": "Repository"},
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(collector, "api", lambda _path: feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
+    found = collector.collect_mentions("2026-01-01T00:00:00Z")
+    assert found[0]["number"] == "217"
+    assert found[1]["number"] == ""

@@ -241,7 +241,17 @@ def test_a_mention_has_a_repository_but_no_number():
 
 def test_every_column_has_a_heading_and_a_width():
     assert all(isinstance(width, int) and width > 0 for _key, _heading, width, _stretches in popup.COLUMNS)
-    assert [heading for _key, heading, _width, _stretches in popup.COLUMNS] == ["Change", "Repository", "PR", "Title", "Who", "When"]
+    assert [heading for _key, heading, _width, _stretches in popup.COLUMNS] == [
+        "Change",
+        "Org",
+        "Repo",
+        "PR",
+        "Status",
+        "Title",
+        "Author",
+        "Who",
+        "When",
+    ]
 
 
 def test_one_column_takes_the_space_a_resize_adds():
@@ -462,3 +472,114 @@ def test_names_spread_across_the_colours_rather_than_sharing_one():
 
 def test_a_missing_name_gets_the_quiet_ink():
     assert popup.who_colour("") == popup.PALETTE.muted
+
+
+def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):
+    store(event_log, waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg"))
+    events.append_events(
+        events.detect_pull_request_events(
+            {"authored:acme/gadget#7": dict(waiting(7, side="authored", author="emily"))},
+            {"authored:acme/gadget#7": dict(waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg"))},
+            events.utc_now(),
+        )
+    )
+    found = popup.rows_to_show(10)[0]
+    assert (found.author, found.who, found.role) == ("emily", "dlg", "author")
+
+
+def test_a_mention_row_recorded_without_an_author_is_filled_from_the_last_poll(event_log):
+    entry = waiting(9, side="authored", author="emily")
+    store(event_log, entry)
+    events.append_events(
+        [
+            {
+                "at": events.utc_now(),
+                "kind": "mention",
+                "key": "acme/gadget",
+                "repo": "acme/gadget",
+                "number": "",
+                "title": "look",
+                "url": entry["url"],
+                "detail": "mention",
+                "actor": "dlg",
+            }
+        ]
+    )
+    found = next(row for row in popup.rows_to_show(10) if row.label == "Mentioned")
+    assert found.author == "emily"
+    assert found.number == "#9", "the number is the tail of the page the row leads to"
+
+
+def test_the_quick_filters_keep_only_their_own_hat():
+    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, role=role) for role in ("author", "reviewer", "mention")]
+    assert [popup.role_matches(row, "all") for row in rows] == [True, True, True]
+    assert [popup.role_matches(row, "author") for row in rows] == [True, False, False]
+    assert [popup.role_matches(row, "reviewer") for row in rows] == [False, True, False]
+    assert [popup.role_matches(row, "mention") for row in rows] == [False, False, True]
+
+
+def test_a_repository_name_splits_into_its_owner_and_its_name():
+    assert popup.org_and_name("acme/widget") == ("acme", "widget")
+    assert popup.org_and_name("just-a-name") == ("", "just-a-name")
+    assert popup.org_and_name("") == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        (None, ""),
+        (waiting(state="MERGED"), "merged"),
+        (waiting(state="CLOSED"), "closed"),
+        (waiting(isDraft=True), "draft"),
+        (waiting(mergeable="CONFLICTING"), "conflict"),
+        (waiting(reviewDecision="APPROVED"), "ready"),
+        (waiting(), "open"),
+    ],
+)
+def test_the_status_column_words_each_standing(entry, expected):
+    assert popup.pull_request_status(entry) == expected
+
+
+def test_a_finished_pull_request_outranks_everything_it_also_is():
+    # A merged draft with a conflict is merged, and nothing else about it matters.
+    assert popup.pull_request_status(waiting(state="MERGED", isDraft=True, mergeable="CONFLICTING")) == "merged"
+
+
+def test_the_closed_record_wins_when_a_pull_request_is_recorded_twice():
+    # A pull request that has just closed lingers briefly under its old side too, and that copy still says open.
+    open_copy, closed_copy = waiting(), waiting(side="closed", state="MERGED")
+    for entries in ({"a": open_copy, "b": closed_copy}, {"a": closed_copy, "b": open_copy}):
+        assert popup.states_by_page(entries)[open_copy["url"]] is closed_copy
+
+
+def test_rows_learn_their_status_from_the_last_poll(event_log):
+    entry = waiting(state="MERGED", side="closed")
+    events.append_events([change(key="acme/gadget#7") | {"url": entry["url"]}])
+    store(event_log, entry)
+    assert [row.status for row in popup.rows_to_show(10)] == ["merged"]
+
+
+def test_a_row_about_something_no_longer_polled_has_no_status(event_log):
+    events.append_events([change()])
+    assert [row.status for row in popup.rows_to_show(10)] == [""]
+
+
+def test_the_closed_filter_hides_finished_rows_until_asked():
+    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, status=status) for status in ("open", "merged", "closed", "")]
+    assert [popup.closed_matches(row, show_closed=False) for row in rows] == [True, False, False, True]
+    assert [popup.closed_matches(row, show_closed=True) for row in rows] == [True, True, True, True]
+
+
+def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
+    finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
+    open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
+    unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
+    assert popup.row_background(finished) == theme.blend(popup.STATUS_COLOURS["merged"], popup.PALETTE.background, popup.CLOSED_TINT)
+    assert popup.row_background(open_row) is None
+    assert popup.row_background(unknown) is None
+
+
+def test_every_status_word_has_a_colour():
+    entries = [None, waiting(state="MERGED"), waiting(state="CLOSED"), waiting(isDraft=True), waiting(mergeable="CONFLICTING"), waiting()]
+    for word in filter(None, map(popup.pull_request_status, entries)):
+        assert word in popup.STATUS_COLOURS

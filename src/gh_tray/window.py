@@ -32,13 +32,17 @@ from .environment import SingleInstance, make_dpi_aware, pointer_scaling, work_a
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
+    FILTER_CHOICES,
     GLYPHS,
     RELOAD_ATTEMPTS,
     RELOAD_EVERY_MS,
     SEEN_STRENGTH,
+    STATUS_COLOURS,
     Row,
     age_colour,
+    closed_matches,
     glyph_for,
+    org_and_name,
     remember_column_widths,
     remember_row_seen,
     remember_width,
@@ -46,6 +50,8 @@ from .popup import (
     remembered_width,
     request_refresh,
     requested_spot,
+    role_matches,
+    row_background,
     rows_to_show,
     snapshot_changed_at,
     sorted_rows,
@@ -77,9 +83,12 @@ CORNER_HANDLE_SIZE = 14
 TABLE_TRIM = 8
 TALLEST_SHARE_OF_SCREEN = 0.55
 
-# The date and the name are each drawn on a scale of their own, so both need finding among the columns.
+# The date, the status and the two name columns are each drawn on a scale of their own, so they need finding among
+# the columns.
 DATE_COLUMN = "when"
 WHO_COLUMN = "who"
+AUTHOR_COLUMN = "author"
+STATUS_COLUMN = "status"
 
 # What the table widget understands as a right click. It adds the other button macOS uses for one itself, so this
 # is the same everywhere.
@@ -156,7 +165,8 @@ def cells_of(entry: Row, glyphs: bool) -> list[str]:
     :param glyphs: whether the window can draw the marks that head a row
     """
     label = f"{glyph_for(entry)}  {entry.label}" if glyphs else entry.label
-    return [label, entry.repo, entry.number, entry.title, entry.who, entry.when]
+    owner, name = org_and_name(entry.repo)
+    return [label, owner, name, entry.number, entry.status, entry.title, entry.author, entry.who, entry.when]
 
 
 def can_draw_glyphs(font: tkfont.Font) -> bool:
@@ -178,9 +188,15 @@ class Popup:
     def __init__(self, entries: list[Row]) -> None:
         """:param entries: the lines to list, in the order they should appear."""
         make_dpi_aware()
-        self.entries = entries
+        # Everything the log offered, and the part of it the chosen quick filter lets through, which is what the
+        # table shows. Marks are written to both, so switching filters does not forget them.
+        self.all_entries = list(entries)
+        self.role_filter = "all"
+        # Rows about closed pull requests start hidden: they are done, and the window is a list of what is not.
+        self.show_closed = False
         self.sort_column = DEFAULT_SORT
         self.newest_first = True
+        self.apply_filter()
         self.drag_origin: tuple[int, int, int, int] = (0, 0, 0, 0)
         self.window_origin: tuple[int, int] = (0, 0)
         # Whether the window is up and has settled, which is what tells a click elsewhere from the window's own
@@ -266,9 +282,13 @@ class Popup:
         return f"{APP_NAME} - {waiting} notification{'' if waiting == 1 else 's'}" if waiting else f"{APP_NAME} - nothing to do"
 
     def build(self) -> None:
-        """Lay out the heading strip, the table and the closing hint."""
+        """Lay out the heading strip, the table and the closing hint.
+
+        The table is built whenever anything is on offer, even if the filters currently hide all of it, so that
+        widening a filter has somewhere to put the rows it lets back in.
+        """
         self.heading_strip(self.heading_text())
-        if self.entries:
+        if self.all_entries:
             self.table()
         else:
             tk.Label(
@@ -371,14 +391,20 @@ class Popup:
         """
         self.sheet.dehighlight_cells(all_=True)
         date_column = column_of(DATE_COLUMN)
-        who_column = column_of(WHO_COLUMN)
         for row, entry in enumerate(self.entries):
-            inks = {date_column: age_colour(entry.at), who_column: who_colour(entry.who)}
+            inks = {
+                date_column: age_colour(entry.at),
+                column_of(WHO_COLUMN): who_colour(entry.who),
+                column_of(AUTHOR_COLUMN): who_colour(entry.author),
+                column_of(STATUS_COLUMN): STATUS_COLOURS.get(entry.status, PALETTE.muted),
+            }
+            # A finished pull request's row sits on a wash of its status colour, so it reads as done at a glance.
+            wash = row_background(entry)
             for column in range(len(COLUMNS)):
                 ink = inks.get(column, entry.colour)
                 if entry.seen and column != date_column:
                     ink = blend(ink, PALETTE.background, SEEN_STRENGTH)
-                self.sheet.highlight_cells(row=row, column=column, fg=ink)
+                self.sheet.highlight_cells(row=row, column=column, fg=ink, bg=wash)
 
     def refill(self) -> None:
         """Put the rows into the table in their current order, and colour them again."""
@@ -425,8 +451,10 @@ class Popup:
         """
         if self.entries[row].seen == seen:
             return
-        self.entries[row] = replace(self.entries[row], seen=seen)
-        remember_row_seen(self.entries[row], seen)
+        marked = replace(self.entries[row], seen=seen)
+        self.entries[row] = marked
+        self.all_entries = [marked if entry.url == marked.url and entry.at == marked.at else entry for entry in self.all_entries]
+        remember_row_seen(marked, seen)
         self.refill()
         self.name.configure(text=self.heading_text())
 
@@ -454,20 +482,41 @@ class Popup:
         self.sheet.headers([f"{heading}{marker if key == column else ''}" for key, heading, _width, _stretches in COLUMNS])
 
     def footer(self) -> None:
-        """Draw the closing hint and the button that asks for a fresh look."""
-        strip = tk.Frame(self.body, background=PALETTE.background)
-        strip.pack(fill="x", side="bottom")
+        """Draw the quick filters, the closed toggle, the button that asks for a fresh look, and the closing hint."""
         self.hint = tk.Label(
-            strip,
+            self.body,
             text="Click a row to open it, right-click to mark it seen. Click a heading to sort, drag the title to move, an edge to resize.",
             background=PALETTE.background,
             foreground=PALETTE.muted,
             font=self.regular,
             anchor="w",
             padx=12,
-            pady=6,
+            pady=4,
         )
-        self.hint.pack(side="left")
+        self.hint.pack(side="bottom", fill="x")
+        strip = tk.Frame(self.body, background=PALETTE.background)
+        strip.pack(fill="x", side="bottom")
+        self.chips: dict[str, tk.Label] = {}
+        for name, label in FILTER_CHOICES:
+            chosen = name == self.role_filter
+            chip = tk.Label(
+                strip,
+                text=label,
+                background=PALETTE.selection if chosen else PALETTE.surface,
+                foreground=PALETTE.heading if chosen else PALETTE.muted,
+                font=self.bold,
+                cursor="hand2",
+                padx=10,
+                pady=3,
+            )
+            chip.pack(side="left", padx=(12 if not self.chips else 4, 0), pady=6)
+            chip.bind("<Button-1>", lambda _event, wanted=name: self.choose_filter(wanted))
+            self.chips[name] = chip
+        # Set apart from the quick filters, since it works alongside them rather than instead of them.
+        self.closed_chip = tk.Label(strip, text="Show closed", font=self.bold, cursor="hand2", padx=10, pady=3)
+        self.closed_chip.pack(side="left", padx=(12, 0), pady=6)
+        self.closed_chip.bind("<Button-1>", lambda _event: self.toggle_closed())
+        self.style_closed_chip()
         self.refresh_button = tk.Label(
             strip,
             text="Refresh",
@@ -516,10 +565,74 @@ class Popup:
         self.root.after(RELOAD_EVERY_MS, lambda: self.await_update(attempts_left - 1, was))
 
     def reload(self) -> None:
-        """Read the stored data again and redraw the table in the order currently chosen."""
-        self.entries = sorted_rows(rows_to_show(load_config()["popup_rows"]), self.sort_column, self.newest_first)
+        """Read the stored data again and redraw the table in the order and filter currently chosen."""
+        self.all_entries = rows_to_show(load_config()["popup_rows"])
+        self.apply_filter()
         if hasattr(self, "sheet"):
             self.refill()
+
+    def apply_filter(self) -> None:
+        """Reduce everything on offer to what the chosen filters let through, in the chosen order."""
+        kept = [entry for entry in self.all_entries if role_matches(entry, self.role_filter) and closed_matches(entry, self.show_closed)]
+        self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
+
+    def redraw_filtered(self) -> None:
+        """Redraw around whatever the filters now leave.
+
+        The window stays where it is: it re-fits its height to the rows now shown, but a filter click must not
+        teleport it back to the pointer.
+        """
+        self.apply_filter()
+        if hasattr(self, "sheet"):
+            self.refill()
+        self.name.configure(text=self.heading_text())
+        self.refit_height()
+
+    def choose_filter(self, wanted: str) -> None:
+        """Switch the quick filter and redraw around whatever it leaves.
+
+        :param wanted: the filter's name, from :data:`FILTER_CHOICES`
+        """
+        self.role_filter = wanted
+        for name, chip in self.chips.items():
+            chosen = name == wanted
+            chip.configure(
+                background=PALETTE.selection if chosen else PALETTE.surface,
+                foreground=PALETTE.heading if chosen else PALETTE.muted,
+            )
+        self.redraw_filtered()
+
+    def toggle_closed(self) -> None:
+        """Show or hide the rows about closed pull requests, and redraw around whatever that leaves."""
+        self.show_closed = not self.show_closed
+        self.style_closed_chip()
+        self.redraw_filtered()
+
+    def style_closed_chip(self) -> None:
+        """Colour the closed toggle for whether the rows it governs are currently shown."""
+        self.closed_chip.configure(
+            background=PALETTE.selection if self.show_closed else PALETTE.surface,
+            foreground=PALETTE.heading if self.show_closed else PALETTE.muted,
+        )
+
+    def refit_height(self) -> None:
+        """Re-fit the window's height to the rows now shown, growing and shrinking from its top edge.
+
+        The bottom edge stays where it is: the window opens above the click, usually just clear of the taskbar,
+        so growing downward would take the new rows straight off the bottom of the screen. Growing upward keeps
+        every row on it, and the top only gives way when the screen has no more room above.
+        """
+        if not hasattr(self, "sheet"):
+            return
+        bottom = self.root.winfo_y() + self.root.winfo_height()
+        _width, usable_height = self.usable_screen()
+        tallest = int(usable_height * TALLEST_SHARE_OF_SCREEN)
+        around = self.root.winfo_reqheight() - self.sheet.winfo_reqheight()
+        self.sheet.configure(height=min(self.table_height(), tallest - around))
+        self.root.update_idletasks()
+        height = min(max(MINIMUM_HEIGHT, self.root.winfo_reqheight()), tallest)
+        top = min(max(EDGE_MARGIN, bottom - height), usable_height - height - EDGE_MARGIN)
+        self.root.geometry(f"{self.root.winfo_width()}x{height}+{self.root.winfo_x()}+{int(top)}")
 
     def edge_handles(self) -> None:
         """Put a grab strip along every edge and corner, so the window resizes from wherever the pointer lands."""

@@ -49,6 +49,7 @@ SNAPSHOT_DEFAULTS: dict = {
     "number": 0,
     "title": "",
     "url": "",
+    "state": "OPEN",
     "ci": "NO_CHECKS",
     "reviewDecision": "NONE",
     "mergeable": "UNKNOWN",
@@ -155,7 +156,7 @@ def snapshot_key(side: str, key: str) -> str:
     The side is part of the key because the same pull request can appear both as the user's own and as one awaiting
     their review, and collapsing the two would discard whichever arrived first along with its change history.
 
-    :param side: ``authored`` or ``reviewing``
+    :param side: ``authored``, ``reviewing`` or ``closed``
     :param key: the collector's own key, being repository and number
     """
     return f"{side}:{key}"
@@ -168,7 +169,7 @@ def snapshot_of(digest: dict) -> dict:
     :return: pull requests keyed by side, repository and number
     """
     snapshot = {}
-    for side in ("authored", "reviewing"):
+    for side in ("authored", "reviewing", "closed"):
         for pull_request in digest.get(side, []):
             record = {field: default if pull_request.get(field) is None else pull_request[field] for field, default in SNAPSHOT_DEFAULTS.items()}
             record["side"] = side
@@ -245,6 +246,9 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "url": pull_request.get("url", ""),
         "detail": detail,
         "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
+        "author": pull_request.get("author", ""),
+        # Which of the user's hats the change lands on: their own pull request, or one they review.
+        "role": "author" if pull_request.get("side") == "authored" else "reviewer",
     }
 
 
@@ -314,12 +318,13 @@ def detect_mention_events(digest: dict, seen_urls: set[str], at: str) -> list[di
                 "kind": "mention",
                 "key": mention.get("repo", "?"),
                 "repo": mention.get("repo", ""),
-                # The notifications feed names the thread, not the pull request, so there is no number to show.
-                "number": "",
+                "number": mention.get("number", ""),
                 "title": mention.get("title", ""),
                 "url": url,
                 "detail": str(mention.get("reason", "mention")).replace("_", " "),
                 "actor": mention.get("actor", ""),
+                "author": mention.get("author", ""),
+                "role": "mention",
             }
         )
     return events

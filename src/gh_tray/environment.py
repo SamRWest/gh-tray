@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
@@ -72,6 +74,43 @@ def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.
         errors="replace",
         creationflags=no_console_flag(),
     )
+
+
+# The console handler has to stay referenced for as long as it is registered: Windows calls straight into it, and
+# one that has been garbage collected crashes the process instead of stopping it.
+_CONSOLE_HANDLERS: list[object] = []
+
+
+def on_console_interrupt(stop: Callable[[], None]) -> None:
+    """Arrange for something to run when the console asks the process to stop, such as Ctrl+C.
+
+    A plain signal handler is not enough for a tray application. It can only run between Python instructions on
+    the main thread, and the tray's main thread spends its life blocked inside the desktop's message loop, so
+    Ctrl+C would sit undelivered until the next stray mouse movement. Windows offers a console handler instead,
+    called on a thread of its own, which works however busy or idle the main thread is. The signal handler is
+    still installed as well, for platforms where blocking calls are interrupted and it does fire.
+
+    :param stop: what to run; it must be safe to call from any thread
+    """
+    signal.signal(signal.SIGINT, lambda _number, _frame: stop())
+    if sys.platform != "win32":
+        return
+    import ctypes
+    import ctypes.wintypes
+
+    routine = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)
+
+    @routine
+    def handle(_event: int) -> bool:
+        """Stop the application, telling Windows the event is dealt with so it does not also kill the process."""
+        stop()
+        return True
+
+    _CONSOLE_HANDLERS.append(handle)
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(handle, True)
+    except (AttributeError, OSError) as error:
+        logger.debug("could not watch the console for Ctrl+C: {}", error)
 
 
 def make_dpi_aware() -> None:

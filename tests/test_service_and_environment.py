@@ -168,3 +168,15 @@ def test_releasing_a_lock_never_taken_is_harmless(tmp_path):
 
 def test_the_application_directory_is_named_after_the_application():
     assert config.APP_DIR.name == "gh-tray"
+
+
+def test_a_console_interrupt_runs_the_stop_it_was_given(monkeypatch):
+    # The portable half: a signal handler is installed that runs the stop. The Windows console handler is the same
+    # stop behind a platform call, proven by interrupting a real tray rather than from here.
+    installed = {}
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    monkeypatch.setattr(environment.signal, "signal", lambda number, handler: installed.setdefault(number, handler))
+    stopped = []
+    environment.on_console_interrupt(lambda: stopped.append(True))
+    installed[environment.signal.SIGINT](environment.signal.SIGINT, None)
+    assert stopped == [True]

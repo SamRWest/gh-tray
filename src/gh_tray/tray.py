@@ -15,7 +15,15 @@ from loguru import logger
 
 from . import APP_MODULE, APP_NAME
 from .config import POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, load_config
-from .environment import autostart_enabled, cursor_position, make_dpi_aware, no_console_flag, open_in_terminal, set_autostart
+from .environment import (
+    autostart_enabled,
+    cursor_position,
+    make_dpi_aware,
+    no_console_flag,
+    on_console_interrupt,
+    open_in_terminal,
+    set_autostart,
+)
 from .events import mark_seen
 from .notifier import Notifier
 from .popup import request_popup, start_window, window_waiting
@@ -252,7 +260,13 @@ class Tray:
         self.icon.update_menu()
 
     def on_quit(self, *_) -> None:
-        """Stop the timers, the notifier, the waiting window and the icon."""
+        """Stop the timers, the notifier, the waiting window and the icon.
+
+        Idempotent, because quitting can be asked for twice at once: once from the menu and again from a Ctrl+C,
+        or from an impatient second Ctrl+C while the first is still stopping things.
+        """
+        if self.stop_requested.is_set():
+            return
         self.stop_requested.set()
         if self.pending_click is not None:
             self.pending_click.cancel()
@@ -265,6 +279,8 @@ class Tray:
 
     def run(self) -> None:
         """Show the icon, start polling, and load the changes window ready for the first click."""
+        # So Ctrl+C in the terminal that started the tray stops it, the same as the menu's Quit.
+        on_console_interrupt(self.on_quit)
         threading.Thread(target=self.loop, daemon=True, name=f"{APP_NAME}-poll").start()
         if not window_waiting():
             self.window = start_window()

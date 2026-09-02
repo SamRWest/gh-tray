@@ -98,6 +98,16 @@ def test_a_pull_request_new_to_the_authored_list_is_not_reported():
     assert detect(None, pull_request(side="authored")) == []
 
 
+def test_a_closed_pull_request_arriving_is_not_reported():
+    assert detect(None, pull_request(side="closed", state="MERGED")) == []
+
+
+def test_snapshot_carries_closed_pull_requests_too():
+    digest = {"closed": [{"key": "acme/widget#7", **pull_request(side="closed", state="MERGED")}]}
+    carried = events.snapshot_of(digest)["closed:acme/widget#7"]
+    assert (carried["side"], carried["state"]) == ("closed", "MERGED")
+
+
 def test_several_changes_at_once_are_all_reported():
     kinds = detect(pull_request(), pull_request(ci="FAILURE", mergeable="CONFLICTING", comments=1))
     assert sorted(kinds) == ["ci_broken", "conflict", "new_comment"]

@@ -99,3 +99,37 @@ def test_the_very_first_click_is_a_single_click_even_at_the_clock_origin(recorde
     recorder.on_click()
     run_pending(recorder)
     assert (recorder.opened_popup, recorder.opened_dashboard) == (1, 0)
+
+
+class Stoppable:
+    """Counts how many times it is asked to stop."""
+
+    def __init__(self) -> None:
+        """Start unstopped."""
+        self.stops = 0
+
+    def stop(self) -> None:
+        """Count one more request to stop."""
+        self.stops += 1
+
+
+class Quitter:
+    """A stand-in tray carrying only what quitting touches."""
+
+    on_quit = tray.Tray.on_quit
+
+    def __init__(self) -> None:
+        """Start with nothing stopped."""
+        self.stop_requested = threading.Event()
+        self.pending_click: threading.Timer | None = None
+        self.window = None
+        self.notifier = Stoppable()
+        self.icon = Stoppable()
+
+
+def test_quitting_twice_stops_everything_once():
+    # Quitting can be asked for twice at once: from the menu and from a Ctrl+C, or from an impatient second Ctrl+C.
+    quitter = Quitter()
+    quitter.on_quit()
+    quitter.on_quit()
+    assert (quitter.notifier.stops, quitter.icon.stops) == (1, 1)

@@ -42,6 +42,7 @@ class Clicks:
     def __init__(self, entries: list[popup.Row]) -> None:
         """:param entries: the rows the table is showing."""
         self.entries = entries
+        self.all_entries = list(entries)
         self.sheet = Table()
         self.opened: list[str] = []
         self.sorted_by: list[object] = []

@@ -19,7 +19,7 @@ import math
 import subprocess
 import sys
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from . import APP_MODULE
@@ -79,10 +79,13 @@ KIND_COLOURS: dict[str, str] = {
 # space a wider window adds. Every one can be resized afterwards by dragging the divider in its heading.
 COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
     ("change", "Change", 23, False),
-    ("repo", "Repository", 46, False),
+    ("org", "Org", 16, False),
+    ("repo", "Repo", 26, False),
     ("pr", "PR", 7, False),
+    ("status", "Status", 10, False),
     ("title", "Title", 44, True),
-    ("who", "Who", 18, False),
+    ("author", "Author", 16, False),
+    ("who", "Who", 16, False),
     ("when", "When", 10, False),
 )
 STRETCHING_COLUMN = "Title"
@@ -92,9 +95,12 @@ DEFAULT_SORT = "when"
 # either as the text shown would put "3m ago" beside "3w ago" and "#7" after "#128".
 SORT_KEYS = {
     "change": lambda row: row.label.casefold(),
-    "repo": lambda row: row.repo.casefold(),
+    "org": lambda row: org_and_name(row.repo)[0].casefold(),
+    "repo": lambda row: org_and_name(row.repo)[1].casefold(),
     "pr": lambda row: pull_request_number(row.number),
+    "status": lambda row: row.status.casefold(),
     "title": lambda row: row.title.casefold(),
+    "author": lambda row: (not row.author, row.author.casefold()),
     "who": lambda row: (not row.who, row.who.casefold()),
     "when": lambda row: moment(row.at),
 }
@@ -124,6 +130,15 @@ class Row:
     colour: str
     at: str = ""
     seen: bool = False
+    # Whose the pull request is, as opposed to who triggered the change the row reports. Emily's pull request can
+    # carry a comment from somebody else, and showing only one of the two names misleads about the other.
+    author: str = ""
+    # Which of the user's hats the row lands on: ``author`` of the pull request, ``reviewer`` of it, or the target
+    # of a ``mention``. What the window's quick filters go by.
+    role: str = ""
+    # How the pull request stands right now, as :func:`pull_request_status` words it, or empty when its state is
+    # not known. What the Status column shows and the closed filter goes by.
+    status: str = ""
 
 
 # The colours a name can be drawn in. Every name is dealt one, by a stable digest of its spelling, so the same
@@ -168,6 +183,16 @@ STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("checks_failing", "Checks failing", "lastCommitBy", True, PALETTE.red),
     ("ready_to_merge", "Ready to merge", "lastReviewBy", False, PALETTE.green),
 )
+
+
+def org_and_name(repo: str) -> tuple[str, str]:
+    """Split a repository's full name into who owns it and what it is called.
+
+    :param repo: the full name, such as ``acme/widget``
+    :return: the owner and the name; a name with no owner in it comes back whole, owned by nobody
+    """
+    owner, slash, name = repo.partition("/")
+    return (owner, name) if slash else ("", repo)
 
 
 def pull_request_number(shown: str) -> int:
@@ -219,6 +244,10 @@ def repo_and_number(event: dict) -> tuple[str, str]:
     number = event.get("number")
     if not repo:
         repo, _, number = str(event.get("key", "")).partition("#")
+    if not number:
+        # Rows recorded before mentions carried a number still hold the page they lead to, which names it.
+        tail = str(event.get("url", "")).rstrip("/").rsplit("/", 1)[-1]
+        number = tail if tail.isdigit() else ""
     return repo, f"#{number}" if number else ""
 
 
@@ -252,6 +281,10 @@ def row_from_event(event: dict, seen: bool) -> Row:
         colour=dot_colour(event),
         seen=seen,
         at=str(event.get("at", "")),
+        author=str(event.get("author", "")),
+        # Rows recorded before roles were kept still say what kind of change they are, which names the hat for a
+        # mention outright and leaves the rest to be filled from the last poll's records.
+        role=str(event.get("role", "")) or ("mention" if event.get("kind") == "mention" else ""),
     )
 
 
@@ -310,6 +343,8 @@ def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str,
                     colour=colour,
                     at=touched,
                     seen=has_been_seen(identity, touched, marks or {}, None),
+                    author=str(entry.get("author", "")),
+                    role="author" if entry.get("side") == "authored" else "reviewer",
                 ),
             )
         )
@@ -507,9 +542,140 @@ def rows_to_show(count: int) -> list[Row]:
     changes = [
         row_from_event(event, has_been_seen(event_identity(event), event["at"], marks, since)) for event in recent_events(count * ROWS_READ_DEEPLY)
     ]
-    listed = {row.url for row in changes if row.url}
     entries, _damaged = read_snapshot()
-    return one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))[:count]
+    changes = [filled_in(row, entries or {}) for row in changes]
+    listed = {row.url for row in changes if row.url}
+    rows = one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))[:count]
+    return with_status(rows, states_by_page(entries or {}))
+
+
+def filled_in(row: Row, entries: dict) -> Row:
+    """Return a row with its author and hat filled in from the last poll's records, where it arrived without them.
+
+    Only rows recorded before those fields were kept need this. The page a row leads to is the join, so a thread on
+    something no longer polled stays blank until it ages out.
+
+    :param row: the row as the log produced it
+    :param entries: pull requests as the last poll recorded them
+    """
+    if (row.author and row.role) or not row.url:
+        return row
+    entry = next((candidate for candidate in entries.values() if candidate.get("url") == row.url), None)
+    if entry is None:
+        return row
+    owner = row.author or str(entry.get("author", ""))
+    hat = row.role or ("author" if entry.get("side") == "authored" else "reviewer")
+    return replace(row, author=owner, role=hat)
+
+
+# What the Status column may say, and the colour each word is drawn in. The colours follow GitHub's own: green
+# while open, violet once merged, red when closed unmerged, and the quiet ink for a draft.
+STATUS_COLOURS: dict[str, str] = {
+    "open": PALETTE.green,
+    "draft": PALETTE.muted,
+    "ready": PALETTE.green,
+    "conflict": PALETTE.pink,
+    "merged": PALETTE.violet,
+    "closed": PALETTE.red,
+}
+
+# The statuses meaning a pull request is finished, which the window hides until asked to show them.
+CLOSED_STATUSES = frozenset({"merged", "closed"})
+
+# How much of its status colour is mixed into a finished row's background, so it reads as done before a word of it
+# is. A wash rather than the colour itself, which would drown every ink drawn on top of it.
+CLOSED_TINT = 0.14
+
+
+def pull_request_status(entry: dict | None) -> str:
+    """Return the one word the Status column says about a pull request, or nothing when its state is unknown.
+
+    Merged and closed outrank everything, since nothing else about a finished pull request matters. Among the open
+    ones, a draft is a draft whatever its checks say, a conflict blocks a merge however approved it is, and ready
+    means it could be merged exactly as it stands.
+
+    :param entry: the pull request as the last poll recorded it, or None when it is no longer polled
+    """
+    if entry is None:
+        return ""
+    state = str(entry.get("state", "OPEN"))
+    if state != "OPEN":
+        return state.lower()
+    if entry.get("isDraft"):
+        return "draft"
+    if entry.get("mergeable") == "CONFLICTING":
+        return "conflict"
+    if mergeable_now(entry):
+        return "ready"
+    return "open"
+
+
+def states_by_page(entries: dict) -> dict[str, dict]:
+    """Index the last poll's records by the page each leads to, so a row can look its pull request up.
+
+    A pull request that has just closed is briefly recorded twice, once as it last stood open and once as closed,
+    and the closed record is the one that tells the truth about it now.
+
+    :param entries: pull requests as the last poll recorded them
+    """
+    indexed: dict[str, dict] = {}
+    for entry in entries.values():
+        url = str(entry.get("url", ""))
+        if not url:
+            continue
+        standing = indexed.get(url)
+        if standing is None or str(standing.get("state", "OPEN")) == "OPEN":
+            indexed[url] = entry
+    return indexed
+
+
+def with_status(rows: list[Row], indexed: dict[str, dict]) -> list[Row]:
+    """Return rows with the Status column filled in from the last poll's records.
+
+    A row about something no longer polled keeps an empty status, which reads as nothing rather than as a guess.
+
+    :param rows: the rows to fill in
+    :param indexed: the records by page, as :func:`states_by_page` returns them
+    """
+    return [replace(row, status=pull_request_status(indexed.get(row.url))) if row.url else row for row in rows]
+
+
+def closed_matches(row: Row, show_closed: bool) -> bool:
+    """Return whether a row passes the closed filter.
+
+    A row whose status is unknown always passes: hiding it would silently lose something that may well still be
+    open.
+
+    :param row: the row to judge
+    :param show_closed: whether rows about finished pull requests are wanted
+    """
+    return show_closed or row.status not in CLOSED_STATUSES
+
+
+def row_background(row: Row) -> str | None:
+    """Return the background a row is drawn on, or None for the window's own.
+
+    Only a finished pull request gets one: a wash of its status colour, so what is done reads as done at a glance
+    even among open rows.
+
+    :param row: the row to judge
+    """
+    if row.status not in CLOSED_STATUSES:
+        return None
+    return blend(STATUS_COLOURS[row.status], PALETTE.background, CLOSED_TINT)
+
+
+# The quick filters along the bottom of the window: what each is called, and which of the user's hats it keeps.
+FILTER_CHOICES: tuple[tuple[str, str], ...] = (("all", "All"), ("author", "Author"), ("reviewer", "Reviewer"), ("mention", "Mentioned"))
+
+
+def role_matches(row: Row, wanted: str) -> bool:
+    """Return whether a row belongs under a quick filter.
+
+    :param row: the row to judge
+    :param wanted: the filter's name, from :data:`FILTER_CHOICES`
+    """
+    return wanted == "all" or row.role == wanted
 
 
 def remember_row_seen(row: Row, seen: bool) -> None:

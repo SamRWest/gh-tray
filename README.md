@@ -5,6 +5,23 @@ dashboard when you want the full picture.
 
 ![The changes window, listing what wants attention](docs/popup.png)
 
+## Quickstart
+
+Run it straight from GitHub, nothing cloned and nothing installed:
+
+```bash
+uvx --from git+https://github.com/SamRWest/gh-tray gh-tray
+```
+
+Or install it as a tool, which puts `gh-tray` on your path:
+
+```bash
+uv tool install git+https://github.com/SamRWest/gh-tray
+```
+
+Either way you need [uv](https://docs.astral.sh/uv/) and the signed-in GitHub CLI; the [Requirements](#requirements)
+section has the details, and `gh-tray setup` checks them for you.
+
 The icon carries a count of changes you have not seen yet.
 
 | Doing this to the icon | Gets you                                                                   |
@@ -25,14 +42,26 @@ note asking for it, not several windows.
 The click-through window lists what changed since you last looked, then what is merely waiting on you. Changes alone
 would leave it saying "nothing" on a quiet day while three reviews sat in the queue.
 
-| Column     | Holds                                                                   |
-| ---------- | ----------------------------------------------------------------------- |
-| Change     | What happened, or how it stands: "Checks broke", "Awaiting your review" |
-| Repository | The repository it is in                                                 |
-| PR         | The pull request number                                                 |
-| Title      | The pull request's title                                                |
-| Who        | Whoever did it: the reviewer, the committer, the commenter              |
-| When       | How long ago                                                            |
+| Column | Holds                                                                    |
+| ------ | ------------------------------------------------------------------------ |
+| Change | What happened, or how it stands: "Checks broke", "Awaiting your review"  |
+| Org    | Who owns the repository                                                  |
+| Repo   | The repository it is in                                                  |
+| PR     | The pull request number                                                  |
+| Status | How it stands right now: open, draft, ready, conflict, merged, or closed |
+| Title  | The pull request's title                                                 |
+| Author | Whose pull request it is                                                 |
+| Who    | Whoever triggered the change: the reviewer, the committer, the commenter |
+| When   | How long ago                                                             |
+
+The two name columns are different questions: a comment on Emily's pull request from someone else shows Emily as the
+author and the commenter as who. Filters along the bottom cut the list to one of your hats: pull requests you wrote,
+ones you review, or mentions of you.
+
+Rows about merged or closed pull requests start hidden: they are done, and the window is a list of what is not. **Show
+closed** along the bottom brings them back, each on a wash of its status colour, violet for merged and red for closed,
+so what is finished reads as finished at a glance. The status is blank on a row about something no longer polled, which
+reads as nothing rather than as a guess, and such a row is never hidden.
 
 The window follows your desktop's light or dark theme, as does the settings window. The theme is read when the window
 opens, so changing it takes effect the next time you click.
@@ -65,7 +94,8 @@ click anything else on screen to dismiss it.
 
 A width you drag, of the window or of a column, is kept across showings and restarts, and stays the same physical size
 when the display's scaling changes. The height always follows the rows: snug around a few, and no more than its ceiling
-over many, with the rest scrolling.
+over many, with the rest scrolling. When a filter changes how many rows there are, the height changes from the top edge,
+the bottom staying where it sits just above the taskbar, so new rows never slide off the bottom of the screen.
 
 ## What counts as a change
 
@@ -215,11 +245,14 @@ raise on that callback and no click could ever be handled.
 
 ## The collector
 
-One poll makes two searches, one for your open pull requests and one for those awaiting your review, and one read of the
-notifications feed. Each search asks for the state of every pull request along with the last commit's author, the most
-recent review's author and the most recent comment's author, since those are what name the person behind a change. The
-notifications feed identifies a mention only by the comment it points at, so the first few of those are looked up one at
-a time.
+One poll makes three searches, one for your open pull requests, one for those awaiting your review and one for recently
+closed pull requests you had a hand in, and one read of the notifications feed. The closed search raises nothing: it is
+there so a row can say its pull request is merged or closed rather than guessing. It covers only the last 30 days,
+whatever the age cutoff is set to, and asks for newest first, so the search's page cap only ever drops the oldest
+results rather than something that closed this morning. Each search asks for the state of every pull request along with
+the last commit's author, the most recent review's author and the most recent comment's author, since those are what
+name the person behind a change. The notifications feed identifies a mention only by the comment it points at, so the
+first few of those are looked up one at a time.
 
 Collecting knows nothing about what was true last time: it reports only what is true now, and comparing is somebody
 else's job. That is what lets a poll fail without disturbing anything already recorded.

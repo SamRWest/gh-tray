@@ -31,6 +31,7 @@ ROWS = [
         url=f"https://example.test/{number.lstrip('#')}",
         colour=popup.URGENT,
         at="2026-01-01T00:00:00.000000Z",
+        role="author" if number == "#7" else "reviewer",
     )
     for number in ("#7", "#8")
 ]
@@ -223,7 +224,7 @@ def test_a_click_on_an_edge_that_moves_nothing_remembers_nothing(view):
 
 def test_a_dragged_column_width_is_remembered_and_used_next_time(view):
     bring_up(view)
-    view.sheet.set_column_widths(iter([260, 260, 60, 260, 120, 90]))
+    view.sheet.set_column_widths(iter([260, 140, 160, 60, 80, 260, 120, 120, 90]))
     view.on_column_dragged()
     assert popup.remembered_column_widths(view.dots)["change"] == 260
     # A fresh window, as after a restart, starts at the dragged widths rather than the stated ones.
@@ -270,3 +271,83 @@ def test_the_window_comes_up_by_the_click_not_the_pointer(view):
 def test_a_note_without_a_spot_still_shows_the_window(view):
     ask_for_it(view, spot=None)
     assert shown(view)
+
+
+def test_the_quick_filters_narrow_the_table_without_moving_the_window(view):
+    bring_up(view)
+    stood = (view.root.winfo_x(), view.root.winfo_y() + view.root.winfo_height())
+    view.chips["reviewer"].event_generate("<Button-1>")
+    view.root.update()
+    assert [entry.number for entry in view.entries] == ["#8"]
+    where = (view.root.winfo_x(), view.root.winfo_y() + view.root.winfo_height())
+    assert where == stood, "a filter click must keep the bottom edge where it is, not teleport the window"
+    view.chips["all"].event_generate("<Button-1>")
+    view.root.update()
+    assert len(view.entries) == 2
+
+
+def test_a_mark_made_under_one_filter_survives_switching_to_another(view):
+    bring_up(view)
+    view.chips["author"].event_generate("<Button-1>")
+    view.root.update()
+    view.set_seen(0, True)
+    view.chips["all"].event_generate("<Button-1>")
+    view.root.update()
+    assert [entry.seen for entry in view.entries if entry.number == "#7"] == [True]
+
+
+def test_closed_rows_stay_hidden_until_the_toggle_asks_for_them(view, monkeypatch):
+    finished = popup.Row(
+        "Checks broke",
+        "acme/widget",
+        "#9",
+        "Add a widget",
+        "someone",
+        "just now",
+        "https://example.test/9",
+        popup.URGENT,
+        at="2026-01-01T00:00:00.000000Z",
+        status="merged",
+    )
+    monkeypatch.setattr(window, "rows_to_show", lambda _count: [*ROWS, finished])
+    bring_up(view)
+    assert [entry.number for entry in view.entries] == ["#7", "#8"]
+    view.closed_chip.event_generate("<Button-1>")
+    view.root.update()
+    assert "#9" in [entry.number for entry in view.entries]
+    view.closed_chip.event_generate("<Button-1>")
+    view.root.update()
+    assert [entry.number for entry in view.entries] == ["#7", "#8"]
+
+
+def test_extra_rows_grow_the_window_upward_from_its_resting_place_above_the_taskbar(view, monkeypatch):
+    finished = [
+        popup.Row(
+            "Checks broke",
+            "acme/widget",
+            f"#{number}",
+            "Add a widget",
+            "someone",
+            "just now",
+            f"https://example.test/{number}",
+            popup.URGENT,
+            at="2026-01-01T00:00:00.000000Z",
+            status="merged",
+        )
+        for number in range(20, 26)
+    ]
+    monkeypatch.setattr(window, "rows_to_show", lambda _count: [*ROWS, *finished])
+    bring_up(view)
+    # Sit the window just above the taskbar, where a click on the tray icon puts it.
+    _usable_width, usable_height = view.usable_screen()
+    view.root.geometry(f"+{view.root.winfo_x()}+{usable_height - view.root.winfo_height() - window.EDGE_MARGIN}")
+    view.root.update()
+    height = view.root.winfo_height()
+    bottom = view.root.winfo_y() + height
+    view.closed_chip.event_generate("<Button-1>")
+    view.root.update()
+    assert view.root.winfo_height() > height, "six more rows must make the window taller"
+    assert view.root.winfo_y() + view.root.winfo_height() == bottom, "the extra height must go upward, the bottom staying put"
+    view.closed_chip.event_generate("<Button-1>")
+    view.root.update()
+    assert view.root.winfo_y() + view.root.winfo_height() == bottom, "shrinking back must leave the bottom where it was too"
