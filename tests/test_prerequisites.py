@@ -13,6 +13,8 @@ def nothing_installed(monkeypatch):
     monkeypatch.setattr(prerequisites, "github_cli", lambda: None)
     monkeypatch.setattr(prerequisites, "gh_dash_installed", lambda: False)
     monkeypatch.setattr(prerequisites, "signed_in", lambda: False)
+    # The desktop's own tray libraries are a Linux matter with tests of their own, so they are out of the picture here.
+    monkeypatch.setattr(prerequisites, "tray_bindings_present", lambda: True)
 
 
 @pytest.fixture
@@ -21,6 +23,7 @@ def everything_installed(monkeypatch):
     monkeypatch.setattr(prerequisites, "github_cli", lambda: "/usr/bin/gh")
     monkeypatch.setattr(prerequisites, "gh_dash_installed", lambda: True)
     monkeypatch.setattr(prerequisites, "signed_in", lambda: True)
+    monkeypatch.setattr(prerequisites, "tray_bindings_present", lambda: True)
 
 
 def test_nothing_is_missing_when_everything_is_present(everything_installed):
@@ -118,3 +121,36 @@ def test_an_install_that_cannot_even_start_is_reported(monkeypatch):
 
     monkeypatch.setattr(prerequisites.subprocess, "run", refuse)
     assert prerequisites.install(prerequisites.Requirement("a thing", "why", ["install", "thing"])) is False
+
+
+def test_linux_needs_the_desktops_own_tray_libraries(monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "linux")
+    monkeypatch.setattr(prerequisites, "github_cli", lambda: "/usr/bin/gh")
+    monkeypatch.setattr(prerequisites, "gh_dash_installed", lambda: True)
+    monkeypatch.setattr(prerequisites, "signed_in", lambda: True)
+    monkeypatch.setattr(prerequisites, "tray_bindings_present", lambda: False)
+    bindings = next(requirement for requirement in prerequisites.missing() if requirement.name == "Tray bindings")
+    # They come from the distribution, which means a root shell, so they are described rather than installed.
+    assert bindings.installable is False
+    assert "python3-gi" in bindings.manual
+
+
+def test_only_linux_has_tray_libraries_to_look_for(everything_installed, monkeypatch):
+    for platform in ("win32", "darwin"):
+        monkeypatch.setattr(prerequisites.sys, "platform", platform)
+        assert all(requirement.name != "Tray bindings" for requirement, _present in prerequisites.requirements())
+
+
+def test_the_tray_libraries_are_taken_as_present_off_linux(monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "win32")
+    assert prerequisites.tray_bindings_present() is True
+
+
+def test_missing_toolkit_bindings_are_reported_rather_than_raised(monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "linux")
+
+    def refuse(name):
+        raise ImportError(name)
+
+    monkeypatch.setattr(prerequisites, "import_module", refuse)
+    assert prerequisites.tray_bindings_present() is False

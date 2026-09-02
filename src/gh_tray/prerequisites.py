@@ -11,12 +11,15 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from importlib import import_module
 
 from loguru import logger
 
 from .environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
+# The indicator library a Linux tray icon is drawn through, under either of the names it goes by.
+INDICATOR_NAMESPACES = ("AyatanaAppIndicator3", "AppIndicator3")
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,15 @@ def package_manager() -> tuple[str, list[str]] | None:
     :return: the manager's name and the leading arguments of an install command, or None when there is none to use
     """
     if sys.platform == "win32" and shutil.which("winget"):
-        return "winget", ["winget", "install", "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--id"]
+        return "winget", [
+            "winget",
+            "install",
+            "--exact",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--id",
+        ]
     if sys.platform == "darwin" and shutil.which("brew"):
         return "brew", ["brew", "install"]
     return None
@@ -52,6 +63,30 @@ def package_manager() -> tuple[str, list[str]] | None:
 def github_package() -> str:
     """Return the package name for the GitHub command line tool under this platform's manager."""
     return "GitHub.cli" if sys.platform == "win32" else "gh"
+
+
+def tray_bindings_present() -> bool:
+    """Return whether the libraries the tray icon needs on this desktop can be found.
+
+    Only Linux has any to find. There the icon is drawn through the desktop's own toolkit bindings, which pip cannot
+    supply, and without them the tray library falls back to a bare X11 icon with no menu, which nobody can do
+    anything with.
+    """
+    if sys.platform != "linux":
+        return True
+    try:
+        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
+        # exists on this one.
+        gi = import_module("gi")
+    except ImportError:
+        return False
+    for namespace in INDICATOR_NAMESPACES:
+        try:
+            gi.require_version(namespace, "0.1")
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def gh_dash_installed() -> bool:
@@ -78,6 +113,23 @@ def requirements() -> list[tuple[Requirement, bool]]:
     """
     manager = package_manager()
     github_install = [*manager[1], github_package()] if manager else []
+    # Last, since it is independent of the others, and only where there is anything to find.
+    tray = (
+        [
+            (
+                Requirement(
+                    "Tray bindings",
+                    "the desktop's own libraries the tray icon is drawn through",
+                    [],
+                    manual="on Debian or Ubuntu: sudo apt install python3-gi gir1.2-ayatanaappindicator3-0.1, "
+                    "then see Linux in the README",
+                ),
+                tray_bindings_present(),
+            )
+        ]
+        if sys.platform == "linux"
+        else []
+    )
     return [
         (
             Requirement(
@@ -101,6 +153,7 @@ def requirements() -> list[tuple[Requirement, bool]]:
             ),
             gh_dash_installed(),
         ),
+        *tray,
     ]
 
 

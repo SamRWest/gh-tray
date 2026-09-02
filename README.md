@@ -34,6 +34,9 @@ The icon carries a count of changes you have not seen yet.
 A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
 waits half a second to see whether a second click follows.
 
+The two clicks are what a Windows tray offers. On macOS, and on Linux desktops that show the icon through an indicator,
+a click opens the menu whatever the button, so **Recent changes...** and **Open dashboard** sit at its top.
+
 The window itself appears straight away. It is built once, when the tray starts, and hidden rather than closed
 afterwards, so showing it again costs a few milliseconds instead of the second a fresh process takes. It lives in a
 process of its own, which the tray starts and stops with itself. Clicking the icon several times in a row leaves one
@@ -127,6 +130,25 @@ and where it covers several changes, the one listed first.
 Nothing else: no shell, and no command line tools beyond the GitHub one. The application never handles a token of its
 own. It borrows whatever you have already signed in with, and stops working the moment you sign out.
 
+On Linux the tray icon is drawn through the desktop's own toolkit bindings, which come from the distribution rather than
+from pip: on Debian or Ubuntu that is `python3-gi` and `gir1.2-ayatanaappindicator3-0.1`, and GNOME wants its
+AppIndicator extension as well. An isolated tool install cannot see them, so make an environment that can, and install
+into that:
+
+```bash
+uv venv --system-site-packages ~/.local/share/gh-tray-env
+```
+
+```bash
+uv pip install --python ~/.local/share/gh-tray-env/bin/python git+https://github.com/SamRWest/gh-tray
+```
+
+Then `~/.local/share/gh-tray-env/bin/gh-tray` starts it. Without the bindings the icon still appears, but bare: no menu
+and nothing to click, so `gh-tray setup` lists them as a requirement.
+
+On macOS, Notification Center takes notifications only from an application bundle, which a Python interpreter is not, so
+they are spoken through the scripting bridge instead: the same words, without the icon, and clicking one opens nothing.
+
 To see where you stand and install what is missing:
 
 ```bash
@@ -178,7 +200,8 @@ changes and the other would never report them. Use the tray's **Refresh now** en
 Turn on **Start at login** in the tray menu, or **Start automatically at login** in the settings window. This writes a
 small launcher for your platform: a hidden-window script in the Startup folder on Windows, a desktop entry under
 `~/.config/autostart` on Linux, and a launch agent under `~/Library/LaunchAgents` on macOS. Turning it off removes the
-file.
+file. The launch agent also records your search path, since launchd starts things with a bare one on which a GitHub tool
+installed by Homebrew is nowhere to be found.
 
 ## Settings
 
@@ -278,6 +301,7 @@ The jobs are named, and `uv run poe` on its own lists them:
 | ---------- | ----------------------------------------------------------- |
 | `test`     | Runs the tests                                              |
 | `ty`       | Runs the type checks                                        |
+| `ty_all`   | Runs the type checks as Windows, macOS and Linux in turn    |
 | `lint`     | Runs the pre-commit checks on staged files                  |
 | `lint_all` | Runs them on every file, staged or not                      |
 | `run`      | Starts the tray                                             |
@@ -288,8 +312,11 @@ The checks are formatting and linting with [ruff](https://docs.astral.sh/ruff/),
 usual file hygiene. Ruff's security rules are on, which is the same set [bandit](https://bandit.readthedocs.io/)
 implements, so bandit is not installed separately.
 
-Every push runs the tests on Linux and Windows and the checks once, in the **Checks and tests** workflow. Windows is
-where the awkward parts live: measuring the taskbar, locking against a second copy, and starting a window with no
-console. Linux is checked because the tray, the login entry and the terminal launcher all claim to work there.
+Every push runs the tests on Linux, Windows and macOS and the checks once, in the **Checks and tests** workflow. Windows
+is where the awkward parts live: measuring the taskbar, locking against a second copy, and starting a window with no
+console. Linux and macOS are checked because the tray, the login entry, the terminal launcher and the notifier each take
+a path of their own there. The type checks also run once as each platform, which hides what that platform lacks, so a
+Windows-only call outside its guard fails in the workflow rather than on somebody's Mac. The login entries are checked
+with each desktop's own validator where the runner has one.
 
 Tests that need a window skip themselves where there is no display to build one on.

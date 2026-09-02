@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
-from PIL import ImageColor
+from PIL import Image, ImageColor
 
 from gh_tray import theme
 from gh_tray.theme import blend
@@ -56,7 +56,9 @@ def brightness(colour: str) -> float:
     return (0.299 * red + 0.587 * green + 0.114 * blue) / 255
 
 
-@pytest.mark.parametrize("name", ["text", "heading", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink"])
+@pytest.mark.parametrize(
+    "name", ["text", "heading", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink"]
+)
 def test_every_ink_stands_out_from_its_background(name):
     # A colour picked for a dark window is unreadable on a white one, which is why there are two sets and not one.
     for palette in (theme.DARK, theme.LIGHT):
@@ -110,13 +112,22 @@ def test_no_settings_yet_means_following_the_desktop(tmp_path, monkeypatch):
     assert theme.chosen_style() == theme.FOLLOW_DESKTOP
 
 
-def test_the_application_mark_is_drawn_at_every_size_windows_asks_for(tmp_path):
-    from gh_tray.status import APP_ICON_SIZES, app_icon, write_app_icon
+def test_the_application_mark_is_drawn_at_every_size_a_desktop_shows_it():
+    from gh_tray.status import APP_ICON_SIZES, app_icon
 
     for size in APP_ICON_SIZES:
         assert app_icon(size).size == (size, size)
-    written = write_app_icon(tmp_path / "icon.ico")
-    assert written.exists() and written.stat().st_size > 0
+
+
+def test_the_application_mark_is_written_as_a_portable_picture(tmp_path):
+    # A Windows icon file is refused by the toolkit everywhere else, so the file has to be a picture every desktop
+    # reads.
+    from gh_tray.status import APP_ICON_SIZE, write_app_icon
+
+    written = write_app_icon(tmp_path / "mark.png")
+    with Image.open(written) as picture:
+        assert picture.format == "PNG"
+        assert picture.size == (APP_ICON_SIZE, APP_ICON_SIZE)
 
 
 def test_the_mark_carries_its_three_colours_at_every_size_it_is_asked_for():
@@ -159,11 +170,16 @@ def wcag_contrast(ink: str, ground: str) -> float:
     return (brighter + 0.05) / (darker + 0.05)
 
 
-@pytest.mark.parametrize("name", ["heading", "text", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink", "fresh", "stale"])
+@pytest.mark.parametrize(
+    "name",
+    ["heading", "text", "muted", "link", "red", "orange", "amber", "green", "blue", "violet", "pink", "fresh", "stale"],
+)
 def test_every_ink_reads_at_wcag_aa_on_both_grounds(name):
     # 4.5 to 1 is the WCAG AA floor for ordinary text, held against both surfaces an ink can be drawn on, in both
     # palettes, so readability does not depend on a well-adjusted monitor or a forgiving theme choice.
     for palette in (theme.DARK, theme.LIGHT):
         for ground in (palette.background, palette.surface):
             found = wcag_contrast(getattr(palette, name), ground)
-            assert found >= 4.5, f"{name} reads at {found:.2f}:1 on {ground} in the {'dark' if palette.dark else 'light'} palette"
+            assert found >= 4.5, (
+                f"{name} reads at {found:.2f}:1 on {ground} in the {'dark' if palette.dark else 'light'} palette"
+            )

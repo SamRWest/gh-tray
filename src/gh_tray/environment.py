@@ -6,12 +6,14 @@ look when behaviour differs between Windows, macOS and Linux.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import shutil
 import signal
 import subprocess
 import sys
 from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
 from typing import TextIO
 
@@ -123,7 +125,10 @@ def make_dpi_aware() -> None:
         return
     import ctypes
 
-    for library, function, argument in (("shcore", "SetProcessDpiAwareness", 2), ("user32", "SetProcessDPIAware", None)):
+    for library, function, argument in (
+        ("shcore", "SetProcessDpiAwareness", 2),
+        ("user32", "SetProcessDPIAware", None),
+    ):
         try:
             entry = getattr(ctypes.windll, library)
             (getattr(entry, function)(argument) if argument is not None else getattr(entry, function)())
@@ -167,22 +172,67 @@ def cursor_position() -> tuple[int, int] | None:
     matters: a window opened half a second after a click should appear where the click was, not wherever the
     pointer has wandered since.
 
-    Only meaningful from a process that has called :func:`make_dpi_aware`. An unaware one is handed scaled-down
-    coordinates on a scaled display, and a window placed by those lands well away from the click.
+    On Windows this is only meaningful from a process that has called :func:`make_dpi_aware`. An unaware one is
+    handed scaled-down coordinates on a scaled display, and a window placed by those lands well away from the click.
 
     :return: the pointer's x and y in screen pixels
     """
-    if sys.platform != "win32":
-        return None
-    import ctypes
-    import ctypes.wintypes
+    if sys.platform == "win32":
+        import ctypes
+        import ctypes.wintypes
 
-    spot = ctypes.wintypes.POINT()
+        spot = ctypes.wintypes.POINT()
+        try:
+            told = ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
+        except (AttributeError, OSError):
+            return None
+        return (spot.x, spot.y) if told else None
+    if sys.platform == "darwin":
+        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
+        # exists on this one. The answer is measured from the top left of the main display, as the toolkit's is.
+        quartz = import_module("Quartz")
+        spot = quartz.CGEventGetLocation(quartz.CGEventCreate(None))
+        return int(spot.x), int(spot.y)
+    if sys.platform == "linux":
+        return x11_cursor_position()
+    return None
+
+
+def x11_cursor_position() -> tuple[int, int] | None:
+    """Return where the pointer is, asked of the X display, or None where there is no display to ask.
+
+    :return: the pointer's x and y in screen pixels
+    """
+    # Imported by name, for the reason given in :func:`cursor_position`.
+    xlib_display, xlib_error = import_module("Xlib.display"), import_module("Xlib.error")
     try:
-        told = ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
-    except (AttributeError, OSError):
+        display = xlib_display.Display()
+    except (xlib_error.DisplayError, OSError) as error:
+        logger.debug("could not ask the display where the pointer is: {}", error)
         return None
-    return (spot.x, spot.y) if told else None
+    try:
+        pointer = display.screen().root.query_pointer()
+    finally:
+        display.close()
+    return int(pointer.root_x), int(pointer.root_y)
+
+
+def hide_from_dock() -> None:
+    """Keep this process out of the macOS Dock and the application switcher.
+
+    A process that draws a window or a menu bar item is given a Dock icon unless it says otherwise, and the tray,
+    the hidden changes window and the settings window would each show one reading "Python". Elsewhere there is
+    nothing to do.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        # Imported by name, for the reason given in :func:`cursor_position`.
+        appkit = import_module("AppKit")
+    except ImportError as error:
+        logger.debug("could not keep this process out of the Dock: {}", error)
+        return
+    appkit.NSApplication.sharedApplication().setActivationPolicy_(appkit.NSApplicationActivationPolicyAccessory)
 
 
 def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
@@ -228,6 +278,27 @@ def github_auth_summary() -> str:
     return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
 
 
+def applescript_string(text: str) -> str:
+    """Return text as an AppleScript string literal, so a quote or backslash in it cannot end the string early.
+
+    :param text: the text to quote
+    """
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def notify_by_script(title: str, body: str) -> None:
+    """Raise a plain notification through the macOS scripting bridge, which any process may use.
+
+    Nothing can be attached to it: no icon, and no action when it is clicked.
+
+    :param title: the notification's heading
+    :param body: the text under it
+    """
+    script = f"display notification {applescript_string(body)} with title {applescript_string(title)}"
+    run_quietly(["osascript", "-e", script])
+
+
 def in_utf8(command: str) -> str:
     """Return a Windows command that puts the console into UTF-8 before running.
 
@@ -254,11 +325,23 @@ def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
     if sys.platform == "win32":
         windows_terminal = shutil.which("wt")
         if windows_terminal:
-            return [windows_terminal, *(["--maximized"] if maximised else []), "--title", title, "cmd", "/c", in_utf8(command)]
+            return [
+                windows_terminal,
+                *(["--maximized"] if maximised else []),
+                "--title",
+                title,
+                "cmd",
+                "/c",
+                in_utf8(command),
+            ]
         return ["cmd", "/c", "start", *(["/max"] if maximised else []), title, "cmd", "/k", in_utf8(command)]
     if sys.platform == "darwin":
         zoom = "\nset zoomed of front window to true" if maximised else ""
-        return ["osascript", "-e", f'tell application "Terminal"\ndo script "{command}"\nactivate{zoom}\nend tell']
+        return [
+            "osascript",
+            "-e",
+            f'tell application "Terminal"\ndo script {applescript_string(command)}\nactivate{zoom}\nend tell',
+        ]
     # A stable sort, so the usual preference order is kept among terminals that are equally able to maximise.
     candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if maximised else LINUX_TERMINALS
     for name, flag, launch in candidates:
@@ -291,13 +374,19 @@ def launch_command() -> list[str]:
 
 
 def autostart_path() -> Path:
-    """Return the file that makes the tray start at login on this platform."""
+    """Return the file that makes the tray start at login on this platform.
+
+    The roaming and configuration directories are asked of the environment first, since either can be moved away
+    from its usual place under the home directory, and a file written to the usual place would then never be read.
+    """
     home = Path.home()
     if sys.platform == "win32":
-        return home / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.vbs"
+        roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+        return roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.vbs"
     if sys.platform == "darwin":
         return home / "Library" / "LaunchAgents" / f"com.{APP_NAME}.plist"
-    return home / ".config" / "autostart" / f"{APP_NAME}.desktop"
+    configuration = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return configuration / "autostart" / f"{APP_NAME}.desktop"
 
 
 def autostart_enabled() -> bool:
@@ -337,8 +426,11 @@ def autostart_body(command: list[str]) -> str:
         return f'CreateObject("WScript.Shell").Run "{quoted}", 0, False\n'
     if sys.platform == "darwin":
         # Built by the standard library rather than by hand, so a path containing an ampersand cannot produce XML
-        # that launchd silently refuses to load.
-        plist = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
+        # that launchd silently refuses to load. The search path is recorded too: launchd starts things with a bare
+        # one, on which a GitHub tool installed by Homebrew is nowhere to be found.
+        plist: dict[str, object] = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
+        if os.environ.get("PATH"):
+            plist["EnvironmentVariables"] = {"PATH": os.environ["PATH"]}
         return plistlib.dumps(plist).decode("utf-8")
     entry = [
         "[Desktop Entry]",

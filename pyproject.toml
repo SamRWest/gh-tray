@@ -38,6 +38,16 @@ lint_all = { cmd = "uv run prek run --all-files", help = "Run the pre-commit che
 test = { cmd = "uv run pytest", help = "Run the tests" }
 ty = { cmd = "uv run ty check --output-format concise", help = "Run the type checks" }
 
+# The type checker aimed at each platform in turn. It takes sys.platform to be that platform and hides what the
+# platform lacks, so a Windows-only call outside its guard fails here rather than on somebody's Mac.
+[tool.poe.tasks.ty_all]
+help = "Run the type checks as Windows, macOS and Linux in turn"
+sequence = [
+    { cmd = "uv run ty check --python-platform win32 --output-format concise" },
+    { cmd = "uv run ty check --python-platform darwin --output-format concise" },
+    { cmd = "uv run ty check --python-platform linux --output-format concise" },
+]
+
 [tool.ruff]
 line-length = 120
 target-version = "py313"

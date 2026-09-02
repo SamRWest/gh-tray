@@ -12,7 +12,14 @@ from loguru import logger
 
 from . import APP_NAME
 from .config import APP_ICON_PATH, TEXT_KEYS, THEME_KEY, load_config, save_config
-from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
+from .environment import (
+    autostart_enabled,
+    github_auth_summary,
+    hide_from_dock,
+    make_dpi_aware,
+    open_in_terminal,
+    set_autostart,
+)
 from .events import RULE_LABELS
 from .prerequisites import signed_in
 from .status import write_app_icon
@@ -44,27 +51,52 @@ def apply_theme(root: tk.Tk) -> None:
     style = ttk.Style(root)
     style.theme_use("clam")
     root.configure(background=PALETTE.background)
-    style.configure(".", background=PALETTE.background, foreground=PALETTE.text, fieldbackground=PALETTE.surface, borderwidth=0)
+    style.configure(
+        ".", background=PALETTE.background, foreground=PALETTE.text, fieldbackground=PALETTE.surface, borderwidth=0
+    )
     style.configure("TFrame", background=PALETTE.background)
     style.configure("TLabel", background=PALETTE.background, foreground=PALETTE.text)
-    style.configure("TCheckbutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
+    style.configure(
+        "TCheckbutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background
+    )
     style.map(
         "TCheckbutton",
         background=[("active", PALETTE.background)],
         indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
     )
-    style.configure("TEntry", fieldbackground=PALETTE.surface, foreground=PALETTE.text, insertcolor=PALETTE.text, bordercolor=PALETTE.border)
     style.configure(
-        "TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface, padding=(10, 4)
+        "TEntry",
+        fieldbackground=PALETTE.surface,
+        foreground=PALETTE.text,
+        insertcolor=PALETTE.text,
+        bordercolor=PALETTE.border,
+    )
+    style.configure(
+        "TButton",
+        background=PALETTE.surface,
+        foreground=PALETTE.text,
+        bordercolor=PALETTE.border,
+        focuscolor=PALETTE.surface,
+        padding=(10, 4),
     )
     style.map("TButton", background=[("active", PALETTE.hover)])
     # The one button that commits stands out from the ones that do not, so the eye lands on it first.
-    style.configure("Accent.TButton", background=PALETTE.selection, foreground=PALETTE.heading, focuscolor=PALETTE.selection, padding=(10, 4))
+    style.configure(
+        "Accent.TButton",
+        background=PALETTE.selection,
+        foreground=PALETTE.heading,
+        focuscolor=PALETTE.selection,
+        padding=(10, 4),
+    )
     style.map("Accent.TButton", background=[("active", blend(PALETTE.selection, PALETTE.heading, 0.85))])
     # Section names carry the window's structure, so they read a step heavier than what sits under them.
-    style.configure("Heading.TLabel", background=PALETTE.background, foreground=PALETTE.heading, font=("TkDefaultFont", 10, "bold"))
+    style.configure(
+        "Heading.TLabel", background=PALETTE.background, foreground=PALETTE.heading, font=("TkDefaultFont", 10, "bold")
+    )
     style.configure("TSeparator", background=PALETTE.border)
-    style.configure("TRadiobutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
+    style.configure(
+        "TRadiobutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background
+    )
     style.map(
         "TRadiobutton",
         background=[("active", PALETTE.background)],
@@ -77,13 +109,15 @@ def run_settings() -> None:
     make_dpi_aware()
     config = load_config()
     root = tk.Tk()
+    hide_from_dock()
     # Points become the right physical size only once Tk knows the real resolution of the screen.
     root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
     root.title(f"{APP_NAME} settings")
     root.resizable(False, False)
     try:
-        # The application's own mark in the title bar, in place of the toolkit's default.
-        root.iconbitmap(str(write_app_icon(APP_ICON_PATH)))
+        # The application's own mark in the title bar, in place of the toolkit's default. A picture rather than an
+        # icon file, since the toolkit takes a picture on every platform and an icon file on Windows alone.
+        root.iconphoto(True, tk.PhotoImage(file=str(write_app_icon(APP_ICON_PATH))))
     except (tk.TclError, OSError) as error:
         logger.debug("could not put the application's mark on the settings window: {}", error)
     apply_theme(root)
@@ -119,18 +153,22 @@ def run_settings() -> None:
     for column, (value, label) in enumerate(THEME_CHOICES):
         ttk.Radiobutton(styles, text=label, value=value, variable=style_choice).grid(row=0, column=column, padx=(0, 10))
     row += 1
-    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(row=row, column=1, sticky="w", pady=(0, 4))
+    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(
+        row=row, column=1, sticky="w", pady=(0, 4)
+    )
     row += 1
 
     ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
     row += 1
     autostart = tk.BooleanVar(value=autostart_enabled())
-    ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(row=row, column=0, columnspan=2, sticky="w")
+    ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(
+        row=row, column=0, columnspan=2, sticky="w"
+    )
     row += 1
     # Whether you are signed in decides whether anything works at all, so it says so in colour as well as in words.
-    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.green if signed_in() else PALETTE.red).grid(
-        row=row, column=0, columnspan=2, sticky="w", pady=(6, 0)
-    )
+    ttk.Label(
+        frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.green if signed_in() else PALETTE.red
+    ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
     row += 1
 
     def sign_in() -> None:

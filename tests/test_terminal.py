@@ -35,16 +35,22 @@ def test_the_windows_fallback_maximises_instead(monkeypatch):
 def test_the_command_always_reaches_the_terminal(monkeypatch):
     monkeypatch.setattr(environment.sys, "platform", "win32")
     for present in ("wt", None):
-        monkeypatch.setattr(environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None)
+        monkeypatch.setattr(
+            environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None
+        )
         for maximised in (True, False):
-            assert any(COMMAND in part for part in environment.terminal_command(COMMAND, "gh-dash", maximised=maximised))
+            assert any(
+                COMMAND in part for part in environment.terminal_command(COMMAND, "gh-dash", maximised=maximised)
+            )
 
 
 def test_a_windows_console_is_put_into_utf8_first(monkeypatch):
     # A dashboard drawn out of box characters and icons comes out as rubbish on the regional code page.
     monkeypatch.setattr(environment.sys, "platform", "win32")
     for present in ("wt", None):
-        monkeypatch.setattr(environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None)
+        monkeypatch.setattr(
+            environment.shutil, "which", lambda wanted, name=present: f"C:/{wanted}.exe" if wanted == name else None
+        )
         arguments = environment.terminal_command(COMMAND, "gh-dash", maximised=True)
         assert arguments[-1] == f"chcp {environment.UTF8_CODE_PAGE} >nul && {COMMAND}"
 
@@ -84,7 +90,9 @@ def test_maximising_prefers_a_terminal_that_can(monkeypatch):
     monkeypatch.setattr(environment.sys, "platform", "linux")
     # Both installed; the plain one comes first in the usual order but cannot maximise.
     installed = {"x-terminal-emulator", "gnome-terminal"}
-    monkeypatch.setattr(environment.shutil, "which", lambda wanted: f"/usr/bin/{wanted}" if wanted in installed else None)
+    monkeypatch.setattr(
+        environment.shutil, "which", lambda wanted: f"/usr/bin/{wanted}" if wanted in installed else None
+    )
     assert environment.terminal_command(COMMAND, "gh-dash", maximised=True)[0].endswith("gnome-terminal")
     assert environment.terminal_command(COMMAND, "gh-dash", maximised=False)[0].endswith("x-terminal-emulator")
 
@@ -94,3 +102,14 @@ def test_no_terminal_at_all_is_reported_rather_than_ignored(monkeypatch):
     monkeypatch.setattr(environment.shutil, "which", lambda _wanted: None)
     with pytest.raises(RuntimeError, match="no terminal emulator"):
         environment.terminal_command(COMMAND, "gh-dash", maximised=True)
+
+
+def test_macos_quotes_the_command_for_applescript(monkeypatch):
+    # A quote in the command would otherwise end the script's string early and run something else entirely.
+    monkeypatch.setattr(environment.sys, "platform", "darwin")
+    script = environment.terminal_command('gh dash --config "my file"', "gh-dash", maximised=False)[-1]
+    assert 'do script "gh dash --config \\"my file\\""' in script
+
+
+def test_an_applescript_string_keeps_its_quotes_and_backslashes():
+    assert environment.applescript_string('say "hi" \\ bye') == '"say \\"hi\\" \\\\ bye"'

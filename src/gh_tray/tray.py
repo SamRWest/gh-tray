@@ -18,6 +18,7 @@ from .config import POPUP_REQUEST_PATH, REFRESH_REQUEST_PATH, load_config
 from .environment import (
     autostart_enabled,
     cursor_position,
+    hide_from_dock,
     make_dpi_aware,
     no_console_flag,
     on_console_interrupt,
@@ -70,6 +71,7 @@ class Tray:
         # The tray measures the screen when it records where a click was. An unaware process is lied to about
         # coordinates on a scaled display, and the window, which is aware, then opens where the lie says.
         make_dpi_aware()
+        hide_from_dock()
         self.config = load_config()
         REFRESH_REQUEST_PATH.unlink(missing_ok=True)
         POPUP_REQUEST_PATH.unlink(missing_ok=True)
@@ -115,7 +117,10 @@ class Tray:
             return menu(item("nobody is waiting", None, enabled=False))
         return menu(
             *(
-                item(f"{entry['repo']}#{entry['number']} - {str(entry.get('title', ''))[:TITLE_LIMIT]}", self.opener(entry.get("url", "")))
+                item(
+                    f"{entry['repo']}#{entry['number']} - {str(entry.get('title', ''))[:TITLE_LIMIT]}",
+                    self.opener(entry.get("url", "")),
+                )
                 for entry in waiting[:MENU_ENTRY_LIMIT]
             )
         )

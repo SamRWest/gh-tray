@@ -28,7 +28,7 @@ from tksheet import Sheet
 
 from . import APP_NAME
 from .config import POPUP_LOCK_PATH, POPUP_REQUEST_PATH, load_config
-from .environment import SingleInstance, make_dpi_aware, pointer_scaling, work_area
+from .environment import SingleInstance, hide_from_dock, make_dpi_aware, pointer_scaling, work_area
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -109,14 +109,24 @@ TOGGLE_WITHIN_SECONDS = 1.2
 # The pointer shapes are the names every platform knows. The ones Windows adds for the diagonals do not exist on
 # a Linux desktop, where naming one is not ignored but refused, and takes the whole window with it.
 EDGE_HANDLES: tuple[tuple[str, tuple[bool, bool, bool, bool], str, dict], ...] = (
-    ("left", (True, False, False, False), "sb_h_double_arrow", {"relx": 0.0, "rely": 0.0, "relheight": 1.0, "width": EDGE_HANDLE_WIDTH}),
+    (
+        "left",
+        (True, False, False, False),
+        "sb_h_double_arrow",
+        {"relx": 0.0, "rely": 0.0, "relheight": 1.0, "width": EDGE_HANDLE_WIDTH},
+    ),
     (
         "right",
         (False, False, True, False),
         "sb_h_double_arrow",
         {"relx": 1.0, "rely": 0.0, "anchor": "ne", "relheight": 1.0, "width": EDGE_HANDLE_WIDTH},
     ),
-    ("top", (False, True, False, False), "sb_v_double_arrow", {"relx": 0.0, "rely": 0.0, "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH}),
+    (
+        "top",
+        (False, True, False, False),
+        "sb_v_double_arrow",
+        {"relx": 0.0, "rely": 0.0, "relwidth": 1.0, "height": EDGE_HANDLE_WIDTH},
+    ),
     (
         "bottom",
         (False, False, False, True),
@@ -210,6 +220,7 @@ class Popup:
         # The pending change of mind about the window having arrived, cancelled if it goes away first.
         self.settling: str | None = None
         self.root = tk.Tk()
+        hide_from_dock()
         self.root.withdraw()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -269,7 +280,9 @@ class Popup:
         self.apply_scaling()
         if self.text_height() == self.built_for:
             return
-        logger.info("the display now wants rows {} tall rather than {}, building again", self.text_height(), self.built_for)
+        logger.info(
+            "the display now wants rows {} tall rather than {}, building again", self.text_height(), self.built_for
+        )
         for part in self.body.winfo_children():
             part.destroy()
         self.prepare_fonts()
@@ -279,7 +292,11 @@ class Popup:
     def heading_text(self) -> str:
         """Return the line at the top of the window, which counts the rows not yet marked seen."""
         waiting = sum(1 for entry in self.entries if not entry.seen)
-        return f"{APP_NAME} - {waiting} notification{'' if waiting == 1 else 's'}" if waiting else f"{APP_NAME} - nothing to do"
+        return (
+            f"{APP_NAME} - {waiting} notification{'' if waiting == 1 else 's'}"
+            if waiting
+            else f"{APP_NAME} - nothing to do"
+        )
 
     def build(self) -> None:
         """Lay out the heading strip, the table and the closing hint.
@@ -307,10 +324,18 @@ class Popup:
         """Draw the title strip, which names the window and is what it is dragged by."""
         strip = tk.Frame(self.body, background=PALETTE.background, cursor="fleur")
         strip.pack(fill="x", padx=12, pady=(8, 6))
-        self.name = name = tk.Label(strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold)
+        self.name = name = tk.Label(
+            strip, text=text, background=PALETTE.background, foreground=PALETTE.heading, font=self.bold
+        )
         name.pack(side="left")
         self.close_mark = close = tk.Label(
-            strip, text="X", background=PALETTE.background, foreground=PALETTE.muted, font=self.bold, cursor="hand2", padx=6
+            strip,
+            text="X",
+            background=PALETTE.background,
+            foreground=PALETTE.muted,
+            font=self.bold,
+            cursor="hand2",
+            padx=6,
         )
         close.pack(side="right")
         # Brightening under the pointer, so the mark answers before it is clicked.
@@ -356,7 +381,9 @@ class Popup:
         )
         self.sheet.pack(fill="both", expand=True, padx=6)
         # Only what a reader needs: resizing a column, moving about, and copying a cell out.
-        self.sheet.enable_bindings("single_select", "column_width_resize", "double_click_column_resize", "arrowkeys", "copy")
+        self.sheet.enable_bindings(
+            "single_select", "column_width_resize", "double_click_column_resize", "arrowkeys", "copy"
+        )
         self.sheet.set_column_widths(iter(self.column_widths()))
         self.paint()
         self.sheet.bind("<Button-1>", self.on_click, add="+")
@@ -375,7 +402,9 @@ class Popup:
 
     def on_column_dragged(self, _event: object = None) -> None:
         """Remember every column's width, now that the user has dragged one of them."""
-        widths = {key: round(width) for (key, *_rest), width in zip(COLUMNS, self.sheet.get_column_widths(), strict=True)}
+        widths = {
+            key: round(width) for (key, *_rest), width in zip(COLUMNS, self.sheet.get_column_widths(), strict=True)
+        }
         remember_column_widths(widths, self.dots)
 
     def paint(self) -> None:
@@ -408,7 +437,9 @@ class Popup:
 
     def refill(self) -> None:
         """Put the rows into the table in their current order, and colour them again."""
-        self.sheet.set_sheet_data([cells_of(entry, self.glyphs) for entry in self.entries], reset_col_positions=False, redraw=False)
+        self.sheet.set_sheet_data(
+            [cells_of(entry, self.glyphs) for entry in self.entries], reset_col_positions=False, redraw=False
+        )
         self.paint()
         self.sheet.redraw()
 
@@ -453,7 +484,9 @@ class Popup:
             return
         marked = replace(self.entries[row], seen=seen)
         self.entries[row] = marked
-        self.all_entries = [marked if entry.url == marked.url and entry.at == marked.at else entry for entry in self.all_entries]
+        self.all_entries = [
+            marked if entry.url == marked.url and entry.at == marked.at else entry for entry in self.all_entries
+        ]
         remember_row_seen(marked, seen)
         self.refill()
         self.name.configure(text=self.heading_text())
@@ -479,13 +512,16 @@ class Popup:
         self.entries = sorted_rows(self.entries, column, self.newest_first)
         self.refill()
         marker = " v" if self.newest_first else " ^"
-        self.sheet.headers([f"{heading}{marker if key == column else ''}" for key, heading, _width, _stretches in COLUMNS])
+        self.sheet.headers(
+            [f"{heading}{marker if key == column else ''}" for key, heading, _width, _stretches in COLUMNS]
+        )
 
     def footer(self) -> None:
         """Draw the quick filters, the closed toggle, the button that asks for a fresh look, and the closing hint."""
         self.hint = tk.Label(
             self.body,
-            text="Click a row to open it, right-click to mark it seen. Click a heading to sort, drag the title to move, an edge to resize.",
+            text="Click a row to open it, right-click to mark it seen. "
+            "Click a heading to sort, drag the title to move, an edge to resize.",
             background=PALETTE.background,
             foreground=PALETTE.muted,
             font=self.regular,
@@ -529,7 +565,10 @@ class Popup:
         )
         self.refresh_button.pack(side="right", padx=12, pady=6)
         self.refresh_button.bind("<Button-1>", lambda _event: self.refresh())
-        self.refresh_button.bind("<Enter>", lambda _event: self.refresh_button.configure(background=blend(PALETTE.selection, PALETTE.heading, 0.85)))
+        self.refresh_button.bind(
+            "<Enter>",
+            lambda _event: self.refresh_button.configure(background=blend(PALETTE.selection, PALETTE.heading, 0.85)),
+        )
         self.refresh_button.bind("<Leave>", lambda _event: self.refresh_button.configure(background=PALETTE.selection))
 
     def refresh(self) -> None:
@@ -573,7 +612,11 @@ class Popup:
 
     def apply_filter(self) -> None:
         """Reduce everything on offer to what the chosen filters let through, in the chosen order."""
-        kept = [entry for entry in self.all_entries if role_matches(entry, self.role_filter) and closed_matches(entry, self.show_closed)]
+        kept = [
+            entry
+            for entry in self.all_entries
+            if role_matches(entry, self.role_filter) and closed_matches(entry, self.show_closed)
+        ]
         self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
 
     def redraw_filtered(self) -> None:
@@ -856,7 +899,10 @@ class Popup:
         self.root.after(WATCH_EVERY_MS, self.watch)
 
     def answer(self) -> None:
-        """Act on a note asking for the window: show it, put it away, or hand over to one drawn for how things are now."""
+        """Act on a note asking for the window.
+
+        Show it, put it away, or hand over to one drawn for how things are now.
+        """
         if self.showing or self.just_dismissed():
             # Asking for the window while it is up means put it away. Whether the click that asked has already
             # dismissed it by taking its focus depends on the desktop, so both are treated the same.

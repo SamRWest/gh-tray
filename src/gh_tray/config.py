@@ -25,7 +25,7 @@ LOG_PATH = APP_DIR / "gh-tray.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 # Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
-APP_ICON_PATH = APP_DIR / "gh-tray.ico"
+APP_ICON_PATH = APP_DIR / "gh-tray.png"
 # Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
 # of what one needs to say to the other.
 REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
@@ -83,7 +83,9 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
-    config["toasts"] = {kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()}
+    config["toasts"] = {
+        kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
+    }
     if config.get(THEME_KEY) not in STYLES:
         config[THEME_KEY] = DEFAULT_CONFIG[THEME_KEY]
     return config

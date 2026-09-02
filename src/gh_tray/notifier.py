@@ -14,10 +14,13 @@ import threading
 import webbrowser
 
 from desktop_notifier import DesktopNotifier, Icon
+from desktop_notifier.backends.dummy import DummyNotificationCenter
+from desktop_notifier.main import get_backend_class
 from loguru import logger
 
 from . import APP_NAME
 from .config import APP_ICON_PATH
+from .environment import notify_by_script
 from .events import label_for
 from .status import write_app_icon
 
@@ -38,6 +41,16 @@ def own_icon() -> Icon | None:
     except OSError as error:
         logger.warning("could not draw the application's icon: {}", error)
         return None
+
+
+def notification_center_available() -> bool:
+    """Return whether the desktop's notification service will take notifications from this process.
+
+    macOS hands Notification Center only to an app bundle, and a Python interpreter installed by a package manager
+    is not one, so the notification library quietly substitutes a backend that does nothing. Which backend it chose
+    is asked of it rather than worked out again here.
+    """
+    return get_backend_class() is not DummyNotificationCenter
 
 
 class Notifier:
@@ -123,6 +136,15 @@ class Notifier:
             if url:
                 webbrowser.open(url)
 
+        if not notification_center_available():
+            # Spoken rather than raised: the desktop will not take a notification from this process, so the
+            # scripting bridge carries the words alone, with no icon and nothing to click.
+            notify_by_script(title, body)
+            logger.info(
+                "notified about {} change(s) by script, as this desktop offers this process no notification service",
+                len(chosen),
+            )
+            return True
         logger.debug("raising a notification about {} change(s)", len(chosen))
         loop, backend = self._ready()
         if loop is None or backend is None:

@@ -1,8 +1,8 @@
 # Run the checks and the tests on every push.
 #
 # Windows is where this application is developed and where its awkward parts live: the taskbar measurement, the
-# single-instance lock and the hidden-window launcher all take a different path there. Linux is checked too, since
-# the tray, the autostart entry and the terminal launcher all claim to work on it.
+# single-instance lock and the hidden-window launcher all take a different path there. Linux and macOS are checked
+# too, since the tray, the login entry, the terminal launcher and the notifier each take a path of their own on them.
 name: Checks and tests
 
 on: [ push, workflow_dispatch ]
@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest ]
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
     defaults:
       run:
         shell: bash
@@ -45,6 +45,11 @@ jobs:
       - name: Install the dependencies
         run: uv sync --locked
 
+      # The login entry written on Linux is checked against the desktop's own validator, where there is one.
+      - name: Install the desktop entry validator
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y desktop-file-utils
+
       # The window and the tray icon both need a display. There is none on a runner, so one is faked for the Linux
       # job; the Windows one has a desktop of its own. Tests that still cannot build a window skip themselves.
       - name: Run the tests
@@ -54,3 +59,10 @@ jobs:
       - name: Run the pre-commit checks
         if: matrix.os == 'ubuntu-latest'
         run: uv run poe lint_all
+
+      # The type checker can be aimed at another platform, which is the cheapest cross-platform check there is: it
+      # takes sys.platform to be that platform and hides what the platform lacks, so a Windows-only call outside
+      # its guard fails here rather than on somebody's Mac.
+      - name: Type check as each platform
+        if: matrix.os == 'ubuntu-latest'
+        run: uv run poe ty_all
