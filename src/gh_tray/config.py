@@ -37,6 +37,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
+    "hidden_orgs": [],
     "theme": "auto",
     "toasts": {
         "review_requested": True,
@@ -50,6 +51,9 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
+# The organisations the searches leave out. Everything else the account has a hand in is watched, so an organisation
+# joined later needs no setting, and one the account merely contributes to from outside is never lost.
+HIDDEN_ORGS_KEY = "hidden_orgs"
 # The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
 
@@ -60,6 +64,23 @@ NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "max_age_days": (0, None),
     "popup_rows": (1, 50),
 }
+
+
+def login_list(value: object) -> list[str]:
+    """Return a list of GitHub logins from a setting, however it was written.
+
+    A hand-edited file may hold one string with commas or spaces between the names rather than a list, and either
+    may repeat a name or carry the @ people write before one.
+
+    :param value: the setting as read
+    """
+    parts = value if isinstance(value, list) else str(value or "").replace(",", " ").split()
+    logins: list[str] = []
+    for part in parts:
+        login = str(part).strip().lstrip("@")
+        if login and login.casefold() not in {kept.casefold() for kept in logins}:
+            logins.append(login)
+    return logins
 
 
 def normalise(config: dict) -> dict:
@@ -77,6 +98,7 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
+    config[HIDDEN_ORGS_KEY] = login_list(config.get(HIDDEN_ORGS_KEY))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
     }

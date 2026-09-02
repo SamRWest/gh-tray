@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from .config import ERROR_LOG_PATH, STATE_PATH
+from .config import ERROR_LOG_PATH, HIDDEN_ORGS_KEY, STATE_PATH
 from .github import GitHubError, api, search_pull_requests, viewer
 from .storage import read_json, write_json_atomic, write_text_atomic
 
@@ -43,19 +43,24 @@ CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
 CLOSED_LOOKBACK_DAYS = 30
 
 
-def search_for(base: str, max_age_days: int, now: datetime) -> str:
-    """Add the age cutoff to a search, so GitHub leaves out what would only be thrown away on arrival.
+def search_for(base: str, max_age_days: int, now: datetime, hidden_orgs: list[str] | None = None) -> str:
+    """Add the age cutoff and the organisations left out to a search, so GitHub keeps back what would be dropped.
 
-    Without this the search returns everything ever opened and most of it is dropped here, which on a long-lived
-    account means fetching two pages to keep one. Each page is a slow request, so this is most of a poll's time.
+    Without the cutoff the search returns everything ever opened and most of it is dropped here, which on a
+    long-lived account means fetching two pages to keep one. Each page is a slow request, so this is most of a
+    poll's time.
 
     :param base: the search expression
     :param max_age_days: how old is too old, or zero to keep everything
     :param now: the moment to measure against
+    :param hidden_orgs: the organisations whose pull requests are not wanted
     """
-    if not max_age_days:
-        return base
-    return f"{base} updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}"
+    qualifiers = [base]
+    if max_age_days:
+        qualifiers.append(f"updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}")
+    # A qualifier with a hyphen before it is one GitHub leaves out, and each organisation takes one of its own.
+    qualifiers += [f"-org:{login}" for login in hidden_orgs or []]
+    return " ".join(qualifiers)
 
 
 SEARCH_QUERY = """
@@ -239,15 +244,22 @@ def thread_author(subject_url: str) -> str:
     return nested(thread, "user", "login") if isinstance(thread, dict) else ""
 
 
-def collect_mentions(since: str) -> list[dict]:
+def collect_mentions(since: str, hidden_orgs: list[str] | None = None) -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
     :param since: the earliest moment to report, as a GitHub timestamp
+    :param hidden_orgs: the organisations whose mentions are not wanted
     """
     feed = api(f"notifications?all=false&since={since}&per_page=100")
     if not isinstance(feed, list):
         return []
-    raised = [notification for notification in feed if notification.get("reason") in ("mention", "team_mention")]
+    left_out = {login.casefold() for login in hidden_orgs or []}
+    raised = [
+        notification
+        for notification in feed
+        if notification.get("reason") in ("mention", "team_mention")
+        and nested(notification, "repository", "owner", "login").casefold() not in left_out
+    ]
     # One request each to find out who wrote them and whose thread it is, so only the first few are traced and
     # those go out together. Whose thread it is cannot come from the poll's own lists: a mention often lands on a
     # pull request the user neither wrote nor reviews, or on one already closed.
@@ -300,9 +312,10 @@ def collect(config: dict) -> tuple[dict | None, str]:
     started = datetime.now(UTC)
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
     cutoff = config.get("max_age_days", 0)
-    authored_search = search_for(AUTHORED, cutoff, started)
-    reviewing_search = search_for(REVIEWING, cutoff, started)
-    closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started)
+    hidden = config.get(HIDDEN_ORGS_KEY) or []
+    authored_search = search_for(AUTHORED, cutoff, started, hidden)
+    reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
+    closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)
     try:
         # The askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
         # they go out together. The poll then takes about as long as its slowest part rather than their sum.
@@ -311,7 +324,7 @@ def collect(config: dict) -> tuple[dict | None, str]:
             own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
             to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
             finished = pool.submit(search_pull_requests, SEARCH_QUERY, closed_search)
-            mentioning = pool.submit(collect_mentions, since)
+            mentioning = pool.submit(collect_mentions, since, hidden)
             signed_in_as = signed_in.result()
             authored = [normalise(node, "authored") for node in own.result()]
             reviewing = [normalise(node, "reviewing") for node in to_review.result()]

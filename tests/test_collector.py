@@ -93,7 +93,7 @@ def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkey
     searches: list[str] = []
     monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
     monkeypatch.setattr(collector, "viewer", lambda: "me")
-    monkeypatch.setattr(collector, "collect_mentions", lambda _since: [])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
 
     def fake_search(_query: str, q: str) -> list[dict]:
         searches.append(q)
@@ -351,3 +351,42 @@ def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
     found = collector.collect_mentions("2026-01-01T00:00:00Z")
     assert found[0]["number"] == "217"
     assert found[1]["number"] == ""
+
+
+def test_a_hidden_organisation_is_left_out_of_a_search():
+    now = datetime(2026, 1, 31, tzinfo=UTC)
+    assert collector.search_for("is:pr", 0, now, ["acme", "widgets"]) == "is:pr -org:acme -org:widgets"
+    assert collector.search_for("is:pr", 30, now, ["acme"]) == "is:pr updated:>2026-01-01 -org:acme"
+    assert collector.search_for("is:pr", 0, now) == "is:pr"
+
+
+def test_mentions_from_a_hidden_organisation_are_left_out(monkeypatch):
+    feed = [
+        {
+            "reason": "mention",
+            "repository": {"full_name": "acme/widget", "owner": {"login": "acme"}},
+            "subject": {"url": "", "title": "a"},
+        },
+        {
+            "reason": "mention",
+            "repository": {"full_name": "other/thing", "owner": {"login": "Other"}},
+            "subject": {"url": "", "title": "b"},
+        },
+    ]
+    monkeypatch.setattr(collector, "api", lambda _path: feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
+    monkeypatch.setattr(collector, "thread_author", lambda _url: "")
+    found = collector.collect_mentions("2026-01-01T00:00:00Z", ["other"])
+    assert [mention["repo"] for mention in found] == ["acme/widget"]
+
+
+def test_the_organisations_an_account_belongs_to_are_listed_alphabetically(monkeypatch):
+    monkeypatch.setattr(
+        github, "api", lambda _path: [{"login": "Widgets"}, {"login": "acme"}, {"nope": 1}, {"login": ""}]
+    )
+    assert github.organisations() == ["acme", "Widgets"]
+
+
+def test_no_organisations_reads_as_an_empty_list(monkeypatch):
+    monkeypatch.setattr(github, "api", lambda _path: {"message": "odd"})
+    assert github.organisations() == []

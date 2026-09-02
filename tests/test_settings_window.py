@@ -26,6 +26,7 @@ class DialogBuilder:
         monkeypatch.setattr(settings_window, "save_config", self.saved.append)
         monkeypatch.setattr(settings_window, "set_autostart", self.autostart_calls.append)
         monkeypatch.setattr(settings_window, "follow_theme_setting", self.theme_calls.append)
+        monkeypatch.setattr(settings_window, "organisations", lambda: ["acme", "widgets"])
 
     def __call__(self, stored: dict, autostart: bool = False) -> SettingsDialog:
         """Build one dialog showing the given stored settings.
@@ -84,3 +85,25 @@ def test_chosen_theme_follows_the_radio_buttons(build_dialog):
     assert dialog.chosen_theme() == theme.ALWAYS_DARK
     dialog.style_buttons[theme.FOLLOW_DESKTOP].setChecked(True)
     assert dialog.chosen_theme() == theme.FOLLOW_DESKTOP
+
+
+def test_every_organisation_is_listed_and_on_unless_turned_off(build_dialog):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_orgs": ["widgets", "former"]})
+    assert list(dialog.org_switches) == ["acme", "widgets", "former"]
+    assert [switch.isChecked() for switch in dialog.org_switches.values()] == [True, False, False]
+
+
+def test_turning_an_organisation_off_is_what_is_saved(build_dialog):
+    dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG))
+    dialog.org_switches["acme"].setChecked(False)
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["hidden_orgs"] == ["acme"]
+
+
+def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog, monkeypatch):
+    def refuse():
+        raise settings_window.GitHubError("GitHub did not answer")
+
+    monkeypatch.setattr(settings_window, "organisations", refuse)
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_orgs": ["widgets"]})
+    assert list(dialog.org_switches) == ["widgets"]

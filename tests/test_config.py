@@ -104,3 +104,14 @@ def test_a_setting_left_over_from_an_older_version_is_dropped(settings_file):
     )
     loaded = config.load_config()
     assert not {"collector", "bash_path", "orgs"} & set(loaded)
+
+
+def test_hidden_organisations_are_read_from_a_list_or_a_hand_written_string():
+    assert config.login_list(["acme", "widgets"]) == ["acme", "widgets"]
+    assert config.login_list("acme, @widgets acme") == ["acme", "widgets"]
+    assert config.login_list(None) == []
+
+
+def test_hidden_organisations_are_kept_through_a_round_trip(settings_file):
+    config.save_config({**config.DEFAULT_CONFIG, "hidden_orgs": "acme widgets"})
+    assert config.load_config()["hidden_orgs"] == ["acme", "widgets"]

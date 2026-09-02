@@ -177,3 +177,19 @@ def search_pull_requests(query: str, search: str) -> list[dict]:
         if not cursor:
             break
     return nodes
+
+
+def organisations() -> list[str]:
+    """Return the logins of the organisations the signed-in account belongs to, in alphabetical order.
+
+    Membership is all this can see. An account can have a hand in pull requests elsewhere, as an outside
+    collaborator, which is why the settings turn organisations off rather than on.
+
+    :return: the logins, or an empty list when the account belongs to none
+    :raises GitHubError: when GitHub cannot be asked
+    """
+    found = api("user/orgs?per_page=100")
+    if not isinstance(found, list):
+        return []
+    logins = [str(item.get("login", "")) for item in found if isinstance(item, dict) and item.get("login")]
+    return sorted(logins, key=str.casefold)

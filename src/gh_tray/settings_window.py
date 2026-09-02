@@ -22,9 +22,10 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, NUMBER_RANGES, THEME_KEY, load_config, save_config
+from .config import APP_ICON_PATH, HIDDEN_ORGS_KEY, NUMBER_RANGES, THEME_KEY, load_config, save_config
 from .environment import autostart_enabled, github_auth_summary, hide_from_dock, open_in_terminal, set_autostart
 from .events import RULE_LABELS
+from .github import GitHubError, organisations
 from .prerequisites import signed_in
 from .status import write_app_icon
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
@@ -62,6 +63,7 @@ class SettingsDialog(QDialog):
         column = QVBoxLayout(self)
         column.addLayout(self.fields())
         column.addWidget(self.notification_switches())
+        column.addWidget(self.organisation_switches())
         column.addWidget(self.colour_choices())
         self.autostart = QCheckBox("Start automatically at login", self)
         self.autostart.setChecked(autostart_enabled())
@@ -95,6 +97,34 @@ class SettingsDialog(QDialog):
             switch.setChecked(bool(self.config["toasts"].get(kind)))
             column.addWidget(switch)
             self.toggles[kind] = switch
+        return group
+
+    def organisation_switches(self) -> QGroupBox:
+        """Lay out one switch per organisation the account belongs to, on unless the user has turned it off.
+
+        Off rather than on is what is remembered, so an organisation joined later is watched without a visit here,
+        and pull requests in organisations the account merely contributes to from outside are never lost. One
+        turned off stays listed after the account leaves it, so it can be turned on again.
+        """
+        group = QGroupBox("Watch pull requests in", self)
+        column = QVBoxLayout(group)
+        hidden = [str(login) for login in self.config.get(HIDDEN_ORGS_KEY) or []]
+        try:
+            known = organisations()
+        except GitHubError as error:
+            known = []
+            column.addWidget(QLabel(f"Could not list your organisations: {error}", group))
+        listed = known + [login for login in hidden if login.casefold() not in {name.casefold() for name in known}]
+        self.org_switches: dict[str, QCheckBox] = {}
+        for login in listed:
+            switch = QCheckBox(login, group)
+            switch.setChecked(login.casefold() not in {name.casefold() for name in hidden})
+            column.addWidget(switch)
+            self.org_switches[login] = switch
+        if not listed:
+            column.addWidget(
+                QLabel("Your account belongs to no organisation. Everything you have a hand in is watched.", group)
+            )
         return group
 
     def colour_choices(self) -> QGroupBox:
@@ -146,6 +176,7 @@ class SettingsDialog(QDialog):
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
+        self.config[HIDDEN_ORGS_KEY] = [login for login, switch in self.org_switches.items() if not switch.isChecked()]
         self.config[THEME_KEY] = self.chosen_theme()
         save_config(self.config)
         set_autostart(self.autostart.isChecked())
