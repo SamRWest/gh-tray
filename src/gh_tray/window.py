@@ -7,9 +7,9 @@ again marks it unseen.
 The window is built once, when the tray starts, and hidden rather than closed, so showing it costs nothing.
 
 It has no frame, so the little a frame provides is supplied here: a strip at the top to drag it by, edges to resize
-it from, and a close mark. The dragging and resizing themselves are handed to the desktop, which does them as it
-does for any window. Escape, the close mark, a click on the tray icon, or a click anywhere else on screen put it
-away.
+it from, a close mark, and a button carrying the tray's menu, which some desktops offer no other way to reach. The
+dragging and resizing themselves are handed to the desktop, which does them as it does for any window. Escape, the
+close mark, a click on the tray icon, or a click anywhere else on screen put it away.
 """
 
 from __future__ import annotations
@@ -36,10 +36,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QStyle,
     QTableWidget,
@@ -253,6 +255,15 @@ class ChangesWindow(QWidget):
         self.name.setFont(bold)
         row.addWidget(self.name)
         row.addStretch(1)
+        # The tray's menu, hung off a button so it opens under it: anchored to this window, it lands where it should
+        # even on a desktop that will not place a window by a screen coordinate. Hidden until the tray hands it over.
+        self.menu_button = QToolButton(self.strip)
+        self.menu_button.setText("Menu")
+        self.menu_button.setAutoRaise(True)
+        self.menu_button.setCursor(Qt.CursorShape.ArrowCursor)
+        self.menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.menu_button.hide()
+        row.addWidget(self.menu_button)
         self.close_mark = QToolButton(self.strip)
         self.close_mark.setAutoRaise(True)
         self.close_mark.setCursor(Qt.CursorShape.ArrowCursor)
@@ -260,6 +271,14 @@ class ChangesWindow(QWidget):
         self.close_mark.clicked.connect(self.hide)
         row.addWidget(self.close_mark)
         return self.strip
+
+    def attach_menu(self, menu: QMenu) -> None:
+        """Hang the tray's menu off the button in the title strip, and show the button.
+
+        :param menu: the tray's menu, which the tray keeps rebuilding in place
+        """
+        self.menu_button.setMenu(menu)
+        self.menu_button.show()
 
     def controls(self) -> QHBoxLayout:
         """Lay out the quick filters, the closed toggle, the search box, and the dashboard and refresh buttons."""
@@ -850,7 +869,9 @@ class ChangesWindow(QWidget):
         :param event: any event the window is sent
         """
         deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
-        if deactivated and time.monotonic() - self.shown_at >= FOCUS_SETTLE_SECONDS:
+        settled = time.monotonic() - self.shown_at >= FOCUS_SETTLE_SECONDS
+        # A menu of this application's own, popped up from the window, is not somebody clicking elsewhere.
+        if deactivated and settled and QApplication.activePopupWidget() is None:
             self.hide()
             self.dismissed_at = time.monotonic()
         return super().event(event)

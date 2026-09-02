@@ -134,8 +134,10 @@ class Tray(QObject):
         self.poller.failed.connect(self.on_failed)
         self.icon = QSystemTrayIcon(icon_from(build_image(GREY, 0)), self)
         self.icon.setToolTip(f"{APP_NAME} - starting")
+        # The menu is the application's own and is never handed to the desktop's tray. A desktop given a menu tends
+        # to open it on every button, and the left click that should show the window never reaches the application.
+        # Instead the menu is shown here on a right click, where the desktop reports one, and from the window.
         self.menu = QMenu()
-        self.icon.setContextMenu(self.menu)
         self.icon.activated.connect(self.on_activated)
         # The zoom is taken up before the window is built, so the window measures itself against the zoomed text.
         self.layout = layout_store()
@@ -143,6 +145,7 @@ class Tray(QObject):
         self.window = ChangesWindow(rows_to_show(self.config["popup_rows"]), self.layout)
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
+        self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
         self.heartbeat = QTimer(self)
@@ -230,12 +233,17 @@ class Tray(QObject):
         self.window.on_polled(False)
 
     def on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Show or put away the changes window on a plain click. The menu is the desktop's to open.
+        """Show or put away the changes window on a left or middle click, and show the menu on a right click.
+
+        A middle click counts because some desktops turn a left click into something else and pass on only the
+        middle one. A double click is the second of two left clicks, which has already been answered.
 
         :param reason: what was done to the icon
         """
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.MiddleClick):
             self.on_popup()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            self.menu.popup(QCursor.pos())
 
     def on_popup(self, *_) -> None:
         """Show the changes window by the pointer, or put it away if it is up."""

@@ -122,3 +122,25 @@ def test_wait_seconds_keeps_the_minimum_and_quarters_the_interval_after_a_failur
     poller.config = {"poll_minutes": 20}
     assert poller.wait_seconds(succeeded=True) == 1200
     assert poller.wait_seconds(succeeded=False) == 1200 // tray.RETRY_FRACTION
+
+
+def test_a_middle_click_shows_the_window_as_a_left_click_does(build_tray, qapp):
+    subject = build_tray()
+    subject.on_activated(QSystemTrayIcon.ActivationReason.MiddleClick)
+    qapp.processEvents()
+    assert subject.window.isVisible()
+
+
+def test_a_right_click_shows_the_applications_own_menu(build_tray, qtbot):
+    # The desktop is never given the menu, so a right click it reports is answered here.
+    subject = build_tray()
+    assert subject.icon.contextMenu() is None
+    subject.on_activated(QSystemTrayIcon.ActivationReason.Context)
+    qtbot.waitUntil(subject.menu.isVisible)
+    subject.menu.close()
+
+
+def test_the_window_carries_the_same_menu(build_tray):
+    subject = build_tray()
+    assert subject.window.menu_button.menu() is subject.menu
+    assert subject.window.menu_button.isVisibleTo(subject.window)
