@@ -27,16 +27,19 @@ from PySide6.QtGui import (
     QGuiApplication,
     QIcon,
     QKeyEvent,
+    QKeySequence,
     QMouseEvent,
     QPainter,
     QPaintEvent,
     QResizeEvent,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QStyle,
     QTableWidget,
@@ -59,6 +62,7 @@ from .popup import (
     age_colour,
     closed_matches,
     glyph_for,
+    matches_search,
     org_and_name,
     remember_row_seen,
     role_matches,
@@ -179,6 +183,8 @@ class ChangesWindow(QWidget):
         self.show_closed = False
         self.sort_column = DEFAULT_SORT
         self.newest_first = True
+        # What the search box holds, which every row shown has to contain somewhere.
+        self.search_text = ""
         self.inks: Palette = palette(chosen_style())
         self.layout_store = layout if layout is not None else layout_store()
         # The width this code last gave the window. A resize to anything else is the user's doing, and worth keeping.
@@ -230,6 +236,14 @@ class ChangesWindow(QWidget):
         self.size_columns()
         column.addWidget(self.table, 1)
         column.addLayout(self.controls())
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText("Search any column (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.set_search)
+        column.addWidget(self.search)
+        # A shortcut rather than a key handler, so it works whichever part of the window has the focus.
+        self.find_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Find), self)
+        self.find_shortcut.activated.connect(self.focus_search)
         self.hint = QLabel(HINT, self)
         column.addWidget(self.hint)
 
@@ -382,7 +396,9 @@ class ChangesWindow(QWidget):
         kept = [
             entry
             for entry in self.all_entries
-            if role_matches(entry, self.role_filter) and closed_matches(entry, self.show_closed)
+            if role_matches(entry, self.role_filter)
+            and closed_matches(entry, self.show_closed)
+            and matches_search(entry, self.search_text)
         ]
         self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
 
@@ -515,6 +531,19 @@ class ChangesWindow(QWidget):
         """
         self.show_closed = wanted
         self.redraw_filtered()
+
+    def set_search(self, text: str) -> None:
+        """Keep only the rows holding some text, as it is typed.
+
+        :param text: what the search box now holds
+        """
+        self.search_text = text
+        self.redraw_filtered()
+
+    def focus_search(self) -> None:
+        """Put the keyboard in the search box, with whatever it holds selected so typing replaces it."""
+        self.search.setFocus()
+        self.search.selectAll()
 
     def redraw_filtered(self) -> None:
         """Redraw around whatever the filters now leave, re-fitting the height from the top edge."""
@@ -824,12 +853,15 @@ class ChangesWindow(QWidget):
         return super().event(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Put the window away on Escape. Every other key is the table's.
+        """Clear a search on Escape, or put the window away when there is none. Every other key is the table's.
 
         :param event: the key press
         """
         if event.key() == Qt.Key.Key_Escape:
-            self.hide()
+            if self.search.hasFocus() and self.search.text():
+                self.search.clear()
+            else:
+                self.hide()
             return
         super().keyPressEvent(event)
 

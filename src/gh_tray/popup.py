@@ -521,6 +521,20 @@ def role_matches(row: Row, wanted: str) -> bool:
     return wanted == "all" or row.role == wanted
 
 
+def matches_search(row: Row, needle: str) -> bool:
+    """Return whether a row has some text somewhere in its columns.
+
+    Case is ignored, as is where in a column the text falls, so "widg" finds acme/widget and "sam" finds SamRWest.
+
+    :param row: the row to judge
+    :param needle: the text looked for; none at all matches every row
+    """
+    if not needle:
+        return True
+    haystack = " ".join((row.label, row.repo, row.number, row.status, row.title, row.author, row.who, row.when))
+    return needle.casefold() in haystack.casefold()
+
+
 def remember_row_seen(row: Row, seen: bool) -> None:
     """Record that the user has marked a row seen or unseen, so the window and the tray icon agree about it.
 

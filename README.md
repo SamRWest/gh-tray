@@ -54,6 +54,9 @@ leave it saying "nothing" on a quiet day while three reviews sat in the queue.
 | Who    | Whoever triggered the change: the reviewer, the committer, the commenter |
 | When   | How long ago                                                             |
 
+Type in the search box along the bottom, or press Ctrl+F to get there, and only rows with that text somewhere in a
+column stay: a name, a repository, a status, a word of a title. Escape clears the box.
+
 The two name columns are different questions: a comment on Emily's pull request from someone else shows Emily as the
 author and the commenter as who. Filters along the bottom cut the list to one of your hats: pull requests you wrote,
 ones you review, or mentions of you.
