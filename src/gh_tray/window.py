@@ -63,13 +63,13 @@ from .popup import (
     closed_matches,
     glyph_for,
     matches_search,
+    name_colour,
     org_and_name,
     remember_row_seen,
     role_matches,
     row_background,
     rows_to_show,
     sorted_rows,
-    who_colour,
 )
 from .status import write_app_icon
 from .theme import Palette, blend, chosen_style, ink, palette
@@ -106,12 +106,11 @@ FOCUS_SETTLE_SECONDS = 0.3
 # means put the window away, and answering it by showing the window again would leave it having done nothing.
 TOGGLE_WITHIN_SECONDS = 0.5
 
-# The date, the status and the two name columns are each drawn on a scale of their own, so they need finding among
-# the columns.
+# The date and the status are each drawn on a scale of their own, and the four columns that hold a name are drawn in
+# the colour dealt to that name, so they need finding among the columns.
 DATE_COLUMN = "when"
-WHO_COLUMN = "who"
-AUTHOR_COLUMN = "author"
 STATUS_COLUMN = "status"
+NAMED_COLUMNS = ("org", "repo", "author", "who")
 
 # Where the remembered widths are kept in the layout store: the window's, and each column's by its name. Named
 # rather than positional, so a column added or moved later cannot inherit the wrong width. Kept in characters of the
@@ -422,8 +421,9 @@ class ChangesWindow(QWidget):
         runs from just-happened to long-forgotten and reads as a gradient down the window. Dimming for age as well
         left two rows of the same sort looking different for a reason nobody could name.
 
-        The name has an ink of its own too, dealt to it and kept, so the same person reads as the same colour in
-        every row. It dims with the rest of the row once seen, unlike the date, whose scale is the point of it.
+        A name has an ink of its own too, dealt to it and kept, so the same person, organisation or repository
+        reads as the same colour in every row and rows about the same one group by eye. It dims with the rest of the
+        row once seen, unlike the date, whose scale is the point of it.
 
         Dimming and washes are mixed towards the colour the toolkit actually painted the table, so they sit right in
         whichever theme the desktop is drawing.
@@ -431,11 +431,12 @@ class ChangesWindow(QWidget):
         ground = self.table.palette().base().color().name()
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
+            owner, _name = org_and_name(entry.repo)
+            named = {"org": owner, "repo": entry.repo, "author": entry.author, "who": entry.who}
             inks = {
                 date_column: age_colour(entry.at, self.inks),
-                column_of(WHO_COLUMN): ink(self.inks, who_colour(entry.who)),
-                column_of(AUTHOR_COLUMN): ink(self.inks, who_colour(entry.author)),
                 column_of(STATUS_COLUMN): ink(self.inks, STATUS_COLOURS.get(entry.status, QUIET)),
+                **{column_of(key): ink(self.inks, name_colour(named[key])) for key in NAMED_COLUMNS},
             }
             # A finished pull request's row sits on a wash of its status colour, so it reads as done at a glance.
             wash = row_background(entry, self.inks, ground)

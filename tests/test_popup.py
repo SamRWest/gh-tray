@@ -414,19 +414,19 @@ def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
 
 
 def test_the_same_name_is_always_dealt_the_same_colour():
-    assert popup.who_colour("SamRWest") == popup.who_colour("SamRWest")
-    assert popup.who_colour("SamRWest") in popup.NAME_COLOURS
+    assert popup.name_colour("SamRWest") == popup.name_colour("SamRWest")
+    assert popup.name_colour("SamRWest") in popup.NAME_COLOURS
 
 
 def test_names_spread_across_the_colours_rather_than_sharing_one():
     # The dealing is a digest, so a small sample lands unevenly; what matters is that names do spread, and that a
     # large enough sample reaches every colour there is.
-    dealt = {popup.who_colour(f"reviewer-{number}") for number in range(200)}
+    dealt = {popup.name_colour(f"reviewer-{number}") for number in range(200)}
     assert dealt == set(popup.NAME_COLOURS)
 
 
 def test_a_missing_name_gets_the_quiet_ink():
-    assert popup.who_colour("") == popup.QUIET
+    assert popup.name_colour("") == popup.QUIET
 
 
 def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):

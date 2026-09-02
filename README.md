@@ -78,7 +78,8 @@ Each row keeps the colour of what it is: red when something is blocking, amber w
 good news such as a pull request that could be merged. A row you have seen is dimmed and its mark goes hollow, and
 nothing else dims it. Age has a scale of its own in the date column, running from blue for just-happened, through
 violet, to red for long-forgotten. Names have a colour of their own too, dealt once and kept, so the same person reads
-as the same colour in every row and every showing.
+as the same colour in every row and every showing, and so do organisations and repositories: every row from the same
+organisation, or about the same repository, reads in the same colour and groups by eye.
 
 A conflict names the pull request's author, whose branch has to take the rebase: the conflict itself is a consequence of
 somebody else's merge into the base branch, and GitHub does not record whose. Who is blank only where nobody can be

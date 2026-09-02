@@ -123,20 +123,21 @@ class Row:
     status: str = ""
 
 
-# The inks a name can be drawn in. Every name is dealt one, by a stable digest of its spelling, so the same person
-# reads as the same colour in every row, every showing and every restart. In this column a colour is an identity tag
-# and carries none of the meaning the Change column gives it.
+# The inks a name can be drawn in. Every name, whether a person's, an organisation's or a repository's, is dealt one
+# by a stable digest of its spelling, so the same name reads as the same colour in every row, every showing and every
+# restart, and rows about the same organisation or repository group by eye. In these columns a colour is an identity
+# tag and carries none of the meaning the Change column gives it.
 NAME_COLOURS: tuple[str, ...] = ("blue", "green", "violet", "orange", "pink", "amber", "red")
 
 
-def who_colour(login: str) -> str:
-    """Return the name of the ink a login is drawn in, the same one every time for the same login.
+def name_colour(name: str) -> str:
+    """Return the name of the ink a name is drawn in, the same one every time for the same name.
 
-    :param login: the name to colour; an empty one gets the quiet ink, though there is nothing to draw anyway
+    :param name: the name to colour; an empty one gets the quiet ink, though there is nothing to draw anyway
     """
-    if not login:
+    if not name:
         return QUIET
-    return NAME_COLOURS[zlib.crc32(login.encode("utf-8")) % len(NAME_COLOURS)]
+    return NAME_COLOURS[zlib.crc32(name.encode("utf-8")) % len(NAME_COLOURS)]
 
 
 # The mark at the head of a row: filled while it still wants attention, hollow once seen. A plain shape rather than

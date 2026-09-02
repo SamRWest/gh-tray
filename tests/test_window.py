@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtCore import QPoint, QSettings, Qt
 from pytestqt.qtbot import QtBot
 
-from gh_tray import popup, window
+from gh_tray import popup, theme, window
 
 
 def row(
@@ -268,3 +268,17 @@ def test_toggle_shows_then_hides(view, qapp):
 def test_on_scheme_changed_repaints_without_error(view):
     view.on_scheme_changed()
     assert view.inks is not None
+
+
+def test_rows_from_the_same_organisation_or_repository_share_a_colour(build_window, qapp):
+    # Both unseen, since a row already seen is dimmed and so drawn a shade apart.
+    view = build_window([row("#7", role="author"), row("#8", role="reviewer")])
+    view.show_by(QPoint(400, 400))
+    qapp.processEvents()
+    org, repo = window.column_of("org"), window.column_of("repo")
+    first, second = view.entries[0], view.entries[1]
+    assert first.repo.split("/")[0] == second.repo.split("/")[0]
+    assert view.table.item(0, org).foreground().color() == view.table.item(1, org).foreground().color()
+    owner = first.repo.split("/")[0]
+    assert view.table.item(0, org).foreground().color().name() == theme.ink(view.inks, popup.name_colour(owner))
+    assert view.table.item(0, repo).foreground().color().name() == theme.ink(view.inks, popup.name_colour(first.repo))
