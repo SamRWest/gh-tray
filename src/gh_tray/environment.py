@@ -231,13 +231,40 @@ def open_in_terminal(command: str, title: str, maximised: bool = False) -> None:
 
 
 def launch_command() -> list[str]:
-    """Return the command that starts the tray, preferring an interpreter that shows no console window."""
+    """Return the command that runs the tray in the process started, preferring an interpreter with no console.
+
+    This is what a login entry runs, and what the ordinary start runs as a process of its own.
+    """
     interpreter = Path(sys.executable)
     if sys.platform == "win32":
         windowless = interpreter.with_name("pythonw.exe")
         if windowless.exists():
             interpreter = windowless
-    return [str(interpreter), "-m", "gh_tray"]
+    return [str(interpreter), "-m", "gh_tray", "--foreground"]
+
+
+def start_detached(command: list[str], errors: Path) -> int:
+    """Start a command that outlives this process and the terminal it came from, and return its process id.
+
+    On Windows the child would otherwise share this console and go with it; elsewhere a session of its own keeps the
+    hang-up that closing a terminal sends from reaching it. Its error stream goes to a file, since nobody is watching.
+
+    :param command: the program and its arguments
+    :param errors: where to keep whatever the command writes to its error stream
+    """
+    errors.parent.mkdir(parents=True, exist_ok=True)
+    quiet = subprocess.DEVNULL
+    with errors.open("w", encoding="utf-8") as kept:
+        if sys.platform == "win32":
+            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            child = subprocess.Popen(
+                command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
+            )
+        else:
+            child = subprocess.Popen(
+                command, stdin=quiet, stdout=quiet, stderr=kept, start_new_session=True, close_fds=True
+            )
+    return child.pid
 
 
 def autostart_path() -> Path:

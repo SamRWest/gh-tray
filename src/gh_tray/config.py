@@ -22,6 +22,8 @@ SNAPSHOT_PATH = APP_DIR / "snapshot.json"
 EVENTS_PATH = APP_DIR / "events.jsonl"
 SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
+# Whatever the tray writes to its error stream once it has left the terminal behind, since nobody is watching it.
+STDERR_PATH = APP_DIR / "gh-tray.stderr.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 # Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.

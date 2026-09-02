@@ -12,8 +12,8 @@ import cyclopts
 from loguru import logger
 
 from . import APP_NAME, __version__
-from .config import APP_DIR, LOCK_PATH, LOG_PATH, load_config
-from .environment import SingleInstance
+from .config import APP_DIR, LOCK_PATH, LOG_PATH, STDERR_PATH, load_config
+from .environment import SingleInstance, launch_command, start_detached
 from .events import label_for
 from .service import poll
 from .status import tooltip_text
@@ -117,12 +117,19 @@ def setup(yes: bool = False) -> int:
 
 
 @app.default
-def run_tray() -> int:
-    """Show the tray icon and poll on a timer.
+def run_tray(foreground: bool = False) -> int:
+    """Start the tray, which then runs on its own, and return.
 
+    The tray outlives the terminal it was started from and prints nothing there, so this says that it started and
+    where it writes, and comes straight back. With ``--foreground`` the tray runs in this process instead, attached
+    to the terminal, where Ctrl+C stops it and its log is written to the console as well.
+
+    :param foreground: run the tray here rather than as a process of its own
     :return: process exit code
     """
-    start_logging(to_console=False)
+    # The console is written to only when somebody can read it. A tray started on its own, or by a login entry, runs
+    # in the foreground of no terminal, and its log has a file of its own.
+    start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty())
     from .prerequisites import missing
 
     if missing():
@@ -141,17 +148,33 @@ def run_tray() -> int:
         logger.error("another instance is already running")
         print(f"{APP_NAME} is already running.", file=sys.stderr)
         return 1
-    try:
-        # Imported here rather than at the top, so the commands that open no window never load the toolkit.
-        from .toolkit import application
-        from .tray import Tray
-
-        application()
-        logger.info("starting {} {}", APP_NAME, __version__)
-        Tray().run()
-    finally:
-        lock.release()
+    if foreground:
+        try:
+            run_here()
+        finally:
+            lock.release()
+        return 0
+    # Probed only: the tray takes the lock for itself in a moment, and holding it here would keep it out.
+    lock.release()
+    started = start_detached(launch_command(), STDERR_PATH)
+    print(f"{APP_NAME} started as process {started}. Its icon is in the tray, and Quit is in the icon's menu.")
+    print(f"It logs to {LOG_PATH}. Anything it prints goes to {STDERR_PATH}.")
     return 0
+
+
+def run_here() -> None:
+    """Run the tray in this process until it quits, recording whatever stops it early, since nobody may be watching."""
+    # Imported here rather than at the top, so the commands that open no window never load the toolkit.
+    from .toolkit import application
+    from .tray import Tray
+
+    application()
+    logger.info("starting {} {}", APP_NAME, __version__)
+    try:
+        Tray().run()
+    except Exception:
+        logger.exception("the tray stopped unexpectedly")
+        raise
 
 
 @app.command

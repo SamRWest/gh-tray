@@ -171,6 +171,14 @@ Start the tray:
 uv run gh-tray
 ```
 
+That starts the tray as a process of its own, says so, and returns; the tray keeps running after the terminal closes,
+and **Quit** in the icon's menu stops it. To keep it attached to the terminal instead, where Ctrl+C stops it and its log
+is written to the console as well:
+
+```bash
+uv run gh-tray --foreground
+```
+
 Poll once and print the result, without the tray. This is the quickest way to check the collector and the sign-in:
 
 ```bash
@@ -215,17 +223,18 @@ Settings and history live in the platform's standard application data directory,
 [platformdirs](https://pypi.org/project/platformdirs/) resolves: `%LOCALAPPDATA%\gh-tray` on Windows,
 `~/.local/share/gh-tray` on Linux, `~/Library/Application Support/gh-tray` on macOS.
 
-| File             | Contents                                                                    |
-| ---------------- | --------------------------------------------------------------------------- |
-| `config.json`    | Settings, written by the settings window                                    |
-| `state.json`     | When the last collection ran, which is the window mentions are asked for    |
-| `snapshot.json`  | Last poll's pull request fields, used to detect the next change             |
-| `events.jsonl`   | Changes detected, kept until you have seen them and trimmed to a tail after |
-| `seen.json`      | The rows you have marked, and when you last marked everything seen          |
-| `gh-tray.log`    | Rotating diagnostics                                                        |
-| `last_error.log` | Everything written when the last collection failed                          |
-| `layout.ini`     | The window width and column widths you last dragged                         |
-| `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
+| File                 | Contents                                                                      |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `config.json`        | Settings, written by the settings window                                      |
+| `state.json`         | When the last collection ran, which is the window mentions are asked for      |
+| `snapshot.json`      | Last poll's pull request fields, used to detect the next change               |
+| `events.jsonl`       | Changes detected, kept until you have seen them and trimmed to a tail after   |
+| `seen.json`          | The rows you have marked, and when you last marked everything seen            |
+| `gh-tray.log`        | Rotating diagnostics                                                          |
+| `last_error.log`     | Everything written when the last collection failed                            |
+| `gh-tray.stderr.log` | Whatever a tray started on its own wrote to its error stream, such as a crash |
+| `layout.ini`         | The window width and column widths you last dragged                           |
+| `gh-tray.lock`       | Held open while the tray runs, so a second copy cannot start                  |
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
 against what you have actually looked at, so nothing is lost between the moment a change lands and the moment you read
