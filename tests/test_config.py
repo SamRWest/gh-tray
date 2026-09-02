@@ -113,5 +113,5 @@ def test_hidden_organisations_are_read_from_a_list_or_a_hand_written_string():
 
 
 def test_hidden_organisations_are_kept_through_a_round_trip(settings_file):
-    config.save_config({**config.DEFAULT_CONFIG, "hidden_orgs": "acme widgets"})
-    assert config.load_config()["hidden_orgs"] == ["acme", "widgets"]
+    config.save_config({**config.DEFAULT_CONFIG, "hidden_owners": "acme widgets"})
+    assert config.load_config()["hidden_owners"] == ["acme", "widgets"]

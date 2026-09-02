@@ -37,7 +37,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
-    "hidden_orgs": [],
+    "hidden_owners": [],
     "theme": "auto",
     "toasts": {
         "review_requested": True,
@@ -51,9 +51,10 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
-# The organisations the searches leave out. Everything else the account has a hand in is watched, so an organisation
-# joined later needs no setting, and one the account merely contributes to from outside is never lost.
-HIDDEN_ORGS_KEY = "hidden_orgs"
+# The owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
+# account has a hand in is watched, so an organisation joined later needs no setting, and a repository the account
+# merely contributes to from outside is never lost.
+HIDDEN_OWNERS_KEY = "hidden_owners"
 # The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
 
@@ -98,7 +99,7 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
-    config[HIDDEN_ORGS_KEY] = login_list(config.get(HIDDEN_ORGS_KEY))
+    config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
     }

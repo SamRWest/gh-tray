@@ -194,13 +194,14 @@ installed by Homebrew is nowhere to be found.
 ## Settings
 
 The settings window covers the poll interval, how old a pull request has to be before it is ignored, how many changes
-the changes window lists, which changes raise a notification, which of your organisations to watch, whether to start at
+the changes window lists, which changes raise a notification, which owners' repositories to watch, whether to start at
 login, and the command that opens the dashboard. Leaving the dashboard command blank runs `gh dash` in whichever
 terminal this platform provides.
 
-Every organisation your account belongs to is listed and on. Turn one off and its pull requests and mentions are left
-out. Anything else you have a hand in, such as a repository you contribute to from outside your organisations, is
-watched regardless, and an organisation you join later is watched without a visit to the settings.
+Your own account and every organisation it belongs to are listed and on. Turn one off and pull requests and mentions in
+its repositories are left out. Anything else you have a hand in, such as a repository you contribute to from outside
+your organisations, is watched regardless, and an organisation you join later is watched without a visit to the
+settings.
 
 Settings are re-read on every poll, so a change takes effect without restarting the tray.
 

@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from .config import ERROR_LOG_PATH, HIDDEN_ORGS_KEY, STATE_PATH
+from .config import ERROR_LOG_PATH, HIDDEN_OWNERS_KEY, STATE_PATH
 from .github import GitHubError, api, search_pull_requests, viewer
 from .storage import read_json, write_json_atomic, write_text_atomic
 
@@ -43,8 +43,8 @@ CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
 CLOSED_LOOKBACK_DAYS = 30
 
 
-def search_for(base: str, max_age_days: int, now: datetime, hidden_orgs: list[str] | None = None) -> str:
-    """Add the age cutoff and the organisations left out to a search, so GitHub keeps back what would be dropped.
+def search_for(base: str, max_age_days: int, now: datetime, hidden_owners: list[str] | None = None) -> str:
+    """Add the age cutoff and the owners left out to a search, so GitHub keeps back what would be dropped.
 
     Without the cutoff the search returns everything ever opened and most of it is dropped here, which on a
     long-lived account means fetching two pages to keep one. Each page is a slow request, so this is most of a
@@ -53,13 +53,15 @@ def search_for(base: str, max_age_days: int, now: datetime, hidden_orgs: list[st
     :param base: the search expression
     :param max_age_days: how old is too old, or zero to keep everything
     :param now: the moment to measure against
-    :param hidden_orgs: the organisations whose pull requests are not wanted
+    :param hidden_owners: the owners, people or organisations, whose pull requests are not wanted
     """
     qualifiers = [base]
     if max_age_days:
         qualifiers.append(f"updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}")
-    # A qualifier with a hyphen before it is one GitHub leaves out, and each organisation takes one of its own.
-    qualifiers += [f"-org:{login}" for login in hidden_orgs or []]
+    # A qualifier with a hyphen before it is one GitHub leaves out. GitHub has one word for repositories owned by a
+    # person and another for those owned by an organisation, and a login could be either, so both are said.
+    for login in hidden_owners or []:
+        qualifiers += [f"-user:{login}", f"-org:{login}"]
     return " ".join(qualifiers)
 
 
@@ -244,16 +246,16 @@ def thread_author(subject_url: str) -> str:
     return nested(thread, "user", "login") if isinstance(thread, dict) else ""
 
 
-def collect_mentions(since: str, hidden_orgs: list[str] | None = None) -> list[dict]:
+def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
     :param since: the earliest moment to report, as a GitHub timestamp
-    :param hidden_orgs: the organisations whose mentions are not wanted
+    :param hidden_owners: the owners, people or organisations, whose mentions are not wanted
     """
     feed = api(f"notifications?all=false&since={since}&per_page=100")
     if not isinstance(feed, list):
         return []
-    left_out = {login.casefold() for login in hidden_orgs or []}
+    left_out = {login.casefold() for login in hidden_owners or []}
     raised = [
         notification
         for notification in feed
@@ -312,7 +314,7 @@ def collect(config: dict) -> tuple[dict | None, str]:
     started = datetime.now(UTC)
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
     cutoff = config.get("max_age_days", 0)
-    hidden = config.get(HIDDEN_ORGS_KEY) or []
+    hidden = config.get(HIDDEN_OWNERS_KEY) or []
     authored_search = search_for(AUTHORED, cutoff, started, hidden)
     reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
     closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)

@@ -353,10 +353,10 @@ def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
     assert found[1]["number"] == ""
 
 
-def test_a_hidden_organisation_is_left_out_of_a_search():
+def test_a_hidden_owner_is_left_out_of_a_search_whether_a_person_or_an_organisation():
     now = datetime(2026, 1, 31, tzinfo=UTC)
-    assert collector.search_for("is:pr", 0, now, ["acme", "widgets"]) == "is:pr -org:acme -org:widgets"
-    assert collector.search_for("is:pr", 30, now, ["acme"]) == "is:pr updated:>2026-01-01 -org:acme"
+    assert collector.search_for("is:pr", 0, now, ["acme", "sam"]) == "is:pr -user:acme -org:acme -user:sam -org:sam"
+    assert collector.search_for("is:pr", 30, now, ["acme"]) == "is:pr updated:>2026-01-01 -user:acme -org:acme"
     assert collector.search_for("is:pr", 0, now) == "is:pr"
 
 

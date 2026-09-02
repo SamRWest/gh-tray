@@ -27,6 +27,7 @@ class DialogBuilder:
         monkeypatch.setattr(settings_window, "set_autostart", self.autostart_calls.append)
         monkeypatch.setattr(settings_window, "follow_theme_setting", self.theme_calls.append)
         monkeypatch.setattr(settings_window, "organisations", lambda: ["acme", "widgets"])
+        monkeypatch.setattr(settings_window, "viewer", lambda: "tester")
 
     def __call__(self, stored: dict, autostart: bool = False) -> SettingsDialog:
         """Build one dialog showing the given stored settings.
@@ -87,17 +88,19 @@ def test_chosen_theme_follows_the_radio_buttons(build_dialog):
     assert dialog.chosen_theme() == theme.FOLLOW_DESKTOP
 
 
-def test_every_organisation_is_listed_and_on_unless_turned_off(build_dialog):
-    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_orgs": ["widgets", "former"]})
-    assert list(dialog.org_switches) == ["acme", "widgets", "former"]
-    assert [switch.isChecked() for switch in dialog.org_switches.values()] == [True, False, False]
+def test_the_account_and_every_organisation_are_listed_and_on_unless_turned_off(build_dialog):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets", "former"]})
+    assert list(dialog.owner_switches_by_login) == ["tester", "acme", "widgets", "former"]
+    assert [switch.isChecked() for switch in dialog.owner_switches_by_login.values()] == [True, True, False, False]
+    assert dialog.owner_switches_by_login["tester"].text() == "tester (your own repositories)"
 
 
-def test_turning_an_organisation_off_is_what_is_saved(build_dialog):
+def test_turning_an_owner_off_is_what_is_saved(build_dialog):
     dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG))
-    dialog.org_switches["acme"].setChecked(False)
+    dialog.owner_switches_by_login["acme"].setChecked(False)
+    dialog.owner_switches_by_login["tester"].setChecked(False)
     dialog.save_and_close()
-    assert build_dialog.saved[-1]["hidden_orgs"] == ["acme"]
+    assert build_dialog.saved[-1]["hidden_owners"] == ["tester", "acme"]
 
 
 def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog, monkeypatch):
@@ -105,5 +108,5 @@ def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog
         raise settings_window.GitHubError("GitHub did not answer")
 
     monkeypatch.setattr(settings_window, "organisations", refuse)
-    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_orgs": ["widgets"]})
-    assert list(dialog.org_switches) == ["widgets"]
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets"]})
+    assert list(dialog.owner_switches_by_login) == ["widgets"]
