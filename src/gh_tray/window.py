@@ -868,13 +868,17 @@ class ChangesWindow(QWidget):
 
         :param event: any event the window is sent
         """
+        # Visibility is asked first: events arrive while the window is still being built, before it has a show time.
         deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
-        settled = time.monotonic() - self.shown_at >= FOCUS_SETTLE_SECONDS
         # A menu of this application's own, popped up from the window, is not somebody clicking elsewhere.
-        if deactivated and settled and QApplication.activePopupWidget() is None:
+        if deactivated and self.settled() and QApplication.activePopupWidget() is None:
             self.hide()
             self.dismissed_at = time.monotonic()
         return super().event(event)
+
+    def settled(self) -> bool:
+        """Return whether the window has been up long enough for a loss of focus to be the user's doing."""
+        return time.monotonic() - self.shown_at >= FOCUS_SETTLE_SECONDS
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """Clear a search on Escape, or put the window away when there is none. Every other key is the table's.
