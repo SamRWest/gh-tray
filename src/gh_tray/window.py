@@ -249,7 +249,6 @@ class ChangesWindow(QWidget):
         self.close_mark.setAutoRaise(True)
         self.close_mark.setCursor(Qt.CursorShape.ArrowCursor)
         self.close_mark.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
-        self.close_mark.setToolTip("Put the window away")
         self.close_mark.clicked.connect(self.hide)
         row.addWidget(self.close_mark)
         return self.strip
