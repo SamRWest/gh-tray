@@ -538,7 +538,9 @@ class ChangesWindow(QWidget):
         """
         around = self.sizeHint().height() - self.table.sizeHint().height()
         tallest = int(usable.height() * TALLEST_SHARE_OF_SCREEN)
-        return min(max(MINIMUM_HEIGHT, around + self.table_height()), tallest)
+        # The controls set a floor of their own, as they do for the width, and it differs from desktop to desktop.
+        least = max(MINIMUM_HEIGHT, self.minimumSizeHint().height())
+        return max(min(around + self.table_height(), tallest), least)
 
     def settle_layout(self) -> None:
         """Have the layout work out its sizes now, rather than on the next pass through the event loop.
