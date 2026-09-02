@@ -236,11 +236,6 @@ class ChangesWindow(QWidget):
         self.size_columns()
         column.addWidget(self.table, 1)
         column.addLayout(self.controls())
-        self.search = QLineEdit(self)
-        self.search.setPlaceholderText("Search any column (Ctrl+F)")
-        self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self.set_search)
-        column.addWidget(self.search)
         # A shortcut rather than a key handler, so it works whichever part of the window has the focus.
         self.find_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Find), self)
         self.find_shortcut.activated.connect(self.focus_search)
@@ -268,7 +263,7 @@ class ChangesWindow(QWidget):
         return self.strip
 
     def controls(self) -> QHBoxLayout:
-        """Lay out the quick filters, the closed toggle, and the dashboard and refresh buttons."""
+        """Lay out the quick filters, the closed toggle, the search box, and the dashboard and refresh buttons."""
         strip = QHBoxLayout()
         self.filters = QButtonGroup(self)
         self.chips: dict[str, QPushButton] = {}
@@ -286,7 +281,14 @@ class ChangesWindow(QWidget):
         self.closed_chip.setCheckable(True)
         self.closed_chip.toggled.connect(self.set_show_closed)
         strip.addWidget(self.closed_chip)
-        strip.addStretch(1)
+        # The search takes whatever room the buttons leave, so the strip stays one line.
+        self.search = QLineEdit(self)
+        self.search.setPlaceholderText("Search (Ctrl+F)")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(self.characters(14))
+        self.search.textChanged.connect(self.set_search)
+        strip.addSpacing(12)
+        strip.addWidget(self.search, 1)
         self.dashboard_button = QPushButton("Open dashboard", self)
         self.dashboard_button.clicked.connect(self.open_dashboard)
         strip.addWidget(self.dashboard_button)
