@@ -236,7 +236,15 @@ def test_a_dragged_column_width_is_remembered_and_used_next_time(view):
 def snug_row(number: int) -> popup.Row:
     """Build one row for the height tests."""
     return popup.Row(
-        "New comment", "acme/widgets", f"#{number}", "Add a widget", "alice", "1h ago", f"u{number}", popup.URGENT, at="2026-01-01T00:00:00.000000Z"
+        "New comment",
+        "acme/widgets",
+        f"#{number}",
+        "Add a widget",
+        "alice",
+        "1h ago",
+        f"u{number}",
+        popup.URGENT,
+        at="2026-01-01T00:00:00.000000Z",
     )
 
 
@@ -347,7 +355,11 @@ def test_extra_rows_grow_the_window_upward_from_its_resting_place_above_the_task
     view.closed_chip.event_generate("<Button-1>")
     view.root.update()
     assert view.root.winfo_height() > height, "six more rows must make the window taller"
-    assert view.root.winfo_y() + view.root.winfo_height() == bottom, "the extra height must go upward, the bottom staying put"
+    assert view.root.winfo_y() + view.root.winfo_height() == bottom, (
+        "the extra height must go upward, the bottom staying put"
+    )
     view.closed_chip.event_generate("<Button-1>")
     view.root.update()
-    assert view.root.winfo_y() + view.root.winfo_height() == bottom, "shrinking back must leave the bottom where it was too"
+    assert view.root.winfo_y() + view.root.winfo_height() == bottom, (
+        "shrinking back must leave the bottom where it was too"
+    )

@@ -56,7 +56,9 @@ def test_checks_recovering_is_not_reported():
 
 def test_changes_requested_is_reported_once():
     assert detect(pull_request(), pull_request(reviewDecision="CHANGES_REQUESTED")) == ["changes_requested"]
-    assert detect(pull_request(reviewDecision="CHANGES_REQUESTED"), pull_request(reviewDecision="CHANGES_REQUESTED")) == []
+    assert (
+        detect(pull_request(reviewDecision="CHANGES_REQUESTED"), pull_request(reviewDecision="CHANGES_REQUESTED")) == []
+    )
 
 
 def test_becoming_ready_to_merge_is_reported():
@@ -81,7 +83,9 @@ def test_a_conflict_clearing_is_not_reported():
 
 def test_new_comments_are_reported_with_a_count():
     previous = {"acme/widget#7": pull_request(comments=2)}
-    found = events.detect_pull_request_events(previous, {"acme/widget#7": pull_request(comments=5)}, "2026-01-01T00:00:00Z")
+    found = events.detect_pull_request_events(
+        previous, {"acme/widget#7": pull_request(comments=5)}, "2026-01-01T00:00:00Z"
+    )
     assert [event["kind"] for event in found] == ["new_comment"]
     assert found[0]["detail"] == "3 new"
 
@@ -132,7 +136,11 @@ def test_a_pull_request_without_checks_is_recorded_as_having_none():
 
 
 def test_a_mention_already_recorded_is_not_reported_again():
-    digest = {"mentions": [{"repo": "acme/widget", "title": "look at this", "url": "https://example.test/1", "reason": "team_mention"}]}
+    digest = {
+        "mentions": [
+            {"repo": "acme/widget", "title": "look at this", "url": "https://example.test/1", "reason": "team_mention"}
+        ]
+    }
     assert events.detect_mention_events(digest, set(), "2026-01-01T00:00:00Z")[0]["kind"] == "mention"
     assert events.detect_mention_events(digest, {"https://example.test/1"}, "2026-01-01T00:00:00Z") == []
 
@@ -151,22 +159,30 @@ def event_log(tmp_path, monkeypatch):
 
 
 def test_unread_counts_only_what_arrived_since_the_user_looked(event_log):
-    events.append_events([{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "", "title": "", "detail": ""}])
+    events.append_events(
+        [{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "", "title": "", "detail": ""}]
+    )
     events.mark_seen()
     assert events.unread_events() == []
-    events.append_events([{"at": "2099-01-01T00:00:00Z", "kind": "mention", "key": "a#2", "url": "", "title": "", "detail": ""}])
+    events.append_events(
+        [{"at": "2099-01-01T00:00:00Z", "kind": "mention", "key": "a#2", "url": "", "title": "", "detail": ""}]
+    )
     assert [event["key"] for event in events.unread_events()] == ["a#2"]
 
 
 def test_marking_seen_keeps_the_history(event_log):
-    events.append_events([{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "", "title": "", "detail": ""}])
+    events.append_events(
+        [{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "", "title": "", "detail": ""}]
+    )
     events.mark_seen()
     assert events.unread_events() == []
     assert len(events.read_events()) == 1
 
 
 def test_an_unreadable_line_in_the_log_is_skipped(event_log):
-    (event_log / "events.jsonl").write_text('{"at":"2026-01-01T00:00:00Z","kind":"mention","key":"a#1"}\nnot json\n', encoding="utf-8")
+    (event_log / "events.jsonl").write_text(
+        '{"at":"2026-01-01T00:00:00Z","kind":"mention","key":"a#1"}\nnot json\n', encoding="utf-8"
+    )
     assert len(events.read_events()) == 1
 
 
@@ -201,7 +217,9 @@ def test_every_rule_a_detector_can_emit_has_wording():
 
 
 def test_blocking_changes_are_marked_urgent_and_others_are_not():
-    assert [events.is_urgent(kind) for kind in ("review_requested", "ci_broken", "changes_requested", "mention")] == [True] * 4
+    assert [events.is_urgent(kind) for kind in ("review_requested", "ci_broken", "changes_requested", "mention")] == [
+        True
+    ] * 4
     assert [events.is_urgent(kind) for kind in ("ready_to_merge", "conflict", "new_comment")] == [False] * 3
 
 
@@ -216,7 +234,9 @@ def test_appending_nothing_leaves_no_file(event_log):
 
 
 def test_events_are_written_one_json_document_per_line(event_log):
-    events.append_events([{"at": "2026-01-01T00:00:00Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}] * 2)
+    events.append_events(
+        [{"at": "2026-01-01T00:00:00Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}] * 2
+    )
     lines = (event_log / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2
     assert all(json.loads(line)["kind"] == "mention" for line in lines)
@@ -258,7 +278,16 @@ def test_a_mention_the_user_wrote_themselves_is_not_reported():
 
 def test_a_row_marked_seen_by_hand_leaves_the_unread_count(event_log):
     events.append_events(
-        [{"at": "2099-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "https://example.test/1", "title": "", "detail": ""}]
+        [
+            {
+                "at": "2099-01-01T00:00:00Z",
+                "kind": "ci_broken",
+                "key": "a#1",
+                "url": "https://example.test/1",
+                "title": "",
+                "detail": "",
+            }
+        ]
     )
     assert len(events.unread_events()) == 1
     events.remember_seen("https://example.test/1", "2099-01-01T00:00:00Z", seen=True)
@@ -267,7 +296,16 @@ def test_a_row_marked_seen_by_hand_leaves_the_unread_count(event_log):
 
 def test_a_row_marked_unseen_by_hand_outlasts_marking_everything_seen(event_log):
     events.append_events(
-        [{"at": "2026-01-01T00:00:00Z", "kind": "ci_broken", "key": "a#1", "url": "https://example.test/1", "title": "", "detail": ""}]
+        [
+            {
+                "at": "2026-01-01T00:00:00Z",
+                "kind": "ci_broken",
+                "key": "a#1",
+                "url": "https://example.test/1",
+                "title": "",
+                "detail": "",
+            }
+        ]
     )
     events.remember_seen("https://example.test/1", "2026-01-01T00:00:00Z", seen=False)
     events.mark_seen()
@@ -294,7 +332,10 @@ def test_a_row_is_remembered_by_its_address_and_by_its_number_where_there_is_non
 
 
 def test_only_the_newest_marks_are_kept():
-    marks = {f"row-{number}": {"at": "", "seen": True, "marked": f"2026-01-{number + 1:02d}T00:00:00Z"} for number in range(9)}
+    marks = {
+        f"row-{number}": {"at": "", "seen": True, "marked": f"2026-01-{number + 1:02d}T00:00:00Z"}
+        for number in range(9)
+    }
     kept = events.newest_marks(marks, keep=3)
     assert set(kept) == {"row-8", "row-7", "row-6"}
     assert events.newest_marks(marks, keep=20) == marks

@@ -61,4 +61,6 @@ def poll(config: dict) -> PollResult:
         logger.warning("re-established the baseline from {} pull request(s), keeping the unread count", len(current))
     elif events:
         logger.info("detected {} change(s)", len(events))
-    return PollResult(status=status_from(digest, unread_events()), events=events, first_run=baseline_only and not damaged)
+    return PollResult(
+        status=status_from(digest, unread_events()), events=events, first_run=baseline_only and not damaged
+    )

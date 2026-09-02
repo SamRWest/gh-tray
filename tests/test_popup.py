@@ -272,7 +272,9 @@ def test_a_conflict_names_the_author_whose_branch_takes_the_rebase():
 
 
 def test_a_mention_names_whoever_wrote_it():
-    digest = {"mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "someone", "reason": "mention"}]}
+    digest = {
+        "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "someone", "reason": "mention"}]
+    }
     assert events.detect_mention_events(digest, set(), events.utc_now())[0]["actor"] == "someone"
 
 
@@ -479,7 +481,11 @@ def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):
     events.append_events(
         events.detect_pull_request_events(
             {"authored:acme/gadget#7": dict(waiting(7, side="authored", author="emily"))},
-            {"authored:acme/gadget#7": dict(waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg"))},
+            {
+                "authored:acme/gadget#7": dict(
+                    waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg")
+                )
+            },
             events.utc_now(),
         )
     )
@@ -511,7 +517,9 @@ def test_a_mention_row_recorded_without_an_author_is_filled_from_the_last_poll(e
 
 
 def test_the_quick_filters_keep_only_their_own_hat():
-    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, role=role) for role in ("author", "reviewer", "mention")]
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, role=role) for role in ("author", "reviewer", "mention")
+    ]
     assert [popup.role_matches(row, "all") for row in rows] == [True, True, True]
     assert [popup.role_matches(row, "author") for row in rows] == [True, False, False]
     assert [popup.role_matches(row, "reviewer") for row in rows] == [False, True, False]
@@ -565,7 +573,10 @@ def test_a_row_about_something_no_longer_polled_has_no_status(event_log):
 
 
 def test_the_closed_filter_hides_finished_rows_until_asked():
-    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, status=status) for status in ("open", "merged", "closed", "")]
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, status=status)
+        for status in ("open", "merged", "closed", "")
+    ]
     assert [popup.closed_matches(row, show_closed=False) for row in rows] == [True, False, False, True]
     assert [popup.closed_matches(row, show_closed=True) for row in rows] == [True, True, True, True]
 
@@ -574,12 +585,21 @@ def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
     finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
     open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
     unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
-    assert popup.row_background(finished) == theme.blend(popup.STATUS_COLOURS["merged"], popup.PALETTE.background, popup.CLOSED_TINT)
+    assert popup.row_background(finished) == theme.blend(
+        popup.STATUS_COLOURS["merged"], popup.PALETTE.background, popup.CLOSED_TINT
+    )
     assert popup.row_background(open_row) is None
     assert popup.row_background(unknown) is None
 
 
 def test_every_status_word_has_a_colour():
-    entries = [None, waiting(state="MERGED"), waiting(state="CLOSED"), waiting(isDraft=True), waiting(mergeable="CONFLICTING"), waiting()]
+    entries = [
+        None,
+        waiting(state="MERGED"),
+        waiting(state="CLOSED"),
+        waiting(isDraft=True),
+        waiting(mergeable="CONFLICTING"),
+        waiting(),
+    ]
     for word in filter(None, map(popup.pull_request_status, entries)):
         assert word in popup.STATUS_COLOURS

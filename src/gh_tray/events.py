@@ -171,7 +171,10 @@ def snapshot_of(digest: dict) -> dict:
     snapshot = {}
     for side in ("authored", "reviewing", "closed"):
         for pull_request in digest.get(side, []):
-            record = {field: default if pull_request.get(field) is None else pull_request[field] for field, default in SNAPSHOT_DEFAULTS.items()}
+            record = {
+                field: default if pull_request.get(field) is None else pull_request[field]
+                for field, default in SNAPSHOT_DEFAULTS.items()
+            }
             record["side"] = side
             record["absent_polls"] = 0
             snapshot[snapshot_key(side, pull_request["key"])] = record
@@ -284,8 +287,18 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
             continue
         if pull_request["side"] == "authored":
             if pull_request["ci"] in BROKEN_CI and was.get("ci") not in BROKEN_CI:
-                events.append(_event("ci_broken", pull_request, f"{str(was.get('ci', '')).lower()} to {pull_request['ci'].lower()}", at))
-            if pull_request.get("reviewDecision") == "CHANGES_REQUESTED" and was.get("reviewDecision") != "CHANGES_REQUESTED":
+                events.append(
+                    _event(
+                        "ci_broken",
+                        pull_request,
+                        f"{str(was.get('ci', '')).lower()} to {pull_request['ci'].lower()}",
+                        at,
+                    )
+                )
+            if (
+                pull_request.get("reviewDecision") == "CHANGES_REQUESTED"
+                and was.get("reviewDecision") != "CHANGES_REQUESTED"
+            ):
                 events.append(_event("changes_requested", pull_request, "a reviewer asked for changes", at))
             if mergeable_now(pull_request) and not mergeable_now(was):
                 events.append(_event("ready_to_merge", pull_request, "approved, green and conflict free", at))
@@ -293,8 +306,12 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
             # merely reviewing that is somebody else.
             if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
                 events.append(_event("conflict", pull_request, "needs a rebase", at))
-        if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(pull_request, login):
-            events.append(_event("new_comment", pull_request, f"{pull_request['comments'] - (was.get('comments') or 0)} new", at))
+        if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(
+            pull_request, login
+        ):
+            events.append(
+                _event("new_comment", pull_request, f"{pull_request['comments'] - (was.get('comments') or 0)} new", at)
+            )
     return events
 
 
@@ -340,7 +357,9 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
     """
     at = utc_now()
     login = str(digest.get("viewer", ""))
-    found = detect_pull_request_events(previous, current, at, login) + detect_mention_events(digest, seen_urls or set(), at)
+    found = detect_pull_request_events(previous, current, at, login) + detect_mention_events(
+        digest, seen_urls or set(), at
+    )
     return [event for event in found if not caused_by(event, login)]
 
 
@@ -518,7 +537,11 @@ def unread_events() -> list[dict]:
     since = last_seen()
     marker = moment(since) if since else None
     marks = seen_marks()
-    return [event for event in reversed(read_events()) if not has_been_seen(event_identity(event), event["at"], marks, marker)]
+    return [
+        event
+        for event in reversed(read_events())
+        if not has_been_seen(event_identity(event), event["at"], marks, marker)
+    ]
 
 
 def recent_events(count: int = 10) -> list[dict]:

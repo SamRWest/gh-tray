@@ -30,10 +30,21 @@ def node(**overrides) -> dict:
         "reviewDecision": "APPROVED",
         "repository": {"nameWithOwner": "acme/widget"},
         "author": {"login": "someone"},
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}]},
+        "commits": {
+            "nodes": [
+                {"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}
+            ]
+        },
         "latestReviews": {"nodes": [{"author": {"login": "reviewer"}}]},
         "comments": {"nodes": [{"author": {"login": "commenter"}, "createdAt": "2026-05-30T00:00:00Z"}]},
-        "reviews": {"nodes": [{"author": {"login": "reviewer"}, "comments": {"nodes": [{"createdAt": "2026-05-29T00:00:00Z", "replyTo": None}]}}]},
+        "reviews": {
+            "nodes": [
+                {
+                    "author": {"login": "reviewer"},
+                    "comments": {"nodes": [{"createdAt": "2026-05-29T00:00:00Z", "replyTo": None}]},
+                }
+            ]
+        },
     }
     found.update(overrides)
     return found
@@ -45,11 +56,17 @@ def test_a_complete_pull_request_is_read_in_full():
     assert record["side"] == "authored"
     assert record["ci"] == "SUCCESS"
     assert record["reviewDecision"] == "APPROVED"
-    assert (record["lastCommitBy"], record["lastReviewBy"], record["lastCommentBy"]) == ("committer", "reviewer", "commenter")
+    assert (record["lastCommitBy"], record["lastReviewBy"], record["lastCommentBy"]) == (
+        "committer",
+        "reviewer",
+        "commenter",
+    )
 
 
 def test_a_pull_request_with_no_reviews_or_comments_still_reads():
-    record = collector.normalise(node(latestReviews={"nodes": []}, comments={"nodes": []}, reviews={"nodes": []}), "reviewing")
+    record = collector.normalise(
+        node(latestReviews={"nodes": []}, comments={"nodes": []}, reviews={"nodes": []}), "reviewing"
+    )
     assert record["lastReviewBy"] == ""
     assert record["lastCommentBy"] == ""
 
@@ -120,7 +137,9 @@ def test_a_comment_that_answers_nobody_reads_as_answering_nobody():
 
 
 def test_a_pull_request_with_no_checks_reads_as_having_none():
-    record = collector.normalise(node(commits={"nodes": [{"commit": {"statusCheckRollup": None, "author": None}}]}), "authored")
+    record = collector.normalise(
+        node(commits={"nodes": [{"commit": {"statusCheckRollup": None, "author": None}}]}), "authored"
+    )
     assert record["ci"] == "NO_CHECKS"
     assert record["lastCommitBy"] == ""
 
@@ -189,7 +208,10 @@ def test_a_pull_request_touched_today_is_never_dropped():
 
 
 def test_an_interface_address_becomes_a_page_a_person_can_open():
-    assert collector.page_url("https://api.github.com/repos/acme/widget/pulls/7") == "https://github.com/acme/widget/pull/7"
+    assert (
+        collector.page_url("https://api.github.com/repos/acme/widget/pulls/7")
+        == "https://github.com/acme/widget/pull/7"
+    )
 
 
 def test_an_address_that_is_already_a_page_is_left_alone():
@@ -306,13 +328,21 @@ def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
         {
             "reason": "mention",
             "repository": {"full_name": "acme/widget"},
-            "subject": {"title": "look at this", "url": "https://api.github.com/repos/acme/widget/pulls/217", "type": "PullRequest"},
+            "subject": {
+                "title": "look at this",
+                "url": "https://api.github.com/repos/acme/widget/pulls/217",
+                "type": "PullRequest",
+            },
             "updated_at": "2026-01-01T00:00:00Z",
         },
         {
             "reason": "team_mention",
             "repository": {"full_name": "acme/widget"},
-            "subject": {"title": "a discussion with no number", "url": "https://api.github.com/repos/acme/widget", "type": "Repository"},
+            "subject": {
+                "title": "a discussion with no number",
+                "url": "https://api.github.com/repos/acme/widget",
+                "type": "Repository",
+            },
             "updated_at": "2026-01-01T00:00:00Z",
         },
     ]

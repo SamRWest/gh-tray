@@ -70,7 +70,9 @@ query($q: String!, $cursor: String) {
         commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
         latestReviews(last: 1) { nodes { author { login } } }
         comments(last: 1) { nodes { author { login } createdAt } }
-        reviews(last: 1) { nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } } }
+        reviews(last: 1) {
+          nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } }
+        }
       }
     }
   }
@@ -249,7 +251,10 @@ def collect_mentions(since: str) -> list[dict]:
     # One request each to find out who wrote them and whose thread it is, so only the first few are traced and
     # those go out together. Whose thread it is cannot come from the poll's own lists: a mention often lands on a
     # pull request the user neither wrote nor reviews, or on one already closed.
-    traced = [(notification.get("subject") or {}).get("latest_comment_url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
+    traced = [
+        (notification.get("subject") or {}).get("latest_comment_url") or ""
+        for notification in raised[:MENTION_LOOKUP_LIMIT]
+    ]
     threads = [(notification.get("subject") or {}).get("url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
     with ThreadPoolExecutor(max_workers=CONCURRENT_LOOKUPS, thread_name_prefix="gh-tray-mentions") as pool:
         authors = list(pool.map(comment_author, traced))
@@ -265,7 +270,9 @@ def collect_mentions(since: str) -> list[dict]:
             {
                 "repo": nested(notification, "repository", "full_name"),
                 # The number is the tail of the thread's address, which is the one place the feed carries it.
-                "number": address.rstrip("/").rsplit("/", 1)[-1] if address.rstrip("/").rsplit("/", 1)[-1].isdigit() else "",
+                "number": address.rstrip("/").rsplit("/", 1)[-1]
+                if address.rstrip("/").rsplit("/", 1)[-1].isdigit()
+                else "",
                 "title": subject.get("title") or "",
                 "type": subject.get("type") or "",
                 "reason": notification.get("reason") or "mention",

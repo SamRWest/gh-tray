@@ -99,6 +99,8 @@ def test_saving_then_loading_round_trips(settings_file):
 
 def test_a_setting_left_over_from_an_older_version_is_dropped(settings_file):
     # The collector used to be a shell script with its own paths, and those settings mean nothing now.
-    settings_file.write_text(json.dumps({"collector": "/somewhere/digest.sh", "bash_path": "/bin/bash", "orgs": "acme"}), encoding="utf-8")
+    settings_file.write_text(
+        json.dumps({"collector": "/somewhere/digest.sh", "bash_path": "/bin/bash", "orgs": "acme"}), encoding="utf-8"
+    )
     loaded = config.load_config()
     assert not {"collector", "bash_path", "orgs"} & set(loaded)

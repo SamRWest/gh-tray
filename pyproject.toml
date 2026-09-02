@@ -39,7 +39,7 @@ test = { cmd = "uv run pytest", help = "Run the tests" }
 ty = { cmd = "uv run ty check --output-format concise", help = "Run the type checks" }
 
 [tool.ruff]
-line-length = 150
+line-length = 120
 target-version = "py313"
 src = ["src", "tests"]
 

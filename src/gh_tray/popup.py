@@ -145,7 +145,15 @@ class Row:
 # person reads as the same colour in every row, every showing and every restart. These are the palette's hues
 # rather than a set of its own, so they suit both themes; in this column a colour is an identity tag and carries
 # none of the meaning the Change column gives it.
-NAME_COLOURS: tuple[str, ...] = (PALETTE.blue, PALETTE.green, PALETTE.violet, PALETTE.orange, PALETTE.pink, PALETTE.amber, PALETTE.red)
+NAME_COLOURS: tuple[str, ...] = (
+    PALETTE.blue,
+    PALETTE.green,
+    PALETTE.violet,
+    PALETTE.orange,
+    PALETTE.pink,
+    PALETTE.amber,
+    PALETTE.red,
+)
 
 
 def who_colour(login: str) -> str:
@@ -540,7 +548,8 @@ def rows_to_show(count: int) -> list[Row]:
     marks = seen_marks()
     # The log is read deeply rather than to the row count, since several entries can collapse into one row.
     changes = [
-        row_from_event(event, has_been_seen(event_identity(event), event["at"], marks, since)) for event in recent_events(count * ROWS_READ_DEEPLY)
+        row_from_event(event, has_been_seen(event_identity(event), event["at"], marks, since))
+        for event in recent_events(count * ROWS_READ_DEEPLY)
     ]
     entries, _damaged = read_snapshot()
     changes = [filled_in(row, entries or {}) for row in changes]
@@ -666,7 +675,12 @@ def row_background(row: Row) -> str | None:
 
 
 # The quick filters along the bottom of the window: what each is called, and which of the user's hats it keeps.
-FILTER_CHOICES: tuple[tuple[str, str], ...] = (("all", "All"), ("author", "Author"), ("reviewer", "Reviewer"), ("mention", "Mentioned"))
+FILTER_CHOICES: tuple[tuple[str, str], ...] = (
+    ("all", "All"),
+    ("author", "Author"),
+    ("reviewer", "Reviewer"),
+    ("mention", "Mentioned"),
+)
 
 
 def role_matches(row: Row, wanted: str) -> bool:
