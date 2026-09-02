@@ -26,16 +26,10 @@ LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 # Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
 APP_ICON_PATH = APP_DIR / "gh-tray.png"
-# Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
-# of what one needs to say to the other.
-REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
-# The same the other way round: the tray asking the changes window to show itself. That window stays loaded and
-# hidden between showings, so being asked reaches it in a few milliseconds rather than the second a fresh process
-# takes to start. Its lock is what says one is already waiting.
-POPUP_REQUEST_PATH = APP_DIR / "popup.request"
-POPUP_LOCK_PATH = APP_DIR / "popup.lock"
-# The size the user last dragged the changes window to, and its column widths, so both survive a restart.
-LAYOUT_PATH = APP_DIR / "layout.json"
+# The width the user last dragged the changes window to, and its column widths, so both survive a restart. Kept by
+# the toolkit's own settings store in its plain text form, alongside everything else rather than wherever the
+# platform would put it.
+LAYOUT_PATH = APP_DIR / "layout.ini"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {

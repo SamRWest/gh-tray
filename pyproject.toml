@@ -6,13 +6,14 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "cyclopts>=3.0",
-    "darkdetect>=0.8.0",
     "desktop-notifier>=6.0",
     "loguru>=0.7",
     "pillow>=10.1",
     "platformdirs>=4.2",
-    "pystray>=0.19.5",
-    "tksheet>=7.6.0",
+    # Keeps the tray out of the macOS Dock, which the toolkit has no way to ask for.
+    "pyobjc-framework-cocoa>=10.0; sys_platform == 'darwin'",
+    # 6.8 is the first that can be told to draw dark or light rather than only follow the desktop.
+    "pyside6-essentials>=6.8",
 ]
 
 [project.scripts]
@@ -26,7 +27,7 @@ build-backend = "hatchling.build"
 packages = ["src/gh_tray"]
 
 [dependency-groups]
-dev = ["poethepoet>=0.30", "prek>=0.2", "pytest>=8.0", "ruff>=0.6", "ty>=0.0.1a20"]
+dev = ["poethepoet>=0.30", "prek>=0.2", "pytest>=8.0", "pytest-qt>=4.5", "ruff>=0.6", "ty>=0.0.1a20"]
 
 # Named jobs, run as `uv run poe <name>`. `uv run poe` on its own lists them.
 [tool.poe.tasks]

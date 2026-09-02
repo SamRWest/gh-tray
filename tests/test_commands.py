@@ -45,5 +45,5 @@ def test_a_deferred_import_resolves(module, name, line):
 
 
 def test_every_command_is_reachable():
-    for command in ("once", "settings", "popup", "setup"):
+    for command in ("once", "settings", "setup"):
         assert command in __main__.app, f"{command} is not a command"

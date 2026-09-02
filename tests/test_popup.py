@@ -104,7 +104,7 @@ def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
     rows = popup.rows_to_show(10)
     assert [row.label for row in rows] == ["Awaiting your review"]
     assert rows[0].who == "someone"
-    assert rows[0].colour == popup.PALETTE.orange
+    assert rows[0].colour == "orange"
 
 
 def test_what_changed_is_listed_before_what_is_merely_waiting(event_log):
@@ -165,15 +165,10 @@ def test_the_most_recently_touched_comes_first_among_equals(event_log):
 
 
 def test_each_sort_of_change_has_its_own_colour():
-    assert popup.dot_colour(change("ci_broken"), unread=True) == popup.URGENT
-    assert popup.dot_colour(change("new_comment")) == popup.PALETTE.blue
-    assert popup.dot_colour(change("mention")) == popup.PALETTE.violet
+    assert popup.dot_colour(change("ci_broken")) == popup.URGENT
+    assert popup.dot_colour(change("new_comment")) == "blue"
+    assert popup.dot_colour(change("mention")) == "violet"
     assert len({popup.dot_colour(change(kind)) for kind in popup.KIND_COLOURS}) == len(popup.KIND_COLOURS)
-
-
-def test_a_change_already_seen_keeps_saying_what_sort_of_thing_it_was():
-    # Turning a seen row grey would say it had been switched off rather than merely read; it is dimmed instead.
-    assert popup.dot_colour(change("ci_broken"), unread=False) == popup.URGENT
 
 
 def test_no_row_is_ever_drawn_in_plain_grey():
@@ -193,11 +188,11 @@ def test_a_row_is_marked_filled_until_seen_and_hollow_after():
 
 def test_a_date_is_drawn_further_along_its_scale_the_older_it_is():
     now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-    fresh = popup.age_colour((now - timedelta(minutes=5)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    middling = popup.age_colour((now - timedelta(days=14)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    stale = popup.age_colour((now - timedelta(days=400)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    assert fresh == popup.PALETTE.fresh
-    assert stale == popup.PALETTE.stale
+    fresh = popup.age_colour((now - timedelta(minutes=5)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    middling = popup.age_colour((now - timedelta(days=14)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    stale = popup.age_colour((now - timedelta(days=400)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    assert fresh == theme.DARK.fresh
+    assert stale == theme.DARK.stale
     assert middling not in (fresh, stale), "the scale should pass through the colours between its two ends"
 
 
@@ -256,7 +251,7 @@ def test_every_column_has_a_heading_and_a_width():
 
 def test_one_column_takes_the_space_a_resize_adds():
     stretching = [heading for _key, heading, _width, stretches in popup.COLUMNS if stretches]
-    assert stretching == [popup.STRETCHING_COLUMN]
+    assert stretching == ["Title"]
 
 
 def test_the_person_behind_each_kind_of_change_is_named():
@@ -289,7 +284,7 @@ def test_something_ready_to_merge_is_good_news_rather_than_a_warning(event_log):
 
 
 def test_a_ready_to_merge_change_is_green_too():
-    assert popup.dot_colour(change("ready_to_merge"), unread=True) == popup.GOOD
+    assert popup.dot_colour(change("ready_to_merge")) == popup.GOOD
 
 
 def test_the_newest_row_is_at_the_top_whatever_it_came_from(event_log):
@@ -349,10 +344,12 @@ def test_a_row_dims_only_once_it_has_been_seen():
 
 
 def test_fading_keeps_the_hue_and_only_dims_it():
-    faded = theme.blend(popup.URGENT, popup.BACKGROUND, 0.5)
-    assert faded != popup.URGENT
-    assert theme.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
-    assert theme.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND
+    ground = theme.DARK.background
+    red = theme.ink(theme.DARK, popup.URGENT)
+    faded = theme.blend(red, ground, 0.5)
+    assert faded != red
+    assert theme.blend(red, ground, 1.0) == red
+    assert theme.blend(red, ground, 0.0) == ground
 
 
 def test_several_comments_on_one_pull_request_are_one_row(event_log):
@@ -416,50 +413,6 @@ def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
     assert popup.rows_to_show(10)[0].seen is True
 
 
-@pytest.fixture
-def layout(tmp_path, monkeypatch):
-    """Point the remembered window shape at a temporary directory."""
-    monkeypatch.setattr(popup, "LAYOUT_PATH", tmp_path / "layout.json")
-    return tmp_path
-
-
-def test_nothing_is_remembered_until_the_user_drags_something(layout):
-    assert popup.remembered_width(96) is None
-    assert popup.remembered_column_widths(96) == {}
-
-
-def test_a_dragged_width_comes_back_as_it_was_on_the_same_display(layout):
-    popup.remember_width(800, 96)
-    assert popup.remembered_width(96) == 800
-
-
-def test_a_dragged_width_scales_with_the_display_it_comes_back_on(layout):
-    # Remembered at standard scaling and played back on a display drawing twice as finely, the window should take
-    # the same share of the screen, which means twice the pixels.
-    popup.remember_width(800, 96)
-    assert popup.remembered_width(192) == 1600
-
-
-def test_column_widths_are_remembered_by_name(layout):
-    popup.remember_column_widths({"repo": 300, "title": 400}, 96)
-    assert popup.remembered_column_widths(96) == {"repo": 300, "title": 400}
-    assert popup.remembered_column_widths(48) == {"repo": 150, "title": 200}
-
-
-def test_remembering_columns_keeps_the_window_width_and_the_other_way_round(layout):
-    popup.remember_width(800, 96)
-    popup.remember_column_widths({"repo": 300}, 96)
-    assert popup.remembered_width(96) == 800
-    popup.remember_width(900, 96)
-    assert popup.remembered_column_widths(96) == {"repo": 300}
-
-
-def test_a_hand_damaged_layout_reads_as_nothing_remembered(layout):
-    (layout / "layout.json").write_text('{"window": {"width": "wide", "dots": 0}, "columns": []}', encoding="utf-8")
-    assert popup.remembered_width(96) is None
-    assert popup.remembered_column_widths(96) == {}
-
-
 def test_the_same_name_is_always_dealt_the_same_colour():
     assert popup.who_colour("SamRWest") == popup.who_colour("SamRWest")
     assert popup.who_colour("SamRWest") in popup.NAME_COLOURS
@@ -473,7 +426,7 @@ def test_names_spread_across_the_colours_rather_than_sharing_one():
 
 
 def test_a_missing_name_gets_the_quiet_ink():
-    assert popup.who_colour("") == popup.PALETTE.muted
+    assert popup.who_colour("") == popup.QUIET
 
 
 def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):
@@ -585,11 +538,12 @@ def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
     finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
     open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
     unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
-    assert popup.row_background(finished) == theme.blend(
-        popup.STATUS_COLOURS["merged"], popup.PALETTE.background, popup.CLOSED_TINT
+    ground = theme.DARK.background
+    assert popup.row_background(finished, theme.DARK, ground) == theme.blend(
+        theme.ink(theme.DARK, popup.STATUS_COLOURS["merged"]), ground, popup.CLOSED_TINT
     )
-    assert popup.row_background(open_row) is None
-    assert popup.row_background(unknown) is None
+    assert popup.row_background(open_row, theme.DARK, ground) is None
+    assert popup.row_background(unknown, theme.DARK, ground) is None
 
 
 def test_every_status_word_has_a_colour():

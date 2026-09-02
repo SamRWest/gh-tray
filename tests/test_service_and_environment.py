@@ -182,11 +182,5 @@ def test_a_console_interrupt_runs_the_stop_it_was_given(monkeypatch):
     assert stopped == [True]
 
 
-def test_the_pointer_is_located_or_honestly_not():
-    # Windows, macOS and an X display can each say; anything else says nothing rather than guessing.
-    spot = environment.cursor_position()
-    assert spot is None or (len(spot) == 2 and all(isinstance(axis, int) for axis in spot))
-
-
 def test_keeping_out_of_the_dock_is_harmless_everywhere():
     environment.hide_from_dock()

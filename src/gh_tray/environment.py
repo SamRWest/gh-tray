@@ -21,12 +21,6 @@ from loguru import logger
 
 from . import APP_NAME
 
-# What Windows calls the part of the screen a window may use, with the taskbar left out.
-SPI_GETWORKAREA = 0x0030
-# What Windows calls the display closest to a point, and the scaling a display is actually drawing at as opposed to
-# the one its hardware could manage.
-NEAREST_MONITOR = 2
-MONITOR_SCALING = 0
 # What Windows calls UTF-8, which a console has to be put into by number.
 UTF8_CODE_PAGE = 65001
 
@@ -115,108 +109,6 @@ def on_console_interrupt(stop: Callable[[], None]) -> None:
         logger.debug("could not watch the console for Ctrl+C: {}", error)
 
 
-def make_dpi_aware() -> None:
-    """Tell Windows this process draws at the real screen resolution.
-
-    Without this, a window on a display scaled above 100% is drawn small and then stretched by the system, which is
-    what makes its text look soft. Must be called before any window is built.
-    """
-    if sys.platform != "win32":
-        return
-    import ctypes
-
-    for library, function, argument in (
-        ("shcore", "SetProcessDpiAwareness", 2),
-        ("user32", "SetProcessDPIAware", None),
-    ):
-        try:
-            entry = getattr(ctypes.windll, library)
-            (getattr(entry, function)(argument) if argument is not None else getattr(entry, function)())
-        except (AttributeError, OSError):
-            continue
-        return
-    logger.debug("could not ask Windows for a sharp window, text may look soft")
-
-
-def pointer_scaling() -> int | None:
-    """Return how finely the display under the pointer draws, in dots per inch.
-
-    The changes window appears where the pointer is, so that display is the one its text and spacing have to suit.
-    The number is asked of the platform rather than worked out from the toolkit's own idea of the screen, which is
-    settled when it starts and can be left behind by a display that goes away and comes back. A locked screen does
-    exactly that, which is how a window ends up drawing text for a display that is no longer there.
-
-    :return: dots per inch, or None where the platform cannot say
-    """
-    if sys.platform != "win32":
-        return None
-    import ctypes
-    import ctypes.wintypes
-
-    try:
-        spot = ctypes.wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
-        display = ctypes.windll.user32.MonitorFromPoint(spot, NEAREST_MONITOR)
-        across, down = ctypes.c_uint(), ctypes.c_uint()
-        # Windows 8.1 and later. Anything older is left alone rather than guessed at.
-        ctypes.windll.shcore.GetDpiForMonitor(display, MONITOR_SCALING, ctypes.byref(across), ctypes.byref(down))
-    except (AttributeError, OSError):
-        return None
-    return across.value or None
-
-
-def cursor_position() -> tuple[int, int] | None:
-    """Return where the pointer is on screen right now, or None where the platform cannot say.
-
-    Asked of the platform directly because the caller may have no window of its own to ask through, and the moment
-    matters: a window opened half a second after a click should appear where the click was, not wherever the
-    pointer has wandered since.
-
-    On Windows this is only meaningful from a process that has called :func:`make_dpi_aware`. An unaware one is
-    handed scaled-down coordinates on a scaled display, and a window placed by those lands well away from the click.
-
-    :return: the pointer's x and y in screen pixels
-    """
-    if sys.platform == "win32":
-        import ctypes
-        import ctypes.wintypes
-
-        spot = ctypes.wintypes.POINT()
-        try:
-            told = ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
-        except (AttributeError, OSError):
-            return None
-        return (spot.x, spot.y) if told else None
-    if sys.platform == "darwin":
-        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
-        # exists on this one. The answer is measured from the top left of the main display, as the toolkit's is.
-        quartz = import_module("Quartz")
-        spot = quartz.CGEventGetLocation(quartz.CGEventCreate(None))
-        return int(spot.x), int(spot.y)
-    if sys.platform == "linux":
-        return x11_cursor_position()
-    return None
-
-
-def x11_cursor_position() -> tuple[int, int] | None:
-    """Return where the pointer is, asked of the X display, or None where there is no display to ask.
-
-    :return: the pointer's x and y in screen pixels
-    """
-    # Imported by name, for the reason given in :func:`cursor_position`.
-    xlib_display, xlib_error = import_module("Xlib.display"), import_module("Xlib.error")
-    try:
-        display = xlib_display.Display()
-    except (xlib_error.DisplayError, OSError) as error:
-        logger.debug("could not ask the display where the pointer is: {}", error)
-        return None
-    try:
-        pointer = display.screen().root.query_pointer()
-    finally:
-        display.close()
-    return int(pointer.root_x), int(pointer.root_y)
-
-
 def hide_from_dock() -> None:
     """Keep this process out of the macOS Dock and the application switcher.
 
@@ -227,38 +119,13 @@ def hide_from_dock() -> None:
     if sys.platform != "darwin":
         return
     try:
-        # Imported by name, for the reason given in :func:`cursor_position`.
+        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
+        # exists on this one.
         appkit = import_module("AppKit")
     except ImportError as error:
         logger.debug("could not keep this process out of the Dock: {}", error)
         return
     appkit.NSApplication.sharedApplication().setActivationPolicy_(appkit.NSApplicationActivationPolicyAccessory)
-
-
-def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
-    """Return how much of the screen a window may use, with any taskbar, dock or panel left out.
-
-    Windows will say directly, and is the one that has to be asked: its toolkit reports the whole screen as
-    available and a window placed against the bottom of that ends up behind the taskbar. Elsewhere the toolkit's own
-    answer already accounts for the desktop's bars, so the caller's fallback is used.
-
-    :param fallback: the width and height to use where the desktop cannot be asked
-    :return: the usable width and height in pixels
-    """
-    if sys.platform != "win32":
-        return fallback
-    import ctypes
-    import ctypes.wintypes
-
-    area = ctypes.wintypes.RECT()
-    try:
-        told = ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(area), 0)
-    except (AttributeError, OSError) as error:
-        logger.debug("could not read the usable screen area: {}", error)
-        return fallback
-    if not told:
-        return fallback
-    return area.right - area.left, area.bottom - area.top
 
 
 def github_cli() -> str | None:

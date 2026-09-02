@@ -27,23 +27,20 @@ The icon carries a count of changes you have not seen yet.
 | Doing this to the icon | Gets you                                                                   |
 | ---------------------- | -------------------------------------------------------------------------- |
 | Hovering               | A short status summary                                                     |
-| Clicking once          | A small window listing the most recent changes                             |
-| Clicking twice         | [gh-dash](https://github.com/dlvhdr/gh-dash), maximised                    |
+| Clicking once          | Shows or hides the changes window, listing the most recent changes         |
 | Right-clicking         | The review queue, the login-start switch, the settings window and the rest |
 
-A single click cannot act the moment it happens, because the first click of a double click looks exactly like it. So it
-waits half a second to see whether a second click follows.
+The dashboard opens from the right-click menu, or from **Open dashboard** in the changes window itself.
 
-The two clicks are what a Windows tray offers. On macOS, and on Linux desktops that show the icon through an indicator,
-a click opens the menu whatever the button, so **Recent changes...** and **Open dashboard** sit at its top.
+On macOS, and on a Linux desktop that shows the icon through an indicator, a click opens the menu whatever the button,
+which is why **Recent changes...** and **Open dashboard** sit at its top.
 
-The window itself appears straight away. It is built once, when the tray starts, and hidden rather than closed
-afterwards, so showing it again costs a few milliseconds instead of the second a fresh process takes. It lives in a
-process of its own, which the tray starts and stops with itself. Clicking the icon several times in a row leaves one
-note asking for it, not several windows.
+The window itself appears straight away. It is built once, when the tray starts, in the same process as the tray itself,
+and hidden rather than closed afterwards, so showing it again costs nothing. Clicking the icon while it is up puts it
+away again, rather than opening a second one.
 
-The click-through window lists what changed since you last looked, then what is merely waiting on you. Changes alone
-would leave it saying "nothing" on a quiet day while three reviews sat in the queue.
+The changes window lists what changed since you last looked, then what is merely waiting on you. Changes alone would
+leave it saying "nothing" on a quiet day while three reviews sat in the queue.
 
 | Column | Holds                                                                    |
 | ------ | ------------------------------------------------------------------------ |
@@ -66,8 +63,9 @@ closed** along the bottom brings them back, each on a wash of its status colour,
 so what is finished reads as finished at a glance. The status is blank on a row about something no longer polled, which
 reads as nothing rather than as a guess, and such a row is never hidden.
 
-The window follows your desktop's light or dark theme, as does the settings window. The theme is read when the window
-opens, so changing it takes effect the next time you click.
+The windows are drawn in the desktop's own colours, and follow it live between light and dark; the settings can insist
+on dark or light instead. The row inks (what a row is, who, how old and status) are the only colours the application
+chooses.
 
 Click a row to open it on GitHub. Right-click it to mark it seen, and right-click again to mark it unseen. Nothing else
 marks a row: a row you have marked comes back unmarked if anything happens to it afterwards, since marking means "I have
@@ -91,14 +89,16 @@ yourself are left out, since your own comment is not news to you, though your ow
 **Refresh** asks the tray to look again, since it is the only thing allowed to poll.
 
 Newest is at the top. Click a column heading to sort by it and again to turn the order around. It lists 20 rows by
-default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window has no
-frame, so drag its title strip to move it and any edge or corner to resize it. Press Escape, click the close mark, or
-click anything else on screen to dismiss it.
+default, which is a setting, and the rest scroll. Drag a divider in the headings to resize a column. The window wears
+the desktop's own frame: move it, resize it and close it as you would any window. Press Escape, click the close button,
+or click the tray icon again to put it away.
 
-A width you drag, of the window or of a column, is kept across showings and restarts, and stays the same physical size
-when the display's scaling changes. The height always follows the rows: snug around a few, and no more than its ceiling
-over many, with the rest scrolling. When a filter changes how many rows there are, the height changes from the top edge,
-the bottom staying where it sits just above the taskbar, so new rows never slide off the bottom of the screen.
+A width you drag, of the window or of a column, is kept across showings and restarts, in characters of the text rather
+than in pixels. Ctrl and the mouse wheel make the text larger or smaller in every window at once, and Ctrl+0 puts it
+back; that too is kept, and the widths follow it. The height always follows the rows: snug around a few, and no more
+than its ceiling over many, with the rest scrolling. When a filter changes how many rows there are, the height changes
+from the top edge, the bottom staying where it sits just above the taskbar, so new rows never slide off the bottom of
+the screen.
 
 ## What counts as a change
 
@@ -130,21 +130,9 @@ and where it covers several changes, the one listed first.
 Nothing else: no shell, and no command line tools beyond the GitHub one. The application never handles a token of its
 own. It borrows whatever you have already signed in with, and stops working the moment you sign out.
 
-On Linux the tray icon is drawn through the desktop's own toolkit bindings, which come from the distribution rather than
-from pip: on Debian or Ubuntu that is `python3-gi` and `gir1.2-ayatanaappindicator3-0.1`, and GNOME wants its
-AppIndicator extension as well. An isolated tool install cannot see them, so make an environment that can, and install
-into that:
-
-```bash
-uv venv --system-site-packages ~/.local/share/gh-tray-env
-```
-
-```bash
-uv pip install --python ~/.local/share/gh-tray-env/bin/python git+https://github.com/SamRWest/gh-tray
-```
-
-Then `~/.local/share/gh-tray-env/bin/gh-tray` starts it. Without the bindings the icon still appears, but bare: no menu
-and nothing to click, so `gh-tray setup` lists them as a requirement.
+On Linux the tray icon is shown through the StatusNotifierItem protocol, which KDE, Xfce and other desktops provide
+directly and GNOME provides through its AppIndicator extension. The toolkit also wants a few of the desktop's own
+libraries, of which `libxcb-cursor0` is the one most often missing (the package name on Debian and Ubuntu).
 
 On macOS, Notification Center takes notifications only from an application bundle, which a Python interpreter is not, so
 they are spoken through the scripting bridge instead: the same words, without the icon, and clicking one opens nothing.
@@ -206,8 +194,8 @@ installed by Homebrew is nowhere to be found.
 ## Settings
 
 The settings window covers the poll interval, how old a pull request has to be before it is ignored, how many changes
-the click-through window lists, which changes raise a notification, whether to start at login, and the command that
-opens the dashboard. Leaving the dashboard command blank runs `gh dash` in whichever terminal this platform provides.
+the changes window lists, which changes raise a notification, whether to start at login, and the command that opens the
+dashboard. Leaving the dashboard command blank runs `gh dash` in whichever terminal this platform provides.
 
 Settings are re-read on every poll, so a change takes effect without restarting the tray.
 
@@ -226,9 +214,8 @@ Settings and history live in the platform's standard application data directory,
 | `seen.json`      | The rows you have marked, and when you last marked everything seen          |
 | `gh-tray.log`    | Rotating diagnostics                                                        |
 | `last_error.log` | Everything written when the last collection failed                          |
-| `layout.json`    | The window size and column widths you last dragged                          |
+| `layout.ini`     | The window width and column widths you last dragged                         |
 | `gh-tray.lock`   | Held open while the tray runs, so a second copy cannot start                |
-| `popup.lock`     | Held open by the hidden changes window, so only one waits                   |
 
 Polling and looking are tracked separately. The poller advances its baseline every run, but the unread count is measured
 against what you have actually looked at, so nothing is lost between the moment a change lands and the moment you read
@@ -241,26 +228,25 @@ incomplete, so the change history it describes would be silently wrong.
 
 ## How the code is arranged
 
-| Module               | Responsibility                                                           |
-| -------------------- | ------------------------------------------------------------------------ |
-| `config.py`          | Settings, defaults, repair of hand-edited files, data locations          |
-| `storage.py`         | Reading state files, and writing them so a reader never sees half a file |
-| `environment.py`     | Everything platform-specific: terminals, login start, instance lock, DPI |
-| `github.py`          | Talking to GitHub through the signed-in command line tool                |
-| `collector.py`       | Asking GitHub what is true now, and flattening the answer                |
-| `events.py`          | Detecting changes between polls, and the event history                   |
-| `service.py`         | One polling cycle: collect, diff, record, summarise                      |
-| `status.py`          | Turning a poll result into a colour, a count and hover text              |
-| `notifier.py`        | Desktop notifications and their click actions                            |
-| `tray.py`            | The icon, its menu, and the polling timer                                |
-| `theme.py`           | The colours to draw with, following the desktop's light or dark theme    |
-| `popup.py`           | Which rows the click-through window lists, and in what order             |
-| `window.py`          | The frameless window itself, its table, and staying loaded and hidden    |
-| `settings_window.py` | The settings window                                                      |
+| Module               | Responsibility                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `config.py`          | Settings, defaults, repair of hand-edited files, data locations                        |
+| `storage.py`         | Reading state files, and writing them so a reader never sees half a file               |
+| `environment.py`     | Everything platform-specific: terminals, login start, instance lock, Dock, AppleScript |
+| `github.py`          | Talking to GitHub through the signed-in command line tool                              |
+| `collector.py`       | Asking GitHub what is true now, and flattening the answer                              |
+| `events.py`          | Detecting changes between polls, and the event history                                 |
+| `service.py`         | One polling cycle: collect, diff, record, summarise                                    |
+| `status.py`          | Turning a poll result into a colour, a count and hover text                            |
+| `notifier.py`        | Desktop notifications and their click actions                                          |
+| `toolkit.py`         | Starting the toolkit, an icon from a drawn picture, the theme setting, the text zoom   |
+| `tray.py`            | The icon, its menu, and the polling timer                                              |
+| `theme.py`           | The row inks, in a dark and a light set, following the desktop's theme                 |
+| `popup.py`           | Which rows the changes window lists, in what order and in which inks                   |
+| `window.py`          | The changes window itself and its table                                                |
+| `settings_window.py` | The settings window                                                                    |
 
-The table is [tksheet](https://github.com/ragardner/tksheet) rather than the toolkit's own, which colours a whole row at
-a time. Here each cell wants its own colour: a row says what it is in one and how stale it is in another, and neither
-should have to give way to the other.
+The table is the toolkit's own, coloured cell by cell.
 
 Notifications run on a long-lived event loop of their own. The platform backend calls back into the sending loop when a
 notification is clicked, which can happen long after the send returns, so a loop closed straight after sending would
@@ -313,10 +299,10 @@ usual file hygiene. Ruff's security rules are on, which is the same set [bandit]
 implements, so bandit is not installed separately.
 
 Every push runs the tests on Linux, Windows and macOS and the checks once, in the **Checks and tests** workflow. Windows
-is where the awkward parts live: measuring the taskbar, locking against a second copy, and starting a window with no
-console. Linux and macOS are checked because the tray, the login entry, the terminal launcher and the notifier each take
-a path of their own there. The type checks also run once as each platform, which hides what that platform lacks, so a
-Windows-only call outside its guard fails in the workflow rather than on somebody's Mac. The login entries are checked
-with each desktop's own validator where the runner has one.
+is where the awkward parts live: locking against a second copy and starting a window with no console. Linux and macOS
+are checked because the tray, the login entry, the terminal launcher and the notifier each take a path of their own
+there. The type checks also run once as each platform, which hides what that platform lacks, so a Windows-only call
+outside its guard fails in the workflow rather than on somebody's Mac. The login entries are checked with each desktop's
+own validator where the runner has one.
 
-Tests that need a window skip themselves where there is no display to build one on.
+The tests drive the windows through the toolkit's offscreen platform, so no display is needed on any runner.

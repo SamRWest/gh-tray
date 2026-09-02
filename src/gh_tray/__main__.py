@@ -142,8 +142,11 @@ def run_tray() -> int:
         print(f"{APP_NAME} is already running.", file=sys.stderr)
         return 1
     try:
+        # Imported here rather than at the top, so the commands that open no window never load the toolkit.
+        from .toolkit import application
         from .tray import Tray
 
+        application()
         logger.info("starting {} {}", APP_NAME, __version__)
         Tray().run()
     finally:
@@ -202,22 +205,6 @@ def settings() -> int:
     from .settings_window import run_settings
 
     run_settings()
-    return 0
-
-
-@app.command
-def popup() -> int:
-    """Keep the changes window loaded and hidden, showing it whenever the tray asks.
-
-    The tray starts this itself and stops it on the way out, so there is rarely a reason to run it by hand. Clicking
-    the tray icon is what asks the window to show.
-
-    :return: process exit code
-    """
-    start_logging(to_console=False)
-    from .window import serve_popup
-
-    serve_popup()
     return 0
 
 

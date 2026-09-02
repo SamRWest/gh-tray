@@ -10,6 +10,9 @@ on: [ push, workflow_dispatch ]
 env:
   PYTHON_VERSION: '3.13'
   UV_VERSION: '0.9.28'
+  # The toolkit draws to memory rather than to a screen, so the window tests run the same on every runner, none of
+  # which has a desktop worth the name.
+  QT_QPA_PLATFORM: offscreen
 
 jobs:
   test:
@@ -45,15 +48,14 @@ jobs:
       - name: Install the dependencies
         run: uv sync --locked
 
-      # The login entry written on Linux is checked against the desktop's own validator, where there is one.
-      - name: Install the desktop entry validator
+      # The login entry written on Linux is checked against the desktop's own validator, where there is one, and
+      # the toolkit wants a few of the desktop's libraries even when drawing to memory.
+      - name: Install the desktop entry validator and the toolkit's libraries
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get install -y desktop-file-utils
+        run: sudo apt-get install -y desktop-file-utils libegl1 libxkbcommon0 libxcb-cursor0
 
-      # The window and the tray icon both need a display. There is none on a runner, so one is faked for the Linux
-      # job; the Windows one has a desktop of its own. Tests that still cannot build a window skip themselves.
       - name: Run the tests
-        run: ${{ matrix.os == 'ubuntu-latest' && 'xvfb-run -a' || '' }} uv run poe test
+        run: uv run poe test
 
       # Only once: the checks are about the files, not the platform, and running them twice says nothing new.
       - name: Run the pre-commit checks
