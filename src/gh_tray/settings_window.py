@@ -95,7 +95,7 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
-        self.involved = QCheckBox("Pull requests you are involved in some other way, as the dashboard lists them", self)
+        self.involved = QCheckBox("Pull requests you are only involved in", self)
         self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
         form.addRow("Also list", self.involved)
         return form

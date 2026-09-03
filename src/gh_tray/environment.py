@@ -257,8 +257,9 @@ def start_detached(command: list[str], errors: Path) -> int:
     quiet = subprocess.DEVNULL
     with errors.open("w", encoding="utf-8") as kept:
         if sys.platform == "win32":
-            # No console of its own, and none inherited: either would be a window on the screen.
-            flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # A hidden console of its own, which the interpreter behind a venv's launcher inherits. Given no console
+            # at all, that interpreter, a console program, opens a visible one of its own.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
             )
