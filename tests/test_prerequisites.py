@@ -139,3 +139,18 @@ def test_homebrew_installs_the_tool_on_linux_too(monkeypatch):
         prerequisites.shutil, "which", lambda name: "/home/linuxbrew/bin/brew" if name == "brew" else None
     )
     assert prerequisites.package_manager() == ("brew", ["brew", "install"])
+
+
+def test_linux_is_told_which_package_gives_the_toolkit_its_display_library(everything_installed, monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "linux")
+    monkeypatch.setattr(prerequisites.shutil, "which", lambda name: "/usr/bin/apt-get" if name == "apt-get" else None)
+    monkeypatch.setattr(prerequisites.ctypes.util, "find_library", lambda _name: None)
+    libraries = next(requirement for requirement in prerequisites.missing() if requirement.name == "Desktop libraries")
+    assert libraries.installable is False
+    assert libraries.manual == "run: sudo apt install libxcb-cursor0"
+
+
+def test_only_linux_can_lack_the_display_library(everything_installed, monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "win32")
+    assert all(requirement.name != "Desktop libraries" for requirement, _present in prerequisites.requirements())
+    assert prerequisites.desktop_libraries_present() is True

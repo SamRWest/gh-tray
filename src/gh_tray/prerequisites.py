@@ -7,6 +7,7 @@ the user to run, because a desktop application quietly acquiring root is not a t
 
 from __future__ import annotations
 
+import ctypes.util
 import shutil
 import subprocess
 import sys
@@ -73,12 +74,21 @@ def package_manager() -> tuple[str, list[str]] | None:
     return None
 
 
-def distribution_install() -> str:
-    """Return the distribution's own command for installing the GitHub tool, for the user to run with root."""
-    return next(
-        (hint for tool, hint in DISTRIBUTION_INSTALLS if shutil.which(tool)),
-        "see https://github.com/cli/cli#installation",
-    )
+def distribution_install(installs: tuple[tuple[str, str], ...] = DISTRIBUTION_INSTALLS, otherwise: str = "") -> str:
+    """Return the distribution's own command for installing something, for the user to run with root.
+
+    :param installs: each package manager's command, tried in order
+    :param otherwise: what to say where none of the package managers is found
+    """
+    fallback = otherwise or "see https://github.com/cli/cli#installation"
+    return next((hint for tool, hint in installs if shutil.which(tool)), fallback)
+
+
+def desktop_libraries_present() -> bool:
+    """Return whether the library the toolkit needs to draw on an X display is here. Only Linux can lack it."""
+    if sys.platform != "linux":
+        return True
+    return ctypes.util.find_library("xcb-cursor") is not None
 
 
 def github_package() -> str:
@@ -140,6 +150,23 @@ def requirements() -> list[tuple[Requirement, bool]]:
                 manual="run: gh extension install dlvhdr/gh-dash",
             ),
             gh_dash_installed(),
+        ),
+        # Last, and only where there is anything to check: without it the toolkit stops the tray with a page of its
+        # own complaints, which this says in one line instead.
+        *(
+            [
+                (
+                    Requirement(
+                        "Desktop libraries",
+                        "what the toolkit needs to draw on an X display",
+                        [],
+                        manual=f"run: {distribution_install(XCB_CURSOR_INSTALLS, 'install the xcb-cursor library')}",
+                    ),
+                    desktop_libraries_present(),
+                )
+            ]
+            if sys.platform == "linux"
+            else []
         ),
     ]
 

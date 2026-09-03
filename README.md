@@ -138,7 +138,8 @@ own. It borrows whatever you have already signed in with, and stops working the 
 
 On Linux the tray icon is shown through the StatusNotifierItem protocol, which KDE, Xfce and other desktops provide
 directly and GNOME provides through its AppIndicator extension. The toolkit also wants a few of the desktop's own
-libraries, of which `libxcb-cursor0` is the one most often missing (the package name on Debian and Ubuntu).
+libraries, of which `libxcb-cursor0` is the one most often missing (the package name on Debian and Ubuntu);
+`gh-tray setup` checks for it and names the package.
 
 On macOS, Notification Center takes notifications only from an application bundle, which a Python interpreter is not, so
 they are spoken through the scripting bridge instead: the same words, without the icon, and clicking one opens nothing.
