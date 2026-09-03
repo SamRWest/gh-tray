@@ -151,6 +151,8 @@ def test_linux_is_told_which_package_gives_the_toolkit_its_display_library(every
 
 
 def test_only_linux_can_lack_the_display_library(everything_installed, monkeypatch):
+    # The platform is the real sys module's, so the standard library's which must not be let loose on it either.
     monkeypatch.setattr(prerequisites.sys, "platform", "win32")
+    monkeypatch.setattr(prerequisites.shutil, "which", lambda _name: None)
     assert all(requirement.name != "Desktop libraries" for requirement, _present in prerequisites.requirements())
     assert prerequisites.desktop_libraries_present() is True
