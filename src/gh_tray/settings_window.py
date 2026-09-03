@@ -95,7 +95,7 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
-        self.involved = QCheckBox("Pull requests you are only involved in", self)
+        self.involved = QCheckBox("Pull requests you only commented on or were assigned", self)
         self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
         form.addRow("Also list", self.involved)
         return form
@@ -120,10 +120,10 @@ class SettingsDialog(QDialog):
         repository the account merely contributes to from outside are never lost. One turned off stays listed after
         the account leaves it, so it can be turned on again.
         """
-        group = QGroupBox("Watch pull requests in", self)
+        group = QGroupBox("Repository owners to watch", self)
         column = QVBoxLayout(group)
         # The catch-all first: every owner not listed below. Off, only the owners ticked below are watched.
-        self.others = QCheckBox("Anything else you have a hand in", group)
+        self.others = QCheckBox("Any other owner not listed here", group)
         self.others.setChecked(bool(self.config.get(WATCH_OTHERS_KEY, True)))
         column.addWidget(self.others)
         hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
