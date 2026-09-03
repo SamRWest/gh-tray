@@ -60,7 +60,7 @@ column stay: a name, a repository, a status, a word of a title. Escape clears th
 
 The two name columns are different questions: a comment on Emily's pull request from someone else shows Emily as the
 author and the commenter as who. Filters along the bottom cut the list to one of your hats: pull requests you wrote,
-ones you review, or mentions of you.
+ones you review, ones you are involved in some other way, or mentions of you.
 
 Rows about merged or closed pull requests start hidden: they are done, and the window is a list of what is not. **Show
 closed** along the bottom brings them back, each on a wash of its status colour, violet for merged and red for closed,
