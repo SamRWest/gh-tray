@@ -19,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from .config import ERROR_LOG_PATH, HIDDEN_OWNERS_KEY, STATE_PATH
+from .config import ERROR_LOG_PATH, HIDDEN_OWNERS_KEY, INVOLVED_KEY, STATE_PATH, WATCH_OTHERS_KEY, WATCHED_OWNERS_KEY
 from .github import GitHubError, api, search_pull_requests, viewer
 from .storage import read_json, write_json_atomic, write_text_atomic
 
@@ -34,6 +34,9 @@ CONCURRENT_LOOKUPS = 4
 
 AUTHORED = "is:pr is:open author:@me archived:false"
 REVIEWING = "is:pr is:open review-requested:@me archived:false"
+# Everything else open the user has a hand in, which the dashboard lists and this asks for only when told to. What
+# the other two searches already found is dropped from it, so a pull request is on one side only.
+INVOLVED = "is:pr is:open involves:@me archived:false"
 # Closed pull requests the user had a hand in, so a row about one can say it is finished rather than guessing.
 # Asked for newest first, because the search stops after a few pages and GitHub's best-match order can drop a
 # freshly closed pull request while keeping old history. Newest first, the cap only ever drops the oldest.
@@ -189,6 +192,19 @@ def normalise(node: dict, side: str) -> dict:
     }
 
 
+def owned_by(records: list[dict], owners: list[str]) -> list[dict]:
+    """Return the records whose repository belongs to one of some owners.
+
+    Applied to what came back rather than asked of GitHub, since a login may be a person's or an organisation's and
+    GitHub has a different word for each. The results are few and the test is cheap.
+
+    :param records: pull requests or mentions, each naming its repository
+    :param owners: the logins whose repositories are wanted
+    """
+    wanted = {login.casefold() for login in owners}
+    return [record for record in records if str(record.get("repo", "")).partition("/")[0].casefold() in wanted]
+
+
 def drop_stale(pull_requests: list[dict], max_age_days: int, now: datetime) -> tuple[list[dict], int]:
     """Remove pull requests nobody has touched for a long time.
 
@@ -318,11 +334,13 @@ def collect(config: dict) -> tuple[dict | None, str]:
     authored_search = search_for(AUTHORED, cutoff, started, hidden)
     reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
     closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)
+    involved_search = search_for(INVOLVED, cutoff, started, hidden) if config.get(INVOLVED_KEY) else ""
     logger.debug(
-        "searching for {!r}, {!r} and {!r}, and mentions since {}",
+        "searching for {!r}, {!r}, {!r} and {!r}, and mentions since {}",
         authored_search,
         reviewing_search,
         closed_search,
+        involved_search or "nothing else",
         since,
     )
     try:
@@ -333,11 +351,13 @@ def collect(config: dict) -> tuple[dict | None, str]:
             own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
             to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
             finished = pool.submit(search_pull_requests, SEARCH_QUERY, closed_search)
+            also = pool.submit(search_pull_requests, SEARCH_QUERY, involved_search) if involved_search else None
             mentioning = pool.submit(collect_mentions, since, hidden)
             signed_in_as = signed_in.result()
             authored = [normalise(node, "authored") for node in own.result()]
             reviewing = [normalise(node, "reviewing") for node in to_review.result()]
             closed = [normalise(node, "closed") for node in finished.result()]
+            involved = [normalise(node, "involved") for node in also.result()] if also is not None else []
             mentions = mentioning.result()
     except GitHubError as error:
         write_text_atomic(ERROR_LOG_PATH, f"{started.isoformat()}\n{error}\n")
@@ -346,12 +366,21 @@ def collect(config: dict) -> tuple[dict | None, str]:
 
     authored, hidden_authored = drop_stale(authored, cutoff, started)
     reviewing, hidden_reviewing = drop_stale(reviewing, cutoff, started)
+    on_a_side_already = {entry["key"] for entry in authored + reviewing}
+    involved, _hidden_involved = drop_stale(
+        [entry for entry in involved if entry["key"] not in on_a_side_already], cutoff, started
+    )
+    if not config.get(WATCH_OTHERS_KEY, True):
+        kept = config.get(WATCHED_OWNERS_KEY) or []
+        authored, reviewing, involved = owned_by(authored, kept), owned_by(reviewing, kept), owned_by(involved, kept)
+        closed, mentions = owned_by(closed, kept), owned_by(mentions, kept)
     write_json_atomic(STATE_PATH, {"lastRunAt": started.strftime(TIMESTAMP_FORMAT)})
     logger.info(
-        "collected {} authored and {} awaiting review, {} closed, {} mention(s), {} hidden as stale",
+        "collected {} authored and {} awaiting review, {} closed, {} involved, {} mention(s), {} hidden as stale",
         len(authored),
         len(reviewing),
         len(closed),
+        len(involved),
         len(mentions),
         hidden_authored + hidden_reviewing,
     )
@@ -363,5 +392,6 @@ def collect(config: dict) -> tuple[dict | None, str]:
         "authored": authored,
         "reviewing": reviewing,
         "closed": closed,
+        "involved": involved,
         "mentions": mentions,
     }, ""

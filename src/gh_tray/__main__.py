@@ -164,7 +164,7 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     lock.release()
     started = start_detached(launch_command(), STDERR_PATH)
     print(f"{APP_NAME} started as process {started}. Its icon is in the tray, and Quit is in the icon's menu.")
-    print(f"It logs to {LOG_PATH}. Anything it prints goes to {STDERR_PATH}.")
+    print(f"Logging to {LOG_PATH}. Anything it prints goes to {STDERR_PATH}.")
     return 0
 
 

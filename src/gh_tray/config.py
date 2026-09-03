@@ -40,6 +40,9 @@ DEFAULT_CONFIG: dict = {
     "max_age_days": 365,
     "popup_rows": 20,
     "hidden_owners": [],
+    "watch_others": True,
+    "watched_owners": [],
+    "involved": False,
     "theme": "auto",
     "toasts": {
         "review_requested": True,
@@ -57,6 +60,12 @@ TEXT_KEYS = ("dashboard_command",)
 # account has a hand in is watched, so an organisation joined later needs no setting, and a repository the account
 # merely contributes to from outside is never lost.
 HIDDEN_OWNERS_KEY = "hidden_owners"
+# Whether owners not listed in the settings are watched at all. Off, only the listed owners left on are, which the
+# settings write down, since the collector cannot see the list without asking GitHub.
+WATCH_OTHERS_KEY = "watch_others"
+WATCHED_OWNERS_KEY = "watched_owners"
+# Whether pull requests the account is involved in some other way are listed too, as the dashboard lists them.
+INVOLVED_KEY = "involved"
 # The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
 
@@ -102,6 +111,9 @@ def normalise(config: dict) -> dict:
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
     config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
+    config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
+    config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
+    config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
     }

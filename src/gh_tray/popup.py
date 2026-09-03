@@ -29,6 +29,7 @@ from .events import (
     moment,
     recent_events,
     remember_seen,
+    role_of,
     row_identity,
     seen_marks,
 )
@@ -164,6 +165,8 @@ STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("changes_requested", "Changes requested", "lastReviewBy", True, "amber"),
     ("checks_failing", "Checks failing", "lastCommitBy", True, "red"),
     ("ready_to_merge", "Ready to merge", "lastReviewBy", False, "green"),
+    # Listed for as long as it is open, as the dashboard lists it, and never blocking: being involved asks nothing.
+    ("involved", "Involved", "author", False, "blue"),
 )
 
 
@@ -282,6 +285,7 @@ def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
             "changes_requested": entry.get("side") == "authored" and entry.get("reviewDecision") == "CHANGES_REQUESTED",
             "checks_failing": entry.get("side") == "authored" and entry.get("ci") in BROKEN_CI,
             "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
+            "involved": entry.get("side") == "involved",
         }[state]
         if matches:
             return label, str(entry.get(who_field, "")), urgent, colour
@@ -326,7 +330,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str,
                     at=touched,
                     seen=has_been_seen(identity, touched, marks or {}, None),
                     author=str(entry.get("author", "")),
-                    role="author" if entry.get("side") == "authored" else "reviewer",
+                    role=role_of(entry.get("side")),
                 ),
             )
         )
@@ -509,6 +513,7 @@ FILTER_CHOICES: tuple[tuple[str, str], ...] = (
     ("all", "All"),
     ("author", "Author"),
     ("reviewer", "Reviewer"),
+    ("involved", "Involved"),
     ("mention", "Mentioned"),
 )
 

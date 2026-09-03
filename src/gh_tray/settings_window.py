@@ -22,7 +22,16 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, HIDDEN_OWNERS_KEY, NUMBER_RANGES, THEME_KEY, load_config, save_config
+from .config import (
+    APP_ICON_PATH,
+    HIDDEN_OWNERS_KEY,
+    INVOLVED_KEY,
+    NUMBER_RANGES,
+    THEME_KEY,
+    WATCH_OTHERS_KEY,
+    load_config,
+    save_config,
+)
 from .environment import autostart_enabled, github_auth_summary, hide_from_dock, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 from .github import GitHubError, organisations, viewer
@@ -85,6 +94,9 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        self.involved = QCheckBox("Pull requests you are involved in some other way, as the dashboard lists them", self)
+        self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
+        form.addRow("Also list", self.involved)
         return form
 
     def notification_switches(self) -> QGroupBox:
@@ -109,6 +121,10 @@ class SettingsDialog(QDialog):
         """
         group = QGroupBox("Watch pull requests in", self)
         column = QVBoxLayout(group)
+        # The catch-all first: every owner not listed below. Off, only the owners ticked below are watched.
+        self.others = QCheckBox("Anything else you have a hand in", group)
+        self.others.setChecked(bool(self.config.get(WATCH_OTHERS_KEY, True)))
+        column.addWidget(self.others)
         hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
         try:
             own = viewer()

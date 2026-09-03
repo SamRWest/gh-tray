@@ -150,13 +150,21 @@ def age_in_words(stamp: str, now: datetime | None = None) -> str:
     return f"{int(seconds // 604800)}w ago"
 
 
+def role_of(side: object) -> str:
+    """Return which of the user's hats a pull request on one side of the digest lands on.
+
+    :param side: ``authored``, ``reviewing`` or ``involved``, as the digest names them
+    """
+    return {"authored": "author", "involved": "involved"}.get(str(side), "reviewer")
+
+
 def snapshot_key(side: str, key: str) -> str:
     """Return the snapshot key for one pull request on one side of the digest.
 
     The side is part of the key because the same pull request can appear both as the user's own and as one awaiting
     their review, and collapsing the two would discard whichever arrived first along with its change history.
 
-    :param side: ``authored``, ``reviewing`` or ``closed``
+    :param side: ``authored``, ``reviewing``, ``involved`` or ``closed``
     :param key: the collector's own key, being repository and number
     """
     return f"{side}:{key}"
@@ -169,7 +177,7 @@ def snapshot_of(digest: dict) -> dict:
     :return: pull requests keyed by side, repository and number
     """
     snapshot = {}
-    for side in ("authored", "reviewing", "closed"):
+    for side in ("authored", "reviewing", "involved", "closed"):
         for pull_request in digest.get(side, []):
             record = {
                 field: default if pull_request.get(field) is None else pull_request[field]
@@ -250,8 +258,9 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "detail": detail,
         "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
         "author": pull_request.get("author", ""),
-        # Which of the user's hats the change lands on: their own pull request, or one they review.
-        "role": "author" if pull_request.get("side") == "authored" else "reviewer",
+        # Which of the user's hats the change lands on: their own pull request, one they review, or one they are
+        # merely involved in.
+        "role": role_of(pull_request.get("side")),
     }
 
 
