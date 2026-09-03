@@ -697,7 +697,12 @@ class ChangesWindow(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
-        logger.debug("showing {} rows in the {} theme", len(self.entries), "dark" if self.inks.dark else "light")
+        logger.debug(
+            "showing {} rows in the {} theme at {}",
+            len(self.entries),
+            "dark" if self.inks.dark else "light",
+            self.geometry(),
+        )
 
     def refit(self, resize_width: bool = False) -> None:
         """Re-fit the window's height to the rows now shown, growing and shrinking from its top edge.
@@ -734,6 +739,7 @@ class ChangesWindow(QWidget):
             self.hide()
             return
         if self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS:
+            logger.debug("the click that asked for the window is the one that just put it away")
             self.dismissed_at = None
             return
         self.show_by(spot)
@@ -872,6 +878,7 @@ class ChangesWindow(QWidget):
         deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
         # A menu of this application's own, popped up from the window, is not somebody clicking elsewhere.
         if deactivated and self.settled() and QApplication.activePopupWidget() is None:
+            logger.debug("the focus went elsewhere, putting the window away")
             self.hide()
             self.dismissed_at = time.monotonic()
         return super().event(event)

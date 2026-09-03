@@ -89,13 +89,16 @@ class Poller(QObject):
             succeeded = False
             try:
                 self.config = load_config()
+                logger.debug("polling")
                 result = poll(self.config)
                 succeeded = not result.error
                 self.polled.emit(result)
             except Exception as error:  # a failed poll must not kill the timer
                 logger.exception("poll failed unexpectedly")
                 self.failed.emit(str(error)[:100])
-            self.wait_or_be_asked(self.wait_seconds(succeeded))
+            waiting = self.wait_seconds(succeeded)
+            logger.debug("next poll in {} s unless asked sooner", waiting)
+            self.wait_or_be_asked(waiting)
 
     def wait_seconds(self, succeeded: bool) -> int:
         """Return how long to wait before the next poll.
@@ -211,6 +214,13 @@ class Tray(QObject):
         """
         self.config = self.poller.config
         self.status = result.status
+        logger.debug(
+            "poll result: {} unread, {} new event(s), icon {}, error {!r}",
+            result.status.unread,
+            len(result.events),
+            result.status.colour,
+            result.error,
+        )
         self.repaint()
         # Notifying happens on a thread of its own. It talks to the desktop's notification service, which is outside
         # this application's control, and once wedged it would otherwise take the whole application with it.
@@ -233,21 +243,30 @@ class Tray(QObject):
         self.window.on_polled(False)
 
     def on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Show or put away the changes window on a left or middle click, and show the menu on a right click.
+        """Show or put away the changes window on a left click, and show the menu on a right or middle click.
 
-        A middle click counts because some desktops turn a left click into something else and pass on only the
+        A middle click shows the menu because some desktops keep the right click to themselves and pass on only the
         middle one. A double click is the second of two left clicks, which has already been answered.
 
         :param reason: what was done to the icon
         """
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.MiddleClick):
+        logger.debug("tray icon: {}", reason.name)
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.on_popup()
-        elif reason == QSystemTrayIcon.ActivationReason.Context:
-            self.menu.popup(QCursor.pos())
+        elif reason in (QSystemTrayIcon.ActivationReason.Context, QSystemTrayIcon.ActivationReason.MiddleClick):
+            self.show_menu()
+
+    def show_menu(self, *_) -> None:
+        """Show the menu by the pointer."""
+        spot = QCursor.pos()
+        logger.debug("showing the menu at {},{}", spot.x(), spot.y())
+        self.menu.popup(spot)
 
     def on_popup(self, *_) -> None:
         """Show the changes window by the pointer, or put it away if it is up."""
-        self.window.toggle(QCursor.pos())
+        spot = QCursor.pos()
+        logger.debug("pointer at {},{}, window {}", spot.x(), spot.y(), "up" if self.window.isVisible() else "away")
+        self.window.toggle(spot)
 
     def on_dashboard(self, *_) -> None:
         """Open the dashboard.

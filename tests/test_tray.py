@@ -124,11 +124,12 @@ def test_wait_seconds_keeps_the_minimum_and_quarters_the_interval_after_a_failur
     assert poller.wait_seconds(succeeded=False) == 1200 // tray.RETRY_FRACTION
 
 
-def test_a_middle_click_shows_the_window_as_a_left_click_does(build_tray, qapp):
+def test_a_middle_click_shows_the_menu_for_a_desktop_that_keeps_the_right_click(build_tray, qtbot):
     subject = build_tray()
     subject.on_activated(QSystemTrayIcon.ActivationReason.MiddleClick)
-    qapp.processEvents()
-    assert subject.window.isVisible()
+    qtbot.waitUntil(subject.menu.isVisible)
+    assert not subject.window.isVisible()
+    subject.menu.close()
 
 
 def test_a_right_click_shows_the_applications_own_menu(build_tray, qtbot):

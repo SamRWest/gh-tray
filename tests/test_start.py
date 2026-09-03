@@ -13,7 +13,7 @@ from gh_tray.environment import SingleInstance
 def ready(monkeypatch, tmp_path):
     monkeypatch.setattr(commands, "LOCK_PATH", tmp_path / "gh-tray.lock")
     monkeypatch.setattr(commands, "STDERR_PATH", tmp_path / "errors.log")
-    monkeypatch.setattr(commands, "start_logging", lambda to_console: None)
+    monkeypatch.setattr(commands, "start_logging", lambda to_console, verbose=False: None)
     monkeypatch.setattr(prerequisites, "missing", list)
     return tmp_path
 

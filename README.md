@@ -29,11 +29,12 @@ The icon carries a count of changes you have not seen yet.
 | Hovering               | A short status summary                                                     |
 | Clicking once          | Shows or hides the changes window, listing the most recent changes         |
 | Right-clicking         | The review queue, the login-start switch, the settings window and the rest |
+| Middle-clicking        | The same menu, for a desktop that keeps the right click to itself          |
 
 The dashboard opens from the menu, or from **Open dashboard** in the changes window itself. The same menu hangs off the
 **Menu** button in the window's title strip, which matters on GNOME: its indicator reports a left click on the icon only
 when the icon carries no menu of its own, and reports a right click not at all, so the icon carries none and the window
-is where the menu is found there. A middle click on the icon shows the window as well.
+is where the menu is found there, as is a middle click on the icon, which shows the menu too.
 
 The window itself appears straight away. It is built once, when the tray starts, in the same process as the tray itself,
 and hidden rather than closed afterwards, so showing it again costs nothing. Clicking the icon while it is up puts it
@@ -177,6 +178,13 @@ is written to the console as well:
 
 ```bash
 uv run gh-tray --foreground
+```
+
+Add `--verbose` to see everything it does, down to each click on the icon and each search it sends; the log file always
+holds that level. To find out why the table is empty, poll once and read the result:
+
+```bash
+uv run gh-tray once --verbose
 ```
 
 Poll once and print the result, without the tray. This is the quickest way to check the collector and the sign-in:

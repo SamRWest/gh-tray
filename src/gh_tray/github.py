@@ -42,12 +42,20 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
     tool = github_cli()
     if not tool:
         raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
+    started = time.monotonic()
     try:
         done = run_quietly([tool, *arguments], timeout=timeout)
     except subprocess.TimeoutExpired as expiry:
         raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
     except OSError as error:
         raise GitHubError(f"could not run the GitHub CLI: {error.strerror or error}") from error
+    logger.debug(
+        "gh {} answered {} in {:.1f} s with {} characters",
+        " ".join(arguments[:2]),
+        done.returncode,
+        time.monotonic() - started,
+        len(done.stdout),
+    )
     if done.returncode != 0:
         raise GitHubError(first_error_line(done.stderr))
     return done.stdout

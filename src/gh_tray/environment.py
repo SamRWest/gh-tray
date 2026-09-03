@@ -253,6 +253,7 @@ def start_detached(command: list[str], errors: Path) -> int:
     :param errors: where to keep whatever the command writes to its error stream
     """
     errors.parent.mkdir(parents=True, exist_ok=True)
+    logger.debug("starting on its own: {}", " ".join(command))
     quiet = subprocess.DEVNULL
     with errors.open("w", encoding="utf-8") as kept:
         if sys.platform == "win32":

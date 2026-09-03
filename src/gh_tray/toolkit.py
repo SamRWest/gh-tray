@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import sys
 
+from loguru import logger
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QKeyEvent, QPalette, QPixmap, QWheelEvent
@@ -126,6 +127,7 @@ class FontZoom(QObject):
             return
         self.steps = wanted
         self.store.setValue(ZOOM_KEY, wanted)
+        logger.debug("text zoomed to {:+d}", wanted)
         self.apply()
         self.changed.emit()
 
@@ -224,3 +226,4 @@ def follow_theme_setting(style: str) -> None:
     # A platform that will not be told a scheme is handed a palette instead, and given the style's own back for light.
     if QGuiApplication.styleHints().colorScheme() != scheme:
         app.setPalette(dark_palette() if scheme == Qt.ColorScheme.Dark else app.style().standardPalette())
+    logger.debug("theme setting {!r}: drawing {} in the {} style", style, scheme.name, app.style().name())

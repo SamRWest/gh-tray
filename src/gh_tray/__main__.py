@@ -24,16 +24,21 @@ LOG_RETENTION = 3
 app = cyclopts.App(name=APP_NAME, version=__version__, help=__doc__)
 
 
-def start_logging(to_console: bool) -> None:
+def start_logging(to_console: bool, verbose: bool = False) -> None:
     """Send diagnostics to a rotating file, and optionally to the console as well.
 
+    The file takes everything down to the debug level, which is what a report from another desktop needs, and the
+    rotation keeps that from ever amounting to much. The console takes the debug level only when asked.
+
     :param to_console: whether to also log to standard error, which suits a foreground command
+    :param verbose: whether the console should carry the debug level too
     """
     logger.remove()
     if to_console:
-        logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} {level: <7} {message}")
+        level = "DEBUG" if verbose else "INFO"
+        logger.add(sys.stderr, level=level, format="{time:HH:mm:ss} {level: <7} {message}")
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    logger.add(LOG_PATH, level="INFO", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
+    logger.add(LOG_PATH, level="DEBUG", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
 
 
 LIGHTS = ("🟢", "🟡", "🔴")
@@ -117,7 +122,7 @@ def setup(yes: bool = False) -> int:
 
 
 @app.default
-def run_tray(foreground: bool = False) -> int:
+def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     """Start the tray, which then runs on its own, and return.
 
     The tray outlives the terminal it was started from and prints nothing there, so this says that it started and
@@ -125,11 +130,12 @@ def run_tray(foreground: bool = False) -> int:
     to the terminal, where Ctrl+C stops it and its log is written to the console as well.
 
     :param foreground: run the tray here rather than as a process of its own
+    :param verbose: write the debug level to the console as well, which the log file always carries
     :return: process exit code
     """
     # The console is written to only when somebody can read it. A tray started on its own, or by a login entry, runs
     # in the foreground of no terminal, and its log has a file of its own.
-    start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty())
+    start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty(), verbose=verbose)
     from .prerequisites import missing
 
     if missing():
@@ -165,11 +171,21 @@ def run_tray(foreground: bool = False) -> int:
 def run_here() -> None:
     """Run the tray in this process until it quits, recording whatever stops it early, since nobody may be watching."""
     # Imported here rather than at the top, so the commands that open no window never load the toolkit.
+    from PySide6.QtCore import qVersion
+
     from .toolkit import application
     from .tray import Tray
 
-    application()
+    app = application()
     logger.info("starting {} {}", APP_NAME, __version__)
+    logger.debug(
+        "on {} through the {} platform, toolkit {} drawing in the {} style, Python {}",
+        sys.platform,
+        app.platformName(),
+        qVersion(),
+        app.style().name(),
+        sys.version.split()[0],
+    )
     try:
         Tray().run()
     except Exception:
@@ -178,15 +194,16 @@ def run_here() -> None:
 
 
 @app.command
-def once() -> int:
+def once(verbose: bool = False) -> int:
     """Poll a single time, print the status and any changes, then exit.
 
     Refuses to run while the tray is up. Both would poll against the same stored comparison point, so whichever ran
     first would consume the changes and the other would never report them.
 
+    :param verbose: write the debug level to the console as well, which shows each search and what it returned
     :return: process exit code, non-zero when the poll failed or the tray is already running
     """
-    start_logging(to_console=True)
+    start_logging(to_console=True, verbose=verbose)
     lock = SingleInstance(LOCK_PATH)
     if not lock.acquire():
         print(f"{APP_NAME} is already running. Use its Refresh now menu entry, or quit it first.", file=sys.stderr)

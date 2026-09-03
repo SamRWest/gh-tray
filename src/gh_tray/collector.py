@@ -318,6 +318,13 @@ def collect(config: dict) -> tuple[dict | None, str]:
     authored_search = search_for(AUTHORED, cutoff, started, hidden)
     reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
     closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)
+    logger.debug(
+        "searching for {!r}, {!r} and {!r}, and mentions since {}",
+        authored_search,
+        reviewing_search,
+        closed_search,
+        since,
+    )
     try:
         # The askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
         # they go out together. The poll then takes about as long as its slowest part rather than their sum.
