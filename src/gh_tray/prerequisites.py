@@ -25,6 +25,14 @@ DISTRIBUTION_INSTALLS = (
     ("pacman", "sudo pacman -S github-cli"),
     ("zypper", "sudo zypper install gh"),
 )
+# The one library of the desktop's that the toolkit needs to draw on an X display and a bare Linux most often lacks,
+# by the package that provides it under each package manager.
+XCB_CURSOR_INSTALLS = (
+    ("apt-get", "sudo apt install libxcb-cursor0"),
+    ("dnf", "sudo dnf install xcb-util-cursor"),
+    ("pacman", "sudo pacman -S xcb-util-cursor"),
+    ("zypper", "sudo zypper install libxcb-cursor0"),
+)
 
 
 @dataclass(frozen=True)
