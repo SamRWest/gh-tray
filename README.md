@@ -129,7 +129,8 @@ and where it covers several changes, the one listed first.
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/), which fetches Python and the dependencies
-- [GitHub CLI](https://cli.github.com/) (`gh`), signed in
+- [GitHub CLI](https://cli.github.com/) (`gh`), signed in with `gh auth login`. The Git protocol it asks about makes no
+  difference here, since this talks to GitHub through the CLI's own token; HTTPS is the answer with fewer questions.
 - [gh-dash](https://github.com/dlvhdr/gh-dash) for the dashboard
 
 Nothing else: no shell, and no command line tools beyond the GitHub one. The application never handles a token of its

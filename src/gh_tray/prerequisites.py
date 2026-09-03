@@ -115,7 +115,13 @@ def requirements() -> list[tuple[Requirement, bool]]:
             bool(github_cli()),
         ),
         (
-            Requirement("GitHub sign-in", "without it every call is refused", [], manual="run: gh auth login"),
+            Requirement(
+                "GitHub sign-in",
+                "without it every call is refused",
+                [],
+                # The protocol it asks about is for git itself and makes no difference here; HTTPS just asks less.
+                manual="run: gh auth login (answer HTTPS to the protocol question: SSH only adds key questions)",
+            ),
             signed_in(),
         ),
         (
