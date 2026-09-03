@@ -110,3 +110,17 @@ def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog
     monkeypatch.setattr(settings_window, "organisations", refuse)
     dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets"]})
     assert list(dialog.owner_switches_by_login) == ["widgets"]
+
+
+def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "involved": True, "watch_others": False})
+    assert dialog.involved.isChecked() and not dialog.others.isChecked()
+    dialog.involved.setChecked(False)
+    dialog.others.setChecked(True)
+    dialog.owner_switches_by_login["widgets"].setChecked(False)
+    dialog.save_and_close()
+    saved = build_dialog.saved[-1]
+    assert saved["involved"] is False
+    assert saved["watch_others"] is True
+    assert saved["watched_owners"] == ["tester", "acme"]
+    assert saved["hidden_owners"] == ["widgets"]

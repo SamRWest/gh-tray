@@ -557,3 +557,19 @@ def test_every_status_word_has_a_colour():
     ]
     for word in filter(None, map(popup.pull_request_status, entries)):
         assert word in popup.STATUS_COLOURS
+
+
+def test_an_involved_pull_request_stands_as_a_quiet_row_under_its_own_filter():
+    entry = {
+        "side": "involved",
+        "repo": "acme/widget",
+        "number": 9,
+        "title": "Something",
+        "url": "https://example.test/9",
+        "author": "bob",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
+    (row,) = popup.rows_from_snapshot({"involved:acme/widget#9": entry}, set())
+    assert (row.label, row.role, row.colour, row.who) == ("Involved", "involved", "blue", "bob")
+    assert popup.role_matches(row, "involved") and not popup.role_matches(row, "reviewer")
+    assert ("involved", "Involved") in popup.FILTER_CHOICES

@@ -390,3 +390,33 @@ def test_the_organisations_an_account_belongs_to_are_listed_alphabetically(monke
 def test_no_organisations_reads_as_an_empty_list(monkeypatch):
     monkeypatch.setattr(github, "api", lambda _path: {"message": "odd"})
     assert github.organisations() == []
+
+
+def test_the_involved_search_goes_out_only_when_asked_for(monkeypatch, tmp_path):
+    searches: list[str] = []
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: searches.append(q) or [])
+    digest, _error = collector.collect({"max_age_days": 365, "involved": True})
+    assert digest is not None and digest["involved"] == []
+    assert any("is:open involves:@me" in q for q in searches)
+    searches.clear()
+    collector.collect({"max_age_days": 365, "involved": False})
+    assert not any("is:open involves:@me" in q for q in searches)
+
+
+def test_an_involved_pull_request_already_on_another_side_is_not_listed_twice(monkeypatch, tmp_path):
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: [node(number=7)] if "is:open" in q else [])
+    digest, _error = collector.collect({"max_age_days": 0, "involved": True})
+    assert digest is not None
+    assert [entry["key"] for entry in digest["authored"]] == ["acme/widget#7"]
+    assert digest["involved"] == []
+
+
+def test_switching_off_everything_else_keeps_only_the_owners_ticked():
+    records = [{"repo": "acme/widget"}, {"repo": "Other/thing"}, {"repo": "me/mine"}]
+    assert collector.owned_by(records, ["acme", "ME"]) == [{"repo": "acme/widget"}, {"repo": "me/mine"}]

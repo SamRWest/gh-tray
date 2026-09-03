@@ -366,3 +366,20 @@ def test_an_answer_to_somebody_else_is_not_yours_to_hear_about():
     reviewing = {"side": "reviewing"}
     answered = pull_request(comments=2, lastCommentAnswers="them", **reviewing)
     assert detect(pull_request(comments=1, **reviewing), answered, login="me") == []
+
+
+def test_an_involved_pull_request_is_snapshotted_but_raises_nothing_on_arrival():
+    collected = {"key": "acme/widget#9", "repo": "acme/widget", "number": 9, "title": "Something", "url": "https://x/9"}
+    current = events.snapshot_of({"involved": [collected]})
+    assert list(current) == ["involved:acme/widget#9"]
+    assert current["involved:acme/widget#9"]["side"] == "involved"
+    assert events.detect_pull_request_events({}, current, "2026-01-01T00:00:00Z") == []
+
+
+def test_each_side_lands_on_one_of_the_users_hats():
+    assert [events.role_of(side) for side in ("authored", "reviewing", "involved", "closed")] == [
+        "author",
+        "reviewer",
+        "involved",
+        "reviewer",
+    ]

@@ -29,6 +29,7 @@ from .config import (
     NUMBER_RANGES,
     THEME_KEY,
     WATCH_OTHERS_KEY,
+    WATCHED_OWNERS_KEY,
     load_config,
     save_config,
 )
@@ -192,9 +193,11 @@ class SettingsDialog(QDialog):
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
-        self.config[HIDDEN_OWNERS_KEY] = [
-            login for login, switch in self.owner_switches_by_login.items() if not switch.isChecked()
-        ]
+        switches = self.owner_switches_by_login.items()
+        self.config[HIDDEN_OWNERS_KEY] = [login for login, switch in switches if not switch.isChecked()]
+        self.config[WATCHED_OWNERS_KEY] = [login for login, switch in switches if switch.isChecked()]
+        self.config[WATCH_OTHERS_KEY] = self.others.isChecked()
+        self.config[INVOLVED_KEY] = self.involved.isChecked()
         self.config[THEME_KEY] = self.chosen_theme()
         save_config(self.config)
         set_autostart(self.autostart.isChecked())

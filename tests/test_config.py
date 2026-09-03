@@ -115,3 +115,11 @@ def test_hidden_organisations_are_read_from_a_list_or_a_hand_written_string():
 def test_hidden_organisations_are_kept_through_a_round_trip(settings_file):
     config.save_config({**config.DEFAULT_CONFIG, "hidden_owners": "acme widgets"})
     assert config.load_config()["hidden_owners"] == ["acme", "widgets"]
+
+
+def test_the_involved_and_catch_all_switches_are_read_as_switches(settings_file):
+    config.save_config({**config.DEFAULT_CONFIG, "involved": 1, "watch_others": 0, "watched_owners": "acme, me"})
+    loaded = config.load_config()
+    assert loaded["involved"] is True
+    assert loaded["watch_others"] is False
+    assert loaded["watched_owners"] == ["acme", "me"]

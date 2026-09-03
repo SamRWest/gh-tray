@@ -219,9 +219,14 @@ login, and the command that opens the dashboard. Leaving the dashboard command b
 terminal this platform provides.
 
 Your own account and every organisation it belongs to are listed and on. Turn one off and pull requests and mentions in
-its repositories are left out. Anything else you have a hand in, such as a repository you contribute to from outside
-your organisations, is watched regardless, and an organisation you join later is watched without a visit to the
-settings.
+its repositories are left out. The first switch, **Anything else you have a hand in**, covers every owner not listed,
+such as a repository you contribute to from outside your organisations; on, which it is to begin with, an organisation
+you join later is watched without a visit to the settings, and off, only the owners ticked are.
+
+**Also list** adds the pull requests you are involved in some other way, such as ones you commented on or were assigned,
+which is what the dashboard's Involved section shows. It is off to begin with, so the window lists only what you wrote,
+what awaits your review and mentions of you, and can show fewer pull requests than the dashboard. Being involved raises
+no notification of its own; a reply to a comment of yours still does.
 
 Settings are re-read on every poll, so a change takes effect without restarting the tray.
 
@@ -282,13 +287,14 @@ raise on that callback and no click could ever be handled.
 ## The collector
 
 One poll makes three searches, one for your open pull requests, one for those awaiting your review and one for recently
-closed pull requests you had a hand in, and one read of the notifications feed. The closed search raises nothing: it is
-there so a row can say its pull request is merged or closed rather than guessing. It covers only the last 30 days,
-whatever the age cutoff is set to, and asks for newest first, so the search's page cap only ever drops the oldest
-results rather than something that closed this morning. Each search asks for the state of every pull request along with
-the last commit's author, the most recent review's author and the most recent comment's author, since those are what
-name the person behind a change. The notifications feed identifies a mention only by the comment it points at, so the
-first few of those are looked up one at a time.
+closed pull requests you had a hand in, a fourth for everything else open you are involved in when the settings ask for
+it, and one read of the notifications feed. The closed search raises nothing: it is there so a row can say its pull
+request is merged or closed rather than guessing. It covers only the last 30 days, whatever the age cutoff is set to,
+and asks for newest first, so the search's page cap only ever drops the oldest results rather than something that closed
+this morning. Each search asks for the state of every pull request along with the last commit's author, the most recent
+review's author and the most recent comment's author, since those are what name the person behind a change. The
+notifications feed identifies a mention only by the comment it points at, so the first few of those are looked up one at
+a time.
 
 Collecting knows nothing about what was true last time: it reports only what is true now, and comparing is somebody
 else's job. That is what lets a poll fail without disturbing anything already recorded.

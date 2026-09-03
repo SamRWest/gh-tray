@@ -257,7 +257,8 @@ def start_detached(command: list[str], errors: Path) -> int:
     quiet = subprocess.DEVNULL
     with errors.open("w", encoding="utf-8") as kept:
         if sys.platform == "win32":
-            flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # No console of its own, and none inherited: either would be a window on the screen.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
             )
