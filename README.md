@@ -150,9 +150,10 @@ uv run gh-tray setup
 
 Each requirement is listed with a light: 🟢 present, 🟡 missing but installable from here, 🔴 missing and needing you. Only
 installs that manage their own elevation are ever run, meaning a package manager that asks for administrator rights
-itself, or a GitHub extension that lands in your own directory. Anything needing a root shell is printed for you to run,
-because a desktop application quietly acquiring root is not a thing anyone should have to trust. Signing in is never
-done for you either, since that means entering credentials.
+itself, winget or Homebrew, or a GitHub extension that lands in your own directory. Anything needing a root shell is
+printed for you to run, in your distribution's own words, such as `sudo apt install gh`, because a desktop application
+quietly acquiring root is not a thing anyone should have to trust. Signing in is never done for you either, since that
+means entering credentials.
 
 Starting the tray from a terminal with something missing offers the same thing before it starts. Starting it from a
 login entry, where there is nobody to ask, it says what is missing and stops rather than showing an icon that could

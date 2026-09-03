@@ -82,7 +82,7 @@ def test_macos_installs_the_tool_through_homebrew(monkeypatch):
 def test_a_platform_needing_a_root_shell_is_left_to_the_user(monkeypatch):
     # Running apt or dnf means acquiring root, which a desktop application has no business doing quietly.
     monkeypatch.setattr(prerequisites.sys, "platform", "linux")
-    monkeypatch.setattr(prerequisites.shutil, "which", lambda _name: "/usr/bin/apt")
+    monkeypatch.setattr(prerequisites.shutil, "which", lambda name: "/usr/bin/apt-get" if name == "apt-get" else None)
     assert prerequisites.package_manager() is None
 
 
@@ -118,3 +118,24 @@ def test_an_install_that_cannot_even_start_is_reported(monkeypatch):
 
     monkeypatch.setattr(prerequisites.subprocess, "run", refuse)
     assert prerequisites.install(prerequisites.Requirement("a thing", "why", ["install", "thing"])) is False
+
+
+def test_linux_is_told_its_own_distributions_command_for_the_tool(nothing_installed, monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "linux")
+    monkeypatch.setattr(prerequisites.shutil, "which", lambda name: "/usr/bin/apt-get" if name == "apt-get" else None)
+    tool = next(requirement for requirement in prerequisites.missing() if requirement.name == "GitHub CLI")
+    assert tool.installable is False
+    assert tool.manual == "run: sudo apt install gh"
+
+
+def test_a_distribution_with_no_known_package_manager_is_pointed_at_the_instructions(monkeypatch):
+    monkeypatch.setattr(prerequisites.shutil, "which", lambda _name: None)
+    assert prerequisites.distribution_install().startswith("see https://")
+
+
+def test_homebrew_installs_the_tool_on_linux_too(monkeypatch):
+    monkeypatch.setattr(prerequisites.sys, "platform", "linux")
+    monkeypatch.setattr(
+        prerequisites.shutil, "which", lambda name: "/home/linuxbrew/bin/brew" if name == "brew" else None
+    )
+    assert prerequisites.package_manager() == ("brew", ["brew", "install"])

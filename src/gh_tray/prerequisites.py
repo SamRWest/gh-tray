@@ -17,6 +17,14 @@ from loguru import logger
 from .environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
+# The distributions' own package managers, each with the command that installs the tool. Printed for the user to
+# run with root, never run here.
+DISTRIBUTION_INSTALLS = (
+    ("apt-get", "sudo apt install gh"),
+    ("dnf", "sudo dnf install gh"),
+    ("pacman", "sudo pacman -S github-cli"),
+    ("zypper", "sudo zypper install gh"),
+)
 
 
 @dataclass(frozen=True)
@@ -37,8 +45,8 @@ class Requirement:
 def package_manager() -> tuple[str, list[str]] | None:
     """Return the platform's package manager and the arguments that install with it.
 
-    Only managers that prompt for elevation themselves are offered. A manager needing ``sudo`` is deliberately not
-    run, so on most Linux systems the instruction is printed instead.
+    Only managers that prompt for elevation themselves, or need none, are offered. A manager needing ``sudo`` is
+    deliberately not run, so on most Linux systems the distribution's own command is printed instead.
 
     :return: the manager's name and the leading arguments of an install command, or None when there is none to use
     """
@@ -52,9 +60,17 @@ def package_manager() -> tuple[str, list[str]] | None:
             "--accept-source-agreements",
             "--id",
         ]
-    if sys.platform == "darwin" and shutil.which("brew"):
+    if sys.platform != "win32" and shutil.which("brew"):
         return "brew", ["brew", "install"]
     return None
+
+
+def distribution_install() -> str:
+    """Return the distribution's own command for installing the GitHub tool, for the user to run with root."""
+    return next(
+        (hint for tool, hint in DISTRIBUTION_INSTALLS if shutil.which(tool)),
+        "see https://github.com/cli/cli#installation",
+    )
 
 
 def github_package() -> str:
@@ -92,7 +108,9 @@ def requirements() -> list[tuple[Requirement, bool]]:
                 "GitHub CLI",
                 "reads your pull requests, and is how this application signs in",
                 github_install,
-                manual="see https://github.com/cli/cli#installation",
+                manual=f"run: {distribution_install()}"
+                if sys.platform == "linux"
+                else "see https://github.com/cli/cli#installation",
             ),
             bool(github_cli()),
         ),
