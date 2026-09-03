@@ -216,8 +216,10 @@ class ChangesWindow(QWidget):
         self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Nothing is ever selected: a click opens the row and puts the window away, so a selection could only be the
+        # last thing clicked, and the desktop's style draws one as a frame at the edge of every cell in the row.
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
         self.table.setWordWrap(False)
