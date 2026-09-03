@@ -219,14 +219,14 @@ login, and the command that opens the dashboard. Leaving the dashboard command b
 terminal this platform provides.
 
 Your own account and every organisation it belongs to are listed and on. Turn one off and pull requests and mentions in
-its repositories are left out. The first switch, **Anything else you have a hand in**, covers every owner not listed,
+its repositories are left out. The first switch, **Any other owner not listed here**, covers every owner not listed,
 such as a repository you contribute to from outside your organisations; on, which it is to begin with, an organisation
 you join later is watched without a visit to the settings, and off, only the owners ticked are.
 
-**Also list** adds the pull requests you are involved in some other way, such as ones you commented on or were assigned,
-which is what the dashboard's Involved section shows. It is off to begin with, so the window lists only what you wrote,
-what awaits your review and mentions of you, and can show fewer pull requests than the dashboard. Being involved raises
-no notification of its own; a reply to a comment of yours still does.
+**Also list** adds the pull requests you only commented on or were assigned, which is what the dashboard's Involved
+section shows. It is off to begin with, so the window lists only what you wrote, what awaits your review and mentions of
+you, and can show fewer pull requests than the dashboard. Being involved raises no notification of its own; a reply to a
+comment of yours still does.
 
 Settings are re-read on every poll, so a change takes effect without restarting the tray.
 
