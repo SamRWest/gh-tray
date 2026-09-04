@@ -6,6 +6,7 @@ import copy
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QSystemTrayIcon
@@ -97,8 +98,17 @@ def test_the_menu_lists_the_expected_entries_in_order(build_tray):
         "Mark all seen",
         "Start at login",
         "Settings...",
+        "Open log",
         "Quit",
     ]
+
+
+def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):
+    subject = build_tray()
+    opened = []
+    monkeypatch.setattr(tray.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    subject.on_open_log()
+    assert [Path(url.toLocalFile()) for url in opened] == [config.LOG_PATH]
 
 
 def test_wait_or_be_asked_returns_early_when_asked_from_another_thread_and_clears_the_flag(monkeypatch):

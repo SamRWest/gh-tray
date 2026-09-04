@@ -9,12 +9,12 @@ from collections.abc import Callable
 from dataclasses import replace
 
 from loguru import logger
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from . import APP_NAME
-from .config import load_config
+from .config import LOG_PATH, load_config
 from .environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
@@ -174,6 +174,7 @@ class Tray(QObject):
         login.setCheckable(True)
         login.setChecked(autostart_enabled())
         self.menu.addAction("Settings...", self.open_settings)
+        self.menu.addAction("Open log", self.on_open_log)
         self.menu.addAction("Quit", self.on_quit)
 
     def reviews_menu(self) -> QMenu:
@@ -294,6 +295,11 @@ class Tray(QObject):
         """Turn starting at login on or off."""
         set_autostart(not autostart_enabled())
         self.build_menu()
+
+    def on_open_log(self, *_) -> None:
+        """Open the log file in whatever the desktop opens text files with."""
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_PATH))):
+            logger.error("the desktop refused to open the log at {}", LOG_PATH)
 
     def open_settings(self, *_) -> None:
         """Open the settings window, or bring it forward if it is already open."""
