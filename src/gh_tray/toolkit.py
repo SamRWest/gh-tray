@@ -11,7 +11,7 @@ import sys
 
 from loguru import logger
 from PIL import Image
-from PySide6.QtCore import QEvent, QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QtMsgType, Signal, qInstallMessageHandler
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QKeyEvent, QPalette, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QApplication
 
@@ -24,6 +24,22 @@ ZOOM_RANGE = (-4, 16)
 # The application remembers the font the platform gave it under this name, so that every zoom in one process is
 # measured from the same starting point however many times one is applied.
 BASE_FONT_PROPERTY = "base_font"
+
+
+# The log level each of the toolkit's own message kinds deserves. Anything unlisted is detail.
+TOOLKIT_LEVELS = {
+    QtMsgType.QtInfoMsg: "INFO",
+    QtMsgType.QtWarningMsg: "WARNING",
+    QtMsgType.QtCriticalMsg: "ERROR",
+    QtMsgType.QtFatalMsg: "CRITICAL",
+}
+
+
+def route_toolkit_messages() -> None:
+    """Send the toolkit's own messages to the log rather than to standard error, where nobody reads them."""
+    qInstallMessageHandler(
+        lambda kind, _context, text: logger.log(TOOLKIT_LEVELS.get(kind, "DEBUG"), "toolkit: {}", text)
+    )
 
 
 def application() -> QApplication:

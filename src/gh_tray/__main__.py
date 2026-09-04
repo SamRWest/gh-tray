@@ -6,7 +6,11 @@ way to check the collector and the GitHub sign-in. ``settings`` opens the settin
 
 from __future__ import annotations
 
+import io
 import sys
+import threading
+from pathlib import Path
+from types import TracebackType
 
 import cyclopts
 from loguru import logger
@@ -20,7 +24,8 @@ from .status import tooltip_text
 
 LOG_ROTATION = "1 MB"
 LOG_RETENTION = 3
-
+LIGHTS = ("🟢", "🟡", "🔴")
+PLAIN_LIGHTS = ("[ ok ]", "[ -- ]", "[ !! ]")
 app = cyclopts.App(name=APP_NAME, version=__version__, help=__doc__)
 
 
@@ -41,8 +46,79 @@ def start_logging(to_console: bool, verbose: bool = False) -> None:
     logger.add(LOG_PATH, level="DEBUG", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
 
 
-LIGHTS = ("🟢", "🟡", "🔴")
-PLAIN_LIGHTS = ("[ ok ]", "[ -- ]", "[ !! ]")
+class LinesToLog(io.TextIOBase):
+    """A stand-in for the standard error stream that hands complete lines to the log.
+
+    Anything the tray would have printed to a file nobody reads lands in the one log instead: a stray print, the
+    warnings module, whatever a library writes. A write made while a line is already being logged goes to the real
+    stream instead, because that is the log reporting trouble of its own, and logging it would go round forever.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing buffered."""
+        self.tail = ""
+        self.forwarding = threading.local()
+
+    def write(self, text: str) -> int:
+        """Take one write, and log each complete line it finishes.
+
+        :param text: whatever was written, which need not end a line
+        :return: how much was taken, which is all of it
+        """
+        if getattr(self.forwarding, "busy", False):
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write(text)
+            return len(text)
+        self.forwarding.busy = True
+        try:
+            *lines, self.tail = (self.tail + text).split("\n")
+            for line in lines:
+                if line.strip():
+                    logger.warning("stderr: {}", line)
+        finally:
+            self.forwarding.busy = False
+        return len(text)
+
+
+def log_uncaught(kind: type[BaseException], error: BaseException, trace: TracebackType | None) -> None:
+    """Record an exception nothing caught, since nobody is watching a tray's console.
+
+    :param kind: the exception's class
+    :param error: the exception itself
+    :param trace: where it happened
+    """
+    logger.opt(exception=(kind, error, trace)).error("uncaught in the main thread")
+
+
+def log_uncaught_in_thread(args: threading.ExceptHookArgs) -> None:
+    """Record an exception that escaped a thread, which would otherwise die saying nothing.
+
+    :param args: what the thread machinery reports about the escape
+    """
+    where = args.thread.name if args.thread else "an unnamed thread"
+    logger.opt(exception=(args.exc_type, args.exc_value, args.exc_traceback)).error("uncaught in {}", where)
+
+
+def capture_stray_output() -> None:
+    """Send everything the tray would have written to standard error to the log instead.
+
+    The tray runs in the foreground of no terminal, so anything printed is otherwise read by nobody. Only writes
+    from native code, which never pass through Python, still land in the standard error file, which is what it is
+    kept for.
+    """
+    sys.excepthook = log_uncaught
+    threading.excepthook = log_uncaught_in_thread
+    sys.stderr = LinesToLog()
+
+
+def linked(path: Path) -> str:
+    """Return a file's name as a terminal hyperlink to it, or its whole path where links cannot be drawn.
+
+    :param path: the file to name
+    """
+    if sys.stdout is None or not sys.stdout.isatty():
+        return str(path)
+    return f"\x1b]8;;{path.as_uri()}\x1b\\{path.name}\x1b]8;;\x1b\\"
 
 
 def lights() -> tuple[str, str, str]:
@@ -167,18 +243,21 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     lock.release()
     started = start_detached(launch_command(), STDERR_PATH)
     print(f"{APP_NAME} started as process {started}. Its icon is in the tray, and Quit is in the icon's menu.")
-    print(f"Logging to {LOG_PATH}. Anything it prints goes to {STDERR_PATH}.")
+    print(f"Logging to {linked(LOG_PATH)}. Serious errors to {linked(STDERR_PATH)}.")
     return 0
 
 
 def run_here() -> None:
-    """Run the tray in this process until it quits, recording whatever stops it early, since nobody may be watching."""
+    """Run the tray in this process until it quits, sending everything it says to the one log."""
     # Imported here rather than at the top, so the commands that open no window never load the toolkit.
     from PySide6.QtCore import qVersion
 
-    from .toolkit import application
+    from .toolkit import application, route_toolkit_messages
     from .tray import Tray
 
+    # Nobody is watching a tray's console, so whatever would have been printed is logged instead.
+    capture_stray_output()
+    route_toolkit_messages()
     app = application()
     logger.info("starting {} {}", APP_NAME, __version__)
     logger.debug(
@@ -189,11 +268,7 @@ def run_here() -> None:
         app.style().name(),
         sys.version.split()[0],
     )
-    try:
-        Tray().run()
-    except Exception:
-        logger.exception("the tray stopped unexpectedly")
-        raise
+    Tray().run()
 
 
 @app.command

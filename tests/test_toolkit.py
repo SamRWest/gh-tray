@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, qInstallMessageHandler, qWarning
 
 from gh_tray import toolkit
 
@@ -12,6 +12,20 @@ from gh_tray import toolkit
 def back_to_following(qapp):
     yield
     toolkit.follow_theme_setting("auto")
+
+
+def test_toolkit_messages_land_in_the_log_at_their_level(qapp):
+    records: list[tuple[str, str]] = []
+    handle = toolkit.logger.add(
+        lambda message: records.append((message.record["level"].name, message.record["message"])), level="DEBUG"
+    )
+    toolkit.route_toolkit_messages()
+    try:
+        qWarning("something regrettable")
+    finally:
+        qInstallMessageHandler(None)
+        toolkit.logger.remove(handle)
+    assert ("WARNING", "toolkit: something regrettable") in records
 
 
 def test_insisting_on_dark_or_light_is_what_is_wanted(qapp):
