@@ -6,10 +6,14 @@ look when behaviour differs between Windows, macOS and Linux.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import shutil
+import signal
 import subprocess
 import sys
+from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
 from typing import TextIO
 
@@ -17,12 +21,6 @@ from loguru import logger
 
 from . import APP_NAME
 
-# What Windows calls the part of the screen a window may use, with the taskbar left out.
-SPI_GETWORKAREA = 0x0030
-# What Windows calls the display closest to a point, and the scaling a display is actually drawing at as opposed to
-# the one its hardware could manage.
-NEAREST_MONITOR = 2
-MONITOR_SCALING = 0
 # What Windows calls UTF-8, which a console has to be put into by number.
 UTF8_CODE_PAGE = 65001
 
@@ -74,102 +72,60 @@ def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.
     )
 
 
-def make_dpi_aware() -> None:
-    """Tell Windows this process draws at the real screen resolution.
+# The console handler has to stay referenced for as long as it is registered: Windows calls straight into it, and
+# one that has been garbage collected crashes the process instead of stopping it.
+_CONSOLE_HANDLERS: list[object] = []
 
-    Without this, a window on a display scaled above 100% is drawn small and then stretched by the system, which is
-    what makes its text look soft. Must be called before any window is built.
+
+def on_console_interrupt(stop: Callable[[], None]) -> None:
+    """Arrange for something to run when the console asks the process to stop, such as Ctrl+C.
+
+    A plain signal handler is not enough for a tray application. It can only run between Python instructions on
+    the main thread, and the tray's main thread spends its life blocked inside the desktop's message loop, so
+    Ctrl+C would sit undelivered until the next stray mouse movement. Windows offers a console handler instead,
+    called on a thread of its own, which works however busy or idle the main thread is. The signal handler is
+    still installed as well, for platforms where blocking calls are interrupted and it does fire.
+
+    :param stop: what to run; it must be safe to call from any thread
     """
+    signal.signal(signal.SIGINT, lambda _number, _frame: stop())
     if sys.platform != "win32":
         return
     import ctypes
-
-    for library, function, argument in (("shcore", "SetProcessDpiAwareness", 2), ("user32", "SetProcessDPIAware", None)):
-        try:
-            entry = getattr(ctypes.windll, library)
-            (getattr(entry, function)(argument) if argument is not None else getattr(entry, function)())
-        except (AttributeError, OSError):
-            continue
-        return
-    logger.debug("could not ask Windows for a sharp window, text may look soft")
-
-
-def pointer_scaling() -> int | None:
-    """Return how finely the display under the pointer draws, in dots per inch.
-
-    The changes window appears where the pointer is, so that display is the one its text and spacing have to suit.
-    The number is asked of the platform rather than worked out from the toolkit's own idea of the screen, which is
-    settled when it starts and can be left behind by a display that goes away and comes back. A locked screen does
-    exactly that, which is how a window ends up drawing text for a display that is no longer there.
-
-    :return: dots per inch, or None where the platform cannot say
-    """
-    if sys.platform != "win32":
-        return None
-    import ctypes
     import ctypes.wintypes
 
+    routine = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)
+
+    @routine
+    def handle(_event: int) -> bool:
+        """Stop the application, telling Windows the event is dealt with so it does not also kill the process."""
+        stop()
+        return True
+
+    _CONSOLE_HANDLERS.append(handle)
     try:
-        spot = ctypes.wintypes.POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
-        display = ctypes.windll.user32.MonitorFromPoint(spot, NEAREST_MONITOR)
-        across, down = ctypes.c_uint(), ctypes.c_uint()
-        # Windows 8.1 and later. Anything older is left alone rather than guessed at.
-        ctypes.windll.shcore.GetDpiForMonitor(display, MONITOR_SCALING, ctypes.byref(across), ctypes.byref(down))
-    except (AttributeError, OSError):
-        return None
-    return across.value or None
-
-
-def cursor_position() -> tuple[int, int] | None:
-    """Return where the pointer is on screen right now, or None where the platform cannot say.
-
-    Asked of the platform directly because the caller may have no window of its own to ask through, and the moment
-    matters: a window opened half a second after a click should appear where the click was, not wherever the
-    pointer has wandered since.
-
-    Only meaningful from a process that has called :func:`make_dpi_aware`. An unaware one is handed scaled-down
-    coordinates on a scaled display, and a window placed by those lands well away from the click.
-
-    :return: the pointer's x and y in screen pixels
-    """
-    if sys.platform != "win32":
-        return None
-    import ctypes
-    import ctypes.wintypes
-
-    spot = ctypes.wintypes.POINT()
-    try:
-        told = ctypes.windll.user32.GetCursorPos(ctypes.byref(spot))
-    except (AttributeError, OSError):
-        return None
-    return (spot.x, spot.y) if told else None
-
-
-def work_area(fallback: tuple[int, int]) -> tuple[int, int]:
-    """Return how much of the screen a window may use, with any taskbar, dock or panel left out.
-
-    Windows will say directly, and is the one that has to be asked: its toolkit reports the whole screen as
-    available and a window placed against the bottom of that ends up behind the taskbar. Elsewhere the toolkit's own
-    answer already accounts for the desktop's bars, so the caller's fallback is used.
-
-    :param fallback: the width and height to use where the desktop cannot be asked
-    :return: the usable width and height in pixels
-    """
-    if sys.platform != "win32":
-        return fallback
-    import ctypes
-    import ctypes.wintypes
-
-    area = ctypes.wintypes.RECT()
-    try:
-        told = ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(area), 0)
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(handle, True)
     except (AttributeError, OSError) as error:
-        logger.debug("could not read the usable screen area: {}", error)
-        return fallback
-    if not told:
-        return fallback
-    return area.right - area.left, area.bottom - area.top
+        logger.debug("could not watch the console for Ctrl+C: {}", error)
+
+
+def hide_from_dock() -> None:
+    """Keep this process out of the macOS Dock and the application switcher.
+
+    A process that draws a window or a menu bar item is given a Dock icon unless it says otherwise, and the tray,
+    the hidden changes window and the settings window would each show one reading "Python". Elsewhere there is
+    nothing to do.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
+        # exists on this one.
+        appkit = import_module("AppKit")
+    except ImportError as error:
+        logger.debug("could not keep this process out of the Dock: {}", error)
+        return
+    appkit.NSApplication.sharedApplication().setActivationPolicy_(appkit.NSApplicationActivationPolicyAccessory)
 
 
 def github_cli() -> str | None:
@@ -187,6 +143,27 @@ def github_auth_summary() -> str:
     summary = next((line.strip() for line in lines if "Logged in" in line), "")
     # The tool prefixes the line with a tick, which says nothing the words do not.
     return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
+
+
+def applescript_string(text: str) -> str:
+    """Return text as an AppleScript string literal, so a quote or backslash in it cannot end the string early.
+
+    :param text: the text to quote
+    """
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def notify_by_script(title: str, body: str) -> None:
+    """Raise a plain notification through the macOS scripting bridge, which any process may use.
+
+    Nothing can be attached to it: no icon, and no action when it is clicked.
+
+    :param title: the notification's heading
+    :param body: the text under it
+    """
+    script = f"display notification {applescript_string(body)} with title {applescript_string(title)}"
+    run_quietly(["osascript", "-e", script])
 
 
 def in_utf8(command: str) -> str:
@@ -215,11 +192,23 @@ def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
     if sys.platform == "win32":
         windows_terminal = shutil.which("wt")
         if windows_terminal:
-            return [windows_terminal, *(["--maximized"] if maximised else []), "--title", title, "cmd", "/c", in_utf8(command)]
+            return [
+                windows_terminal,
+                *(["--maximized"] if maximised else []),
+                "--title",
+                title,
+                "cmd",
+                "/c",
+                in_utf8(command),
+            ]
         return ["cmd", "/c", "start", *(["/max"] if maximised else []), title, "cmd", "/k", in_utf8(command)]
     if sys.platform == "darwin":
         zoom = "\nset zoomed of front window to true" if maximised else ""
-        return ["osascript", "-e", f'tell application "Terminal"\ndo script "{command}"\nactivate{zoom}\nend tell']
+        return [
+            "osascript",
+            "-e",
+            f'tell application "Terminal"\ndo script {applescript_string(command)}\nactivate{zoom}\nend tell',
+        ]
     # A stable sort, so the usual preference order is kept among terminals that are equally able to maximise.
     candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if maximised else LINUX_TERMINALS
     for name, flag, launch in candidates:
@@ -242,23 +231,59 @@ def open_in_terminal(command: str, title: str, maximised: bool = False) -> None:
 
 
 def launch_command() -> list[str]:
-    """Return the command that starts the tray, preferring an interpreter that shows no console window."""
+    """Return the command that runs the tray in the process started, preferring an interpreter with no console.
+
+    This is what a login entry runs, and what the ordinary start runs as a process of its own.
+    """
     interpreter = Path(sys.executable)
     if sys.platform == "win32":
         windowless = interpreter.with_name("pythonw.exe")
         if windowless.exists():
             interpreter = windowless
-    return [str(interpreter), "-m", "gh_tray"]
+    return [str(interpreter), "-m", "gh_tray", "--foreground"]
+
+
+def start_detached(command: list[str], errors: Path) -> int:
+    """Start a command that outlives this process and the terminal it came from, and return its process id.
+
+    On Windows the child would otherwise share this console and go with it; elsewhere a session of its own keeps the
+    hang-up that closing a terminal sends from reaching it. Its error stream goes to a file, since nobody is watching.
+
+    :param command: the program and its arguments
+    :param errors: where to keep whatever the command writes to its error stream
+    """
+    errors.parent.mkdir(parents=True, exist_ok=True)
+    logger.debug("starting on its own: {}", " ".join(command))
+    quiet = subprocess.DEVNULL
+    with errors.open("w", encoding="utf-8") as kept:
+        if sys.platform == "win32":
+            # A hidden console of its own, which the interpreter behind a venv's launcher inherits. Given no console
+            # at all, that interpreter, a console program, opens a visible one of its own.
+            flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            child = subprocess.Popen(
+                command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
+            )
+        else:
+            child = subprocess.Popen(
+                command, stdin=quiet, stdout=quiet, stderr=kept, start_new_session=True, close_fds=True
+            )
+    return child.pid
 
 
 def autostart_path() -> Path:
-    """Return the file that makes the tray start at login on this platform."""
+    """Return the file that makes the tray start at login on this platform.
+
+    The roaming and configuration directories are asked of the environment first, since either can be moved away
+    from its usual place under the home directory, and a file written to the usual place would then never be read.
+    """
     home = Path.home()
     if sys.platform == "win32":
-        return home / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.vbs"
+        roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+        return roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / f"{APP_NAME}.vbs"
     if sys.platform == "darwin":
         return home / "Library" / "LaunchAgents" / f"com.{APP_NAME}.plist"
-    return home / ".config" / "autostart" / f"{APP_NAME}.desktop"
+    configuration = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return configuration / "autostart" / f"{APP_NAME}.desktop"
 
 
 def autostart_enabled() -> bool:
@@ -298,8 +323,11 @@ def autostart_body(command: list[str]) -> str:
         return f'CreateObject("WScript.Shell").Run "{quoted}", 0, False\n'
     if sys.platform == "darwin":
         # Built by the standard library rather than by hand, so a path containing an ampersand cannot produce XML
-        # that launchd silently refuses to load.
-        plist = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
+        # that launchd silently refuses to load. The search path is recorded too: launchd starts things with a bare
+        # one, on which a GitHub tool installed by Homebrew is nowhere to be found.
+        plist: dict[str, object] = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
+        if os.environ.get("PATH"):
+            plist["EnvironmentVariables"] = {"PATH": os.environ["PATH"]}
         return plistlib.dumps(plist).decode("utf-8")
     entry = [
         "[Desktop Entry]",

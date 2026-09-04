@@ -1,168 +1,216 @@
-"""The settings window: polling, notification rules, the dashboard command, login start and GitHub sign-in.
-
-It runs as its own process so its user interface loop never shares a thread with the tray icon's.
-"""
+"""The settings window: polling, notification rules, the dashboard command, colours, login start and GitHub sign-in."""
 
 from __future__ import annotations
 
-import tkinter as tk
-from tkinter import messagebox, ttk
-
 from loguru import logger
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QRadioButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, TEXT_KEYS, THEME_KEY, load_config, save_config
-from .environment import autostart_enabled, github_auth_summary, make_dpi_aware, open_in_terminal, set_autostart
+from .config import (
+    APP_ICON_PATH,
+    HIDDEN_OWNERS_KEY,
+    INVOLVED_KEY,
+    NUMBER_RANGES,
+    THEME_KEY,
+    WATCH_OTHERS_KEY,
+    WATCHED_OWNERS_KEY,
+    load_config,
+    save_config,
+)
+from .environment import autostart_enabled, github_auth_summary, hide_from_dock, open_in_terminal, set_autostart
 from .events import RULE_LABELS
+from .github import GitHubError, organisations, viewer
 from .prerequisites import signed_in
 from .status import write_app_icon
-from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, PALETTE, blend
+from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
+from .toolkit import FontZoom, application, follow_theme_setting, layout_store
 
-NUMBER_FIELDS = ("poll_minutes", "max_age_days", "popup_rows")
-FIELDS = {
-    "poll_minutes": ("Poll every (minutes)", 8),
-    "max_age_days": ("Hide pull requests older than (days, 0 = keep all)", 8),
-    "popup_rows": ("Changes shown when you click the tray icon", 8),
-    "dashboard_command": ("Dashboard command (blank = gh dash)", 46),
+# The numeric settings and what each is called in the window. Their ranges come from the settings module, so the
+# window cannot accept what the settings would then clamp.
+NUMBER_FIELDS = {
+    "poll_minutes": "Poll every (minutes)",
+    "max_age_days": "Hide pull requests older than (days, 0 = keep all)",
+    "popup_rows": "Changes shown when you click the tray icon",
 }
-
-
-POINTS_PER_INCH = 72.0
+# A spin box has to have a ceiling; a setting that has none is given one nobody will reach.
+UNBOUNDED = 100_000
 
 # The theme choices offered, and what each is called in the window.
 THEME_CHOICES = ((FOLLOW_DESKTOP, "Follow the desktop"), (ALWAYS_DARK, "Dark"), (ALWAYS_LIGHT, "Light"))
 
 
-def apply_theme(root: tk.Tk) -> None:
-    """Colour every kind of widget this window uses to match the desktop's theme.
+class SettingsDialog(QDialog):
+    """The settings window. Saving writes the settings file and the login entry, and applies the colours at once."""
 
-    The theme is switched to one that honours colours first. The default on Windows draws its own and ignores most
-    of what is set here, which would leave a white window in a dark desktop.
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Build the window around the settings as they stand.
 
-    :param root: the window to style
-    """
-    style = ttk.Style(root)
-    style.theme_use("clam")
-    root.configure(background=PALETTE.background)
-    style.configure(".", background=PALETTE.background, foreground=PALETTE.text, fieldbackground=PALETTE.surface, borderwidth=0)
-    style.configure("TFrame", background=PALETTE.background)
-    style.configure("TLabel", background=PALETTE.background, foreground=PALETTE.text)
-    style.configure("TCheckbutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
-    style.map(
-        "TCheckbutton",
-        background=[("active", PALETTE.background)],
-        indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
-    )
-    style.configure("TEntry", fieldbackground=PALETTE.surface, foreground=PALETTE.text, insertcolor=PALETTE.text, bordercolor=PALETTE.border)
-    style.configure(
-        "TButton", background=PALETTE.surface, foreground=PALETTE.text, bordercolor=PALETTE.border, focuscolor=PALETTE.surface, padding=(10, 4)
-    )
-    style.map("TButton", background=[("active", PALETTE.hover)])
-    # The one button that commits stands out from the ones that do not, so the eye lands on it first.
-    style.configure("Accent.TButton", background=PALETTE.selection, foreground=PALETTE.heading, focuscolor=PALETTE.selection, padding=(10, 4))
-    style.map("Accent.TButton", background=[("active", blend(PALETTE.selection, PALETTE.heading, 0.85))])
-    # Section names carry the window's structure, so they read a step heavier than what sits under them.
-    style.configure("Heading.TLabel", background=PALETTE.background, foreground=PALETTE.heading, font=("TkDefaultFont", 10, "bold"))
-    style.configure("TSeparator", background=PALETTE.border)
-    style.configure("TRadiobutton", background=PALETTE.background, foreground=PALETTE.text, focuscolor=PALETTE.background)
-    style.map(
-        "TRadiobutton",
-        background=[("active", PALETTE.background)],
-        indicatorcolor=[("selected", PALETTE.green), ("!selected", PALETTE.surface)],
-    )
+        :param parent: the window this one belongs to, if any
+        """
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} settings")
+        try:
+            self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
+        except OSError as error:
+            logger.debug("could not put the application's mark on the settings window: {}", error)
+        self.config = load_config()
+        column = QVBoxLayout(self)
+        column.addLayout(self.fields())
+        column.addWidget(self.notification_switches())
+        column.addWidget(self.owner_switches())
+        column.addWidget(self.colour_choices())
+        self.autostart = QCheckBox("Start automatically at login", self)
+        self.autostart.setChecked(autostart_enabled())
+        column.addWidget(self.autostart)
+        column.addWidget(self.sign_in_state())
+        column.addWidget(self.buttons())
 
+    def fields(self) -> QFormLayout:
+        """Lay out the numbers and the dashboard command."""
+        form = QFormLayout()
+        self.numbers: dict[str, QSpinBox] = {}
+        for key, label in NUMBER_FIELDS.items():
+            minimum, maximum = NUMBER_RANGES[key]
+            spin = QSpinBox(self)
+            spin.setRange(minimum, maximum if maximum is not None else UNBOUNDED)
+            spin.setValue(int(self.config[key]))
+            form.addRow(label, spin)
+            self.numbers[key] = spin
+        self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
+        self.dashboard.setPlaceholderText("gh dash")
+        form.addRow("Dashboard command", self.dashboard)
+        self.involved = QCheckBox("Pull requests you only commented on or were assigned", self)
+        self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
+        form.addRow("Also list", self.involved)
+        return form
 
-def run_settings() -> None:
-    """Show the settings window and block until it is closed."""
-    make_dpi_aware()
-    config = load_config()
-    root = tk.Tk()
-    # Points become the right physical size only once Tk knows the real resolution of the screen.
-    root.tk.call("tk", "scaling", root.winfo_fpixels("1i") / POINTS_PER_INCH)
-    root.title(f"{APP_NAME} settings")
-    root.resizable(False, False)
-    try:
-        # The application's own mark in the title bar, in place of the toolkit's default.
-        root.iconbitmap(str(write_app_icon(APP_ICON_PATH)))
-    except (tk.TclError, OSError) as error:
-        logger.debug("could not put the application's mark on the settings window: {}", error)
-    apply_theme(root)
-    frame = ttk.Frame(root, padding=16)
-    frame.grid(sticky="nsew")
+    def notification_switches(self) -> QGroupBox:
+        """Lay out one switch per kind of change that can raise a notification."""
+        group = QGroupBox("Notify me about", self)
+        column = QVBoxLayout(group)
+        self.toggles: dict[str, QCheckBox] = {}
+        for kind, (label, _urgent) in RULE_LABELS.items():
+            switch = QCheckBox(label, group)
+            switch.setChecked(bool(self.config["toasts"].get(kind)))
+            column.addWidget(switch)
+            self.toggles[kind] = switch
+        return group
 
-    entries: dict[str, tk.StringVar] = {}
-    row = 0
-    for key, (label, width) in FIELDS.items():
-        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3, padx=(0, 12))
-        variable = tk.StringVar(value=str(config[key]))
-        ttk.Entry(frame, textvariable=variable, width=width).grid(row=row, column=1, sticky="w", pady=3)
-        entries[key] = variable
-        row += 1
+    def owner_switches(self) -> QGroupBox:
+        """Lay out a switch per owner, the account itself and each organisation, on unless the user turned it off.
 
-    ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
-    row += 1
-    ttk.Label(frame, text="Notify me about", style="Heading.TLabel").grid(row=row, column=0, sticky="w", pady=(0, 4))
-    row += 1
-    toggles: dict[str, tk.BooleanVar] = {}
-    for kind, (label, _urgent) in RULE_LABELS.items():
-        switch = tk.BooleanVar(value=bool(config["toasts"].get(kind)))
-        ttk.Checkbutton(frame, text=label, variable=switch).grid(row=row, column=0, columnspan=2, sticky="w")
-        toggles[kind] = switch
-        row += 1
+        The owners are the account itself and every organisation it belongs to. Off rather than on is what is
+        remembered, so an organisation joined later is watched without a visit here, and pull requests in a
+        repository the account merely contributes to from outside are never lost. One turned off stays listed after
+        the account leaves it, so it can be turned on again.
+        """
+        group = QGroupBox("Repository owners to watch", self)
+        column = QVBoxLayout(group)
+        # The catch-all first: every owner not listed below. Off, only the owners ticked below are watched.
+        self.others = QCheckBox("Any other owner not listed here", group)
+        self.others.setChecked(bool(self.config.get(WATCH_OTHERS_KEY, True)))
+        column.addWidget(self.others)
+        hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
+        try:
+            own = viewer()
+            known = ([own] if own else []) + organisations()
+        except GitHubError as error:
+            own, known = "", []
+            column.addWidget(QLabel(f"Could not list your organisations: {error}", group))
+        listed = known + [login for login in hidden if login.casefold() not in {name.casefold() for name in known}]
+        self.owner_switches_by_login: dict[str, QCheckBox] = {}
+        for login in listed:
+            switch = QCheckBox(f"{login} (your own repositories)" if login == own else login, group)
+            switch.setChecked(login.casefold() not in {name.casefold() for name in hidden})
+            column.addWidget(switch)
+            self.owner_switches_by_login[login] = switch
+        if not listed:
+            column.addWidget(QLabel("GitHub named no owner. Everything you have a hand in is watched.", group))
+        return group
 
-    ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
-    row += 1
-    ttk.Label(frame, text="Colours", style="Heading.TLabel").grid(row=row, column=0, sticky="w")
-    style_choice = tk.StringVar(value=config[THEME_KEY])
-    styles = ttk.Frame(frame)
-    styles.grid(row=row, column=1, sticky="w")
-    for column, (value, label) in enumerate(THEME_CHOICES):
-        ttk.Radiobutton(styles, text=label, value=value, variable=style_choice).grid(row=0, column=column, padx=(0, 10))
-    row += 1
-    ttk.Label(frame, text="Takes effect the next time a window opens.", foreground=PALETTE.muted).grid(row=row, column=1, sticky="w", pady=(0, 4))
-    row += 1
+    def colour_choices(self) -> QGroupBox:
+        """Lay out the choice between following the desktop's theme and insisting on one."""
+        group = QGroupBox("Colours", self)
+        row = QHBoxLayout(group)
+        self.styles = QButtonGroup(self)
+        self.style_buttons: dict[str, QRadioButton] = {}
+        for value, label in THEME_CHOICES:
+            button = QRadioButton(label, group)
+            button.setChecked(value == self.config[THEME_KEY])
+            self.styles.addButton(button)
+            row.addWidget(button)
+            self.style_buttons[value] = button
+        return group
 
-    ttk.Separator(frame, orient="horizontal").grid(row=row, columnspan=2, sticky="ew", pady=8)
-    row += 1
-    autostart = tk.BooleanVar(value=autostart_enabled())
-    ttk.Checkbutton(frame, text="Start automatically at login", variable=autostart).grid(row=row, column=0, columnspan=2, sticky="w")
-    row += 1
-    # Whether you are signed in decides whether anything works at all, so it says so in colour as well as in words.
-    ttk.Label(frame, text=github_auth_summary(), wraplength=440, foreground=PALETTE.green if signed_in() else PALETTE.red).grid(
-        row=row, column=0, columnspan=2, sticky="w", pady=(6, 0)
-    )
-    row += 1
+    def sign_in_state(self) -> QLabel:
+        """Say whether GitHub is signed in, in colour as well as in words, since that decides whether anything works."""
+        inks = palette(chosen_style())
+        state = QLabel(github_auth_summary(), self)
+        state.setWordWrap(True)
+        state.setStyleSheet(f"color: {ink(inks, 'green') if signed_in() else ink(inks, 'red')}")
+        return state
 
-    def sign_in() -> None:
+    def buttons(self) -> QDialogButtonBox:
+        """Lay out the buttons: sign in, cancel, and the one that commits, which stands out and answers Enter."""
+        box = QDialogButtonBox(self)
+        box.addButton("Sign in to GitHub", QDialogButtonBox.ButtonRole.ActionRole).clicked.connect(self.sign_in)
+        box.addButton(QDialogButtonBox.StandardButton.Cancel)
+        box.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole).setDefault(True)
+        box.accepted.connect(self.save_and_close)
+        box.rejected.connect(self.reject)
+        return box
+
+    def chosen_theme(self) -> str:
+        """Return the theme the user has chosen."""
+        return next((value for value, button in self.style_buttons.items() if button.isChecked()), FOLLOW_DESKTOP)
+
+    def sign_in(self) -> None:
         """Launch an interactive GitHub sign-in in a terminal window."""
         try:
             open_in_terminal("gh auth login", "gh auth")
         except RuntimeError as error:
-            messagebox.showerror(APP_NAME, str(error))
+            QMessageBox.critical(self, APP_NAME, str(error))
 
-    def save_and_close() -> None:
-        """Validate the numeric fields, persist the settings and close."""
-        for key in NUMBER_FIELDS:
-            if not entries[key].get().strip().isdigit():
-                messagebox.showerror(APP_NAME, "Poll interval and age cutoff must be whole numbers.")
-                return
-            config[key] = int(entries[key].get().strip())
-        for key in TEXT_KEYS:
-            config[key] = entries[key].get().strip()
-        config["toasts"] = {kind: variable.get() for kind, variable in toggles.items()}
-        config[THEME_KEY] = style_choice.get()
-        save_config(config)
-        set_autostart(autostart.get())
-        root.destroy()
+    def save_and_close(self) -> None:
+        """Persist the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
+        for key, spin in self.numbers.items():
+            self.config[key] = spin.value()
+        self.config["dashboard_command"] = self.dashboard.text().strip()
+        self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
+        switches = self.owner_switches_by_login.items()
+        self.config[HIDDEN_OWNERS_KEY] = [login for login, switch in switches if not switch.isChecked()]
+        self.config[WATCHED_OWNERS_KEY] = [login for login, switch in switches if switch.isChecked()]
+        self.config[WATCH_OTHERS_KEY] = self.others.isChecked()
+        self.config[INVOLVED_KEY] = self.involved.isChecked()
+        self.config[THEME_KEY] = self.chosen_theme()
+        save_config(self.config)
+        set_autostart(self.autostart.isChecked())
+        follow_theme_setting(self.config[THEME_KEY])
+        self.accept()
 
-    buttons = ttk.Frame(frame)
-    buttons.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
-    for column, (text, command, kind) in enumerate(
-        (
-            ("Sign in to GitHub", sign_in, "TButton"),
-            ("Cancel", root.destroy, "TButton"),
-            ("Save", save_and_close, "Accent.TButton"),
-        )
-    ):
-        ttk.Button(buttons, text=text, command=command, style=kind).grid(row=0, column=column, padx=4)
-    root.mainloop()
+
+def run_settings() -> None:
+    """Show the settings window on its own and block until it is closed."""
+    application()
+    hide_from_dock()
+    follow_theme_setting(load_config()[THEME_KEY])
+    zoom = FontZoom(layout_store())
+    dialog = SettingsDialog()
+    zoom.changed.connect(dialog.adjustSize)
+    dialog.exec()

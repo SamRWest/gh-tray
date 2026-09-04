@@ -7,6 +7,9 @@ The pull request search asks for the last commit's author, the most recent revie
 comment's author alongside the state of each pull request, because those are what name the person behind a change.
 The notifications feed identifies a mention only by the comment it points at, so the first few of those are looked
 up one by one.
+
+Recently closed pull requests are collected too, kept apart from the open ones: they raise no notifications, but a
+row about one can then say it is merged or closed rather than guessing.
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from .config import ERROR_LOG_PATH, STATE_PATH
+from .config import ERROR_LOG_PATH, HIDDEN_OWNERS_KEY, INVOLVED_KEY, STATE_PATH, WATCH_OTHERS_KEY, WATCHED_OWNERS_KEY
 from .github import GitHubError, api, search_pull_requests, viewer
 from .storage import read_json, write_json_atomic, write_text_atomic
 
@@ -31,21 +34,38 @@ CONCURRENT_LOOKUPS = 4
 
 AUTHORED = "is:pr is:open author:@me archived:false"
 REVIEWING = "is:pr is:open review-requested:@me archived:false"
+# Everything else open the user has a hand in, which the dashboard lists and this asks for only when told to. What
+# the other two searches already found is dropped from it, so a pull request is on one side only.
+INVOLVED = "is:pr is:open involves:@me archived:false"
+# Closed pull requests the user had a hand in, so a row about one can say it is finished rather than guessing.
+# Asked for newest first, because the search stops after a few pages and GitHub's best-match order can drop a
+# freshly closed pull request while keeping old history. Newest first, the cap only ever drops the oldest.
+CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
+# How far back to look for closed pull requests, regardless of the configured age cutoff. Rows referencing one
+# live in the event log, which is trimmed to a short tail, so anything older than this has left the window.
+CLOSED_LOOKBACK_DAYS = 30
 
 
-def search_for(base: str, max_age_days: int, now: datetime) -> str:
-    """Add the age cutoff to a search, so GitHub leaves out what would only be thrown away on arrival.
+def search_for(base: str, max_age_days: int, now: datetime, hidden_owners: list[str] | None = None) -> str:
+    """Add the age cutoff and the owners left out to a search, so GitHub keeps back what would be dropped.
 
-    Without this the search returns everything ever opened and most of it is dropped here, which on a long-lived
-    account means fetching two pages to keep one. Each page is a slow request, so this is most of a poll's time.
+    Without the cutoff the search returns everything ever opened and most of it is dropped here, which on a
+    long-lived account means fetching two pages to keep one. Each page is a slow request, so this is most of a
+    poll's time.
 
     :param base: the search expression
     :param max_age_days: how old is too old, or zero to keep everything
     :param now: the moment to measure against
+    :param hidden_owners: the owners, people or organisations, whose pull requests are not wanted
     """
-    if not max_age_days:
-        return base
-    return f"{base} updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}"
+    qualifiers = [base]
+    if max_age_days:
+        qualifiers.append(f"updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}")
+    # A qualifier with a hyphen before it is one GitHub leaves out. GitHub has one word for repositories owned by a
+    # person and another for those owned by an organisation, and a login could be either, so both are said.
+    for login in hidden_owners or []:
+        qualifiers += [f"-user:{login}", f"-org:{login}"]
+    return " ".join(qualifiers)
 
 
 SEARCH_QUERY = """
@@ -54,13 +74,15 @@ query($q: String!, $cursor: String) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt totalCommentsCount mergeable reviewDecision
+        number title url state isDraft createdAt updatedAt totalCommentsCount mergeable reviewDecision
         repository { nameWithOwner }
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
         latestReviews(last: 1) { nodes { author { login } } }
         comments(last: 1) { nodes { author { login } createdAt } }
-        reviews(last: 1) { nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } } }
+        reviews(last: 1) {
+          nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } }
+        }
       }
     }
   }
@@ -143,7 +165,7 @@ def normalise(node: dict, side: str) -> dict:
     """Turn one pull request from GitHub's shape into the flat record the rest of the application reads.
 
     :param node: a pull request as GitHub returned it
-    :param side: ``authored`` or ``reviewing``
+    :param side: ``authored``, ``reviewing`` or ``closed``
     """
     repo = nested(node, "repository", "nameWithOwner")
     number = node.get("number")
@@ -154,6 +176,7 @@ def normalise(node: dict, side: str) -> dict:
         "number": number,
         "title": node.get("title") or "",
         "url": node.get("url") or "",
+        "state": node.get("state") or "OPEN",
         "isDraft": bool(node.get("isDraft")),
         "createdAt": node.get("createdAt") or "",
         "updatedAt": node.get("updatedAt") or "",
@@ -167,6 +190,19 @@ def normalise(node: dict, side: str) -> dict:
         "lastCommentBy": last_commenter(node),
         "lastCommentAnswers": last_comment_answers(node),
     }
+
+
+def owned_by(records: list[dict], owners: list[str]) -> list[dict]:
+    """Return the records whose repository belongs to one of some owners.
+
+    Applied to what came back rather than asked of GitHub, since a login may be a person's or an organisation's and
+    GitHub has a different word for each. The results are few and the test is cheap.
+
+    :param records: pull requests or mentions, each naming its repository
+    :param owners: the logins whose repositories are wanted
+    """
+    wanted = {login.casefold() for login in owners}
+    return [record for record in records if str(record.get("repo", "")).partition("/")[0].casefold() in wanted]
 
 
 def drop_stale(pull_requests: list[dict], max_age_days: int, now: datetime) -> tuple[list[dict], int]:
@@ -211,33 +247,69 @@ def comment_author(comment_url: str) -> str:
     return nested(comment, "user", "login") if isinstance(comment, dict) else ""
 
 
-def collect_mentions(since: str) -> list[dict]:
+def thread_author(subject_url: str) -> str:
+    """Return whose thread a notification is about, or nothing if it cannot be read.
+
+    :param subject_url: the thread's address on GitHub's interface
+    """
+    if not subject_url:
+        return ""
+    try:
+        thread = api(subject_url.replace("https://api.github.com/", ""))
+    except GitHubError as error:
+        logger.warning("could not find out whose thread a mention is on: {}", error)
+        return ""
+    return nested(thread, "user", "login") if isinstance(thread, dict) else ""
+
+
+def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
     :param since: the earliest moment to report, as a GitHub timestamp
+    :param hidden_owners: the owners, people or organisations, whose mentions are not wanted
     """
     feed = api(f"notifications?all=false&since={since}&per_page=100")
     if not isinstance(feed, list):
         return []
-    raised = [notification for notification in feed if notification.get("reason") in ("mention", "team_mention")]
-    # One request each to find out who wrote them, so only the first few are traced and those go out together.
-    traced = [(notification.get("subject") or {}).get("latest_comment_url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
+    left_out = {login.casefold() for login in hidden_owners or []}
+    raised = [
+        notification
+        for notification in feed
+        if notification.get("reason") in ("mention", "team_mention")
+        and nested(notification, "repository", "owner", "login").casefold() not in left_out
+    ]
+    # One request each to find out who wrote them and whose thread it is, so only the first few are traced and
+    # those go out together. Whose thread it is cannot come from the poll's own lists: a mention often lands on a
+    # pull request the user neither wrote nor reviews, or on one already closed.
+    traced = [
+        (notification.get("subject") or {}).get("latest_comment_url") or ""
+        for notification in raised[:MENTION_LOOKUP_LIMIT]
+    ]
+    threads = [(notification.get("subject") or {}).get("url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
     with ThreadPoolExecutor(max_workers=CONCURRENT_LOOKUPS, thread_name_prefix="gh-tray-mentions") as pool:
         authors = list(pool.map(comment_author, traced))
+        owners = list(pool.map(thread_author, threads))
     authors += [""] * (len(raised) - len(authors))
+    owners += [""] * (len(raised) - len(owners))
 
     mentions = []
-    for notification, actor in zip(raised, authors, strict=True):
+    for notification, actor, owner in zip(raised, authors, owners, strict=True):
         subject = notification.get("subject") or {}
+        address = subject.get("url") or ""
         mentions.append(
             {
                 "repo": nested(notification, "repository", "full_name"),
+                # The number is the tail of the thread's address, which is the one place the feed carries it.
+                "number": address.rstrip("/").rsplit("/", 1)[-1]
+                if address.rstrip("/").rsplit("/", 1)[-1].isdigit()
+                else "",
                 "title": subject.get("title") or "",
                 "type": subject.get("type") or "",
                 "reason": notification.get("reason") or "mention",
                 "updatedAt": notification.get("updated_at") or "",
-                "url": page_url(subject.get("url") or ""),
+                "url": page_url(address),
                 "actor": actor,
+                "author": owner,
             }
         )
     return mentions
@@ -258,19 +330,34 @@ def collect(config: dict) -> tuple[dict | None, str]:
     started = datetime.now(UTC)
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
     cutoff = config.get("max_age_days", 0)
-    authored_search = search_for(AUTHORED, cutoff, started)
-    reviewing_search = search_for(REVIEWING, cutoff, started)
+    hidden = config.get(HIDDEN_OWNERS_KEY) or []
+    authored_search = search_for(AUTHORED, cutoff, started, hidden)
+    reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
+    closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)
+    involved_search = search_for(INVOLVED, cutoff, started, hidden) if config.get(INVOLVED_KEY) else ""
+    logger.debug(
+        "searching for {!r}, {!r}, {!r} and {!r}, and mentions since {}",
+        authored_search,
+        reviewing_search,
+        closed_search,
+        involved_search or "nothing else",
+        since,
+    )
     try:
-        # The four askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
+        # The askings do not depend on one another, and each spends nearly all its time waiting on GitHub, so
         # they go out together. The poll then takes about as long as its slowest part rather than their sum.
         with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
             signed_in = pool.submit(viewer)
             own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
             to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
-            mentioning = pool.submit(collect_mentions, since)
+            finished = pool.submit(search_pull_requests, SEARCH_QUERY, closed_search)
+            also = pool.submit(search_pull_requests, SEARCH_QUERY, involved_search) if involved_search else None
+            mentioning = pool.submit(collect_mentions, since, hidden)
             signed_in_as = signed_in.result()
             authored = [normalise(node, "authored") for node in own.result()]
             reviewing = [normalise(node, "reviewing") for node in to_review.result()]
+            closed = [normalise(node, "closed") for node in finished.result()]
+            involved = [normalise(node, "involved") for node in also.result()] if also is not None else []
             mentions = mentioning.result()
     except GitHubError as error:
         write_text_atomic(ERROR_LOG_PATH, f"{started.isoformat()}\n{error}\n")
@@ -279,11 +366,21 @@ def collect(config: dict) -> tuple[dict | None, str]:
 
     authored, hidden_authored = drop_stale(authored, cutoff, started)
     reviewing, hidden_reviewing = drop_stale(reviewing, cutoff, started)
+    on_a_side_already = {entry["key"] for entry in authored + reviewing}
+    involved, _hidden_involved = drop_stale(
+        [entry for entry in involved if entry["key"] not in on_a_side_already], cutoff, started
+    )
+    if not config.get(WATCH_OTHERS_KEY, True):
+        kept = config.get(WATCHED_OWNERS_KEY) or []
+        authored, reviewing, involved = owned_by(authored, kept), owned_by(reviewing, kept), owned_by(involved, kept)
+        closed, mentions = owned_by(closed, kept), owned_by(mentions, kept)
     write_json_atomic(STATE_PATH, {"lastRunAt": started.strftime(TIMESTAMP_FORMAT)})
     logger.info(
-        "collected {} authored and {} awaiting review, {} mention(s), {} hidden as stale",
+        "collected {} authored and {} awaiting review, {} closed, {} involved, {} mention(s), {} hidden as stale",
         len(authored),
         len(reviewing),
+        len(closed),
+        len(involved),
         len(mentions),
         hidden_authored + hidden_reviewing,
     )
@@ -294,5 +391,7 @@ def collect(config: dict) -> tuple[dict | None, str]:
         "viewer": signed_in_as,
         "authored": authored,
         "reviewing": reviewing,
+        "closed": closed,
+        "involved": involved,
         "mentions": mentions,
     }, ""

@@ -6,38 +6,119 @@ way to check the collector and the GitHub sign-in. ``settings`` opens the settin
 
 from __future__ import annotations
 
+import io
 import sys
+import threading
+from pathlib import Path
+from types import TracebackType
 
 import cyclopts
 from loguru import logger
 
 from . import APP_NAME, __version__
-from .config import APP_DIR, LOCK_PATH, LOG_PATH, load_config
-from .environment import SingleInstance
+from .config import APP_DIR, LOCK_PATH, LOG_PATH, STDERR_PATH, load_config
+from .environment import SingleInstance, launch_command, start_detached
 from .events import label_for
 from .service import poll
 from .status import tooltip_text
 
 LOG_ROTATION = "1 MB"
 LOG_RETENTION = 3
-
+LIGHTS = ("🟢", "🟡", "🔴")
+PLAIN_LIGHTS = ("[ ok ]", "[ -- ]", "[ !! ]")
 app = cyclopts.App(name=APP_NAME, version=__version__, help=__doc__)
 
 
-def start_logging(to_console: bool) -> None:
+def start_logging(to_console: bool, verbose: bool = False) -> None:
     """Send diagnostics to a rotating file, and optionally to the console as well.
 
+    The file takes everything down to the debug level, which is what a report from another desktop needs, and the
+    rotation keeps that from ever amounting to much. The console takes the debug level only when asked.
+
     :param to_console: whether to also log to standard error, which suits a foreground command
+    :param verbose: whether the console should carry the debug level too
     """
     logger.remove()
     if to_console:
-        logger.add(sys.stderr, level="INFO", format="{time:HH:mm:ss} {level: <7} {message}")
+        level = "DEBUG" if verbose else "INFO"
+        logger.add(sys.stderr, level=level, format="{time:HH:mm:ss} {level: <7} {message}")
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    logger.add(LOG_PATH, level="INFO", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
+    logger.add(LOG_PATH, level="DEBUG", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
 
 
-LIGHTS = ("🟢", "🟡", "🔴")
-PLAIN_LIGHTS = ("[ ok ]", "[ -- ]", "[ !! ]")
+class LinesToLog(io.TextIOBase):
+    """A stand-in for the standard error stream that hands complete lines to the log.
+
+    Anything the tray would have printed to a file nobody reads lands in the one log instead: a stray print, the
+    warnings module, whatever a library writes. A write made while a line is already being logged goes to the real
+    stream instead, because that is the log reporting trouble of its own, and logging it would go round forever.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing buffered."""
+        self.tail = ""
+        self.forwarding = threading.local()
+
+    def write(self, text: str) -> int:
+        """Take one write, and log each complete line it finishes.
+
+        :param text: whatever was written, which need not end a line
+        :return: how much was taken, which is all of it
+        """
+        if getattr(self.forwarding, "busy", False):
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write(text)
+            return len(text)
+        self.forwarding.busy = True
+        try:
+            *lines, self.tail = (self.tail + text).split("\n")
+            for line in lines:
+                if line.strip():
+                    logger.warning("stderr: {}", line)
+        finally:
+            self.forwarding.busy = False
+        return len(text)
+
+
+def log_uncaught(kind: type[BaseException], error: BaseException, trace: TracebackType | None) -> None:
+    """Record an exception nothing caught, since nobody is watching a tray's console.
+
+    :param kind: the exception's class
+    :param error: the exception itself
+    :param trace: where it happened
+    """
+    logger.opt(exception=(kind, error, trace)).error("uncaught in the main thread")
+
+
+def log_uncaught_in_thread(args: threading.ExceptHookArgs) -> None:
+    """Record an exception that escaped a thread, which would otherwise die saying nothing.
+
+    :param args: what the thread machinery reports about the escape
+    """
+    where = args.thread.name if args.thread else "an unnamed thread"
+    logger.opt(exception=(args.exc_type, args.exc_value, args.exc_traceback)).error("uncaught in {}", where)
+
+
+def capture_stray_output() -> None:
+    """Send everything the tray would have written to standard error to the log instead.
+
+    The tray runs in the foreground of no terminal, so anything printed is otherwise read by nobody. Only writes
+    from native code, which never pass through Python, still land in the standard error file, which is what it is
+    kept for.
+    """
+    sys.excepthook = log_uncaught
+    threading.excepthook = log_uncaught_in_thread
+    sys.stderr = LinesToLog()
+
+
+def linked(path: Path) -> str:
+    """Return a file's name as a terminal hyperlink to it, or its whole path where links cannot be drawn.
+
+    :param path: the file to name
+    """
+    if sys.stdout is None or not sys.stdout.isatty():
+        return str(path)
+    return f"\x1b]8;;{path.as_uri()}\x1b\\{path.name}\x1b]8;;\x1b\\"
 
 
 def lights() -> tuple[str, str, str]:
@@ -65,11 +146,14 @@ def print_status() -> list:
 
     present_mark, installable_mark, manual_mark = lights()
     outstanding = []
+    listed = requirements()
+    # Padded to the longest name, so the notes line up whatever the platform adds to the list.
+    width = max(len(requirement.name) for requirement, _present in listed)
     print(f"{APP_NAME} needs these:\n")
-    for requirement, present in requirements():
+    for requirement, present in listed:
         light = present_mark if present else (installable_mark if requirement.installable else manual_mark)
         note = requirement.summary if present else (" ".join(requirement.command) or requirement.manual)
-        print(f"  {light}  {requirement.name:<14} {note}")
+        print(f"  {light}  {requirement.name:<{width}}  {note}")
         if not present:
             outstanding.append(requirement)
     print()
@@ -117,12 +201,20 @@ def setup(yes: bool = False) -> int:
 
 
 @app.default
-def run_tray() -> int:
-    """Show the tray icon and poll on a timer.
+def run_tray(foreground: bool = False, verbose: bool = False) -> int:
+    """Start the tray, which then runs on its own, and return.
 
+    The tray outlives the terminal it was started from and prints nothing there, so this says that it started and
+    where it writes, and comes straight back. With ``--foreground`` the tray runs in this process instead, attached
+    to the terminal, where Ctrl+C stops it and its log is written to the console as well.
+
+    :param foreground: run the tray here rather than as a process of its own
+    :param verbose: write the debug level to the console as well, which the log file always carries
     :return: process exit code
     """
-    start_logging(to_console=False)
+    # The console is written to only when somebody can read it. A tray started on its own, or by a login entry, runs
+    # in the foreground of no terminal, and its log has a file of its own.
+    start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty(), verbose=verbose)
     from .prerequisites import missing
 
     if missing():
@@ -141,26 +233,55 @@ def run_tray() -> int:
         logger.error("another instance is already running")
         print(f"{APP_NAME} is already running.", file=sys.stderr)
         return 1
-    try:
-        from .tray import Tray
-
-        logger.info("starting {} {}", APP_NAME, __version__)
-        Tray().run()
-    finally:
-        lock.release()
+    if foreground:
+        try:
+            run_here()
+        finally:
+            lock.release()
+        return 0
+    # Probed only: the tray takes the lock for itself in a moment, and holding it here would keep it out.
+    lock.release()
+    started = start_detached(launch_command(), STDERR_PATH)
+    print(f"{APP_NAME} started as process {started}. Its icon is in the tray, and Quit is in the icon's menu.")
+    print(f"Logging to {linked(LOG_PATH)}. Serious errors to {linked(STDERR_PATH)}.")
     return 0
 
 
+def run_here() -> None:
+    """Run the tray in this process until it quits, sending everything it says to the one log."""
+    # Imported here rather than at the top, so the commands that open no window never load the toolkit.
+    from PySide6.QtCore import qVersion
+
+    from .toolkit import application, route_toolkit_messages
+    from .tray import Tray
+
+    # Nobody is watching a tray's console, so whatever would have been printed is logged instead.
+    capture_stray_output()
+    route_toolkit_messages()
+    app = application()
+    logger.info("starting {} {}", APP_NAME, __version__)
+    logger.debug(
+        "on {} through the {} platform, toolkit {} drawing in the {} style, Python {}",
+        sys.platform,
+        app.platformName(),
+        qVersion(),
+        app.style().name(),
+        sys.version.split()[0],
+    )
+    Tray().run()
+
+
 @app.command
-def once() -> int:
+def once(verbose: bool = False) -> int:
     """Poll a single time, print the status and any changes, then exit.
 
     Refuses to run while the tray is up. Both would poll against the same stored comparison point, so whichever ran
     first would consume the changes and the other would never report them.
 
+    :param verbose: write the debug level to the console as well, which shows each search and what it returned
     :return: process exit code, non-zero when the poll failed or the tray is already running
     """
-    start_logging(to_console=True)
+    start_logging(to_console=True, verbose=verbose)
     lock = SingleInstance(LOCK_PATH)
     if not lock.acquire():
         print(f"{APP_NAME} is already running. Use its Refresh now menu entry, or quit it first.", file=sys.stderr)
@@ -202,22 +323,6 @@ def settings() -> int:
     from .settings_window import run_settings
 
     run_settings()
-    return 0
-
-
-@app.command
-def popup() -> int:
-    """Keep the changes window loaded and hidden, showing it whenever the tray asks.
-
-    The tray starts this itself and stops it on the way out, so there is rarely a reason to run it by hand. Clicking
-    the tray icon is what asks the window to show.
-
-    :return: process exit code
-    """
-    start_logging(to_console=False)
-    from .window import serve_popup
-
-    serve_popup()
     return 0
 
 

@@ -7,6 +7,7 @@ the user to run, because a desktop application quietly acquiring root is not a t
 
 from __future__ import annotations
 
+import ctypes.util
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,22 @@ from loguru import logger
 from .environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
+# The distributions' own package managers, each with the command that installs the tool. Printed for the user to
+# run with root, never run here.
+DISTRIBUTION_INSTALLS = (
+    ("apt-get", "sudo apt install gh"),
+    ("dnf", "sudo dnf install gh"),
+    ("pacman", "sudo pacman -S github-cli"),
+    ("zypper", "sudo zypper install gh"),
+)
+# The one library of the desktop's that the toolkit needs to draw on an X display and a bare Linux most often lacks,
+# by the package that provides it under each package manager.
+XCB_CURSOR_INSTALLS = (
+    ("apt-get", "sudo apt install libxcb-cursor0"),
+    ("dnf", "sudo dnf install xcb-util-cursor"),
+    ("pacman", "sudo pacman -S xcb-util-cursor"),
+    ("zypper", "sudo zypper install libxcb-cursor0"),
+)
 
 
 @dataclass(frozen=True)
@@ -37,16 +54,41 @@ class Requirement:
 def package_manager() -> tuple[str, list[str]] | None:
     """Return the platform's package manager and the arguments that install with it.
 
-    Only managers that prompt for elevation themselves are offered. A manager needing ``sudo`` is deliberately not
-    run, so on most Linux systems the instruction is printed instead.
+    Only managers that prompt for elevation themselves, or need none, are offered. A manager needing ``sudo`` is
+    deliberately not run, so on most Linux systems the distribution's own command is printed instead.
 
     :return: the manager's name and the leading arguments of an install command, or None when there is none to use
     """
     if sys.platform == "win32" and shutil.which("winget"):
-        return "winget", ["winget", "install", "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--id"]
-    if sys.platform == "darwin" and shutil.which("brew"):
+        return "winget", [
+            "winget",
+            "install",
+            "--exact",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--id",
+        ]
+    if sys.platform != "win32" and shutil.which("brew"):
         return "brew", ["brew", "install"]
     return None
+
+
+def distribution_install(installs: tuple[tuple[str, str], ...] = DISTRIBUTION_INSTALLS, otherwise: str = "") -> str:
+    """Return the distribution's own command for installing something, for the user to run with root.
+
+    :param installs: each package manager's command, tried in order
+    :param otherwise: what to say where none of the package managers is found
+    """
+    fallback = otherwise or "see https://github.com/cli/cli#installation"
+    return next((hint for tool, hint in installs if shutil.which(tool)), fallback)
+
+
+def desktop_libraries_present() -> bool:
+    """Return whether the library the toolkit needs to draw on an X display is here. Only Linux can lack it."""
+    if sys.platform != "linux":
+        return True
+    return ctypes.util.find_library("xcb-cursor") is not None
 
 
 def github_package() -> str:
@@ -84,22 +126,47 @@ def requirements() -> list[tuple[Requirement, bool]]:
                 "GitHub CLI",
                 "reads your pull requests, and is how this application signs in",
                 github_install,
-                manual="see https://github.com/cli/cli#installation",
+                manual=f"run: {distribution_install()}"
+                if sys.platform == "linux"
+                else "see https://github.com/cli/cli#installation",
             ),
             bool(github_cli()),
         ),
         (
-            Requirement("GitHub sign-in", "without it every call is refused", [], manual="run: gh auth login"),
+            Requirement(
+                "GitHub sign-in",
+                "without it every call is refused",
+                [],
+                # The protocol it asks about is for git itself and makes no difference here; HTTPS just asks less.
+                manual="run: gh auth login (answer HTTPS to the protocol question: SSH only adds key questions)",
+            ),
             signed_in(),
         ),
         (
             Requirement(
                 "gh-dash",
-                "the terminal dashboard a double click opens",
+                "the terminal dashboard the tray opens",
                 ["gh", "extension", "install", "dlvhdr/gh-dash"] if github_cli() else [],
                 manual="run: gh extension install dlvhdr/gh-dash",
             ),
             gh_dash_installed(),
+        ),
+        # Last, and only where there is anything to check: without it the toolkit stops the tray with a page of its
+        # own complaints, which this says in one line instead.
+        *(
+            [
+                (
+                    Requirement(
+                        "Desktop libraries",
+                        "what the toolkit needs to draw on an X display",
+                        [],
+                        manual=f"run: {distribution_install(XCB_CURSOR_INSTALLS, 'install the xcb-cursor library')}",
+                    ),
+                    desktop_libraries_present(),
+                )
+            ]
+            if sys.platform == "linux"
+            else []
         ),
     ]
 

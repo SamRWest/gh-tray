@@ -104,7 +104,7 @@ def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
     rows = popup.rows_to_show(10)
     assert [row.label for row in rows] == ["Awaiting your review"]
     assert rows[0].who == "someone"
-    assert rows[0].colour == popup.PALETTE.orange
+    assert rows[0].colour == "orange"
 
 
 def test_what_changed_is_listed_before_what_is_merely_waiting(event_log):
@@ -165,15 +165,10 @@ def test_the_most_recently_touched_comes_first_among_equals(event_log):
 
 
 def test_each_sort_of_change_has_its_own_colour():
-    assert popup.dot_colour(change("ci_broken"), unread=True) == popup.URGENT
-    assert popup.dot_colour(change("new_comment")) == popup.PALETTE.blue
-    assert popup.dot_colour(change("mention")) == popup.PALETTE.violet
+    assert popup.dot_colour(change("ci_broken")) == popup.URGENT
+    assert popup.dot_colour(change("new_comment")) == "blue"
+    assert popup.dot_colour(change("mention")) == "violet"
     assert len({popup.dot_colour(change(kind)) for kind in popup.KIND_COLOURS}) == len(popup.KIND_COLOURS)
-
-
-def test_a_change_already_seen_keeps_saying_what_sort_of_thing_it_was():
-    # Turning a seen row grey would say it had been switched off rather than merely read; it is dimmed instead.
-    assert popup.dot_colour(change("ci_broken"), unread=False) == popup.URGENT
 
 
 def test_no_row_is_ever_drawn_in_plain_grey():
@@ -193,11 +188,11 @@ def test_a_row_is_marked_filled_until_seen_and_hollow_after():
 
 def test_a_date_is_drawn_further_along_its_scale_the_older_it_is():
     now = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-    fresh = popup.age_colour((now - timedelta(minutes=5)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    middling = popup.age_colour((now - timedelta(days=14)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    stale = popup.age_colour((now - timedelta(days=400)).strftime(events.TIMESTAMP_FORMAT), now=now)
-    assert fresh == popup.PALETTE.fresh
-    assert stale == popup.PALETTE.stale
+    fresh = popup.age_colour((now - timedelta(minutes=5)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    middling = popup.age_colour((now - timedelta(days=14)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    stale = popup.age_colour((now - timedelta(days=400)).strftime(events.TIMESTAMP_FORMAT), theme.DARK, now=now)
+    assert fresh == theme.DARK.fresh
+    assert stale == theme.DARK.stale
     assert middling not in (fresh, stale), "the scale should pass through the colours between its two ends"
 
 
@@ -241,12 +236,22 @@ def test_a_mention_has_a_repository_but_no_number():
 
 def test_every_column_has_a_heading_and_a_width():
     assert all(isinstance(width, int) and width > 0 for _key, _heading, width, _stretches in popup.COLUMNS)
-    assert [heading for _key, heading, _width, _stretches in popup.COLUMNS] == ["Change", "Repository", "PR", "Title", "Who", "When"]
+    assert [heading for _key, heading, _width, _stretches in popup.COLUMNS] == [
+        "Change",
+        "Org",
+        "Repo",
+        "PR",
+        "Status",
+        "Title",
+        "Author",
+        "Who",
+        "When",
+    ]
 
 
 def test_one_column_takes_the_space_a_resize_adds():
     stretching = [heading for _key, heading, _width, stretches in popup.COLUMNS if stretches]
-    assert stretching == [popup.STRETCHING_COLUMN]
+    assert stretching == ["Title"]
 
 
 def test_the_person_behind_each_kind_of_change_is_named():
@@ -262,7 +267,9 @@ def test_a_conflict_names_the_author_whose_branch_takes_the_rebase():
 
 
 def test_a_mention_names_whoever_wrote_it():
-    digest = {"mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "someone", "reason": "mention"}]}
+    digest = {
+        "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "someone", "reason": "mention"}]
+    }
     assert events.detect_mention_events(digest, set(), events.utc_now())[0]["actor"] == "someone"
 
 
@@ -277,7 +284,7 @@ def test_something_ready_to_merge_is_good_news_rather_than_a_warning(event_log):
 
 
 def test_a_ready_to_merge_change_is_green_too():
-    assert popup.dot_colour(change("ready_to_merge"), unread=True) == popup.GOOD
+    assert popup.dot_colour(change("ready_to_merge")) == popup.GOOD
 
 
 def test_the_newest_row_is_at_the_top_whatever_it_came_from(event_log):
@@ -337,10 +344,12 @@ def test_a_row_dims_only_once_it_has_been_seen():
 
 
 def test_fading_keeps_the_hue_and_only_dims_it():
-    faded = theme.blend(popup.URGENT, popup.BACKGROUND, 0.5)
-    assert faded != popup.URGENT
-    assert theme.blend(popup.URGENT, popup.BACKGROUND, 1.0) == popup.URGENT
-    assert theme.blend(popup.URGENT, popup.BACKGROUND, 0.0) == popup.BACKGROUND
+    ground = theme.DARK.background
+    red = theme.ink(theme.DARK, popup.URGENT)
+    faded = theme.blend(red, ground, 0.5)
+    assert faded != red
+    assert theme.blend(red, ground, 1.0) == red
+    assert theme.blend(red, ground, 0.0) == ground
 
 
 def test_several_comments_on_one_pull_request_are_one_row(event_log):
@@ -404,61 +413,163 @@ def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
     assert popup.rows_to_show(10)[0].seen is True
 
 
-@pytest.fixture
-def layout(tmp_path, monkeypatch):
-    """Point the remembered window shape at a temporary directory."""
-    monkeypatch.setattr(popup, "LAYOUT_PATH", tmp_path / "layout.json")
-    return tmp_path
-
-
-def test_nothing_is_remembered_until_the_user_drags_something(layout):
-    assert popup.remembered_width(96) is None
-    assert popup.remembered_column_widths(96) == {}
-
-
-def test_a_dragged_width_comes_back_as_it_was_on_the_same_display(layout):
-    popup.remember_width(800, 96)
-    assert popup.remembered_width(96) == 800
-
-
-def test_a_dragged_width_scales_with_the_display_it_comes_back_on(layout):
-    # Remembered at standard scaling and played back on a display drawing twice as finely, the window should take
-    # the same share of the screen, which means twice the pixels.
-    popup.remember_width(800, 96)
-    assert popup.remembered_width(192) == 1600
-
-
-def test_column_widths_are_remembered_by_name(layout):
-    popup.remember_column_widths({"repo": 300, "title": 400}, 96)
-    assert popup.remembered_column_widths(96) == {"repo": 300, "title": 400}
-    assert popup.remembered_column_widths(48) == {"repo": 150, "title": 200}
-
-
-def test_remembering_columns_keeps_the_window_width_and_the_other_way_round(layout):
-    popup.remember_width(800, 96)
-    popup.remember_column_widths({"repo": 300}, 96)
-    assert popup.remembered_width(96) == 800
-    popup.remember_width(900, 96)
-    assert popup.remembered_column_widths(96) == {"repo": 300}
-
-
-def test_a_hand_damaged_layout_reads_as_nothing_remembered(layout):
-    (layout / "layout.json").write_text('{"window": {"width": "wide", "dots": 0}, "columns": []}', encoding="utf-8")
-    assert popup.remembered_width(96) is None
-    assert popup.remembered_column_widths(96) == {}
-
-
 def test_the_same_name_is_always_dealt_the_same_colour():
-    assert popup.who_colour("SamRWest") == popup.who_colour("SamRWest")
-    assert popup.who_colour("SamRWest") in popup.NAME_COLOURS
+    assert popup.name_colour("SamRWest") == popup.name_colour("SamRWest")
+    assert popup.name_colour("SamRWest") in popup.NAME_COLOURS
 
 
 def test_names_spread_across_the_colours_rather_than_sharing_one():
     # The dealing is a digest, so a small sample lands unevenly; what matters is that names do spread, and that a
     # large enough sample reaches every colour there is.
-    dealt = {popup.who_colour(f"reviewer-{number}") for number in range(200)}
+    dealt = {popup.name_colour(f"reviewer-{number}") for number in range(200)}
     assert dealt == set(popup.NAME_COLOURS)
 
 
 def test_a_missing_name_gets_the_quiet_ink():
-    assert popup.who_colour("") == popup.PALETTE.muted
+    assert popup.name_colour("") == popup.QUIET
+
+
+def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):
+    store(event_log, waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg"))
+    events.append_events(
+        events.detect_pull_request_events(
+            {"authored:acme/gadget#7": dict(waiting(7, side="authored", author="emily"))},
+            {
+                "authored:acme/gadget#7": dict(
+                    waiting(7, side="authored", ci="FAILURE", author="emily", lastCommitBy="dlg")
+                )
+            },
+            events.utc_now(),
+        )
+    )
+    found = popup.rows_to_show(10)[0]
+    assert (found.author, found.who, found.role) == ("emily", "dlg", "author")
+
+
+def test_a_mention_row_recorded_without_an_author_is_filled_from_the_last_poll(event_log):
+    entry = waiting(9, side="authored", author="emily")
+    store(event_log, entry)
+    events.append_events(
+        [
+            {
+                "at": events.utc_now(),
+                "kind": "mention",
+                "key": "acme/gadget",
+                "repo": "acme/gadget",
+                "number": "",
+                "title": "look",
+                "url": entry["url"],
+                "detail": "mention",
+                "actor": "dlg",
+            }
+        ]
+    )
+    found = next(row for row in popup.rows_to_show(10) if row.label == "Mentioned")
+    assert found.author == "emily"
+    assert found.number == "#9", "the number is the tail of the page the row leads to"
+
+
+def test_the_quick_filters_keep_only_their_own_hat():
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, role=role) for role in ("author", "reviewer", "mention")
+    ]
+    assert [popup.role_matches(row, "all") for row in rows] == [True, True, True]
+    assert [popup.role_matches(row, "author") for row in rows] == [True, False, False]
+    assert [popup.role_matches(row, "reviewer") for row in rows] == [False, True, False]
+    assert [popup.role_matches(row, "mention") for row in rows] == [False, False, True]
+
+
+def test_a_repository_name_splits_into_its_owner_and_its_name():
+    assert popup.org_and_name("acme/widget") == ("acme", "widget")
+    assert popup.org_and_name("just-a-name") == ("", "just-a-name")
+    assert popup.org_and_name("") == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        (None, ""),
+        (waiting(state="MERGED"), "merged"),
+        (waiting(state="CLOSED"), "closed"),
+        (waiting(isDraft=True), "draft"),
+        (waiting(mergeable="CONFLICTING"), "conflict"),
+        (waiting(reviewDecision="APPROVED"), "ready"),
+        (waiting(), "open"),
+    ],
+)
+def test_the_status_column_words_each_standing(entry, expected):
+    assert popup.pull_request_status(entry) == expected
+
+
+def test_a_finished_pull_request_outranks_everything_it_also_is():
+    # A merged draft with a conflict is merged, and nothing else about it matters.
+    assert popup.pull_request_status(waiting(state="MERGED", isDraft=True, mergeable="CONFLICTING")) == "merged"
+
+
+def test_the_closed_record_wins_when_a_pull_request_is_recorded_twice():
+    # A pull request that has just closed lingers briefly under its old side too, and that copy still says open.
+    open_copy, closed_copy = waiting(), waiting(side="closed", state="MERGED")
+    for entries in ({"a": open_copy, "b": closed_copy}, {"a": closed_copy, "b": open_copy}):
+        assert popup.states_by_page(entries)[open_copy["url"]] is closed_copy
+
+
+def test_rows_learn_their_status_from_the_last_poll(event_log):
+    entry = waiting(state="MERGED", side="closed")
+    events.append_events([change(key="acme/gadget#7") | {"url": entry["url"]}])
+    store(event_log, entry)
+    assert [row.status for row in popup.rows_to_show(10)] == ["merged"]
+
+
+def test_a_row_about_something_no_longer_polled_has_no_status(event_log):
+    events.append_events([change()])
+    assert [row.status for row in popup.rows_to_show(10)] == [""]
+
+
+def test_the_closed_filter_hides_finished_rows_until_asked():
+    rows = [
+        popup.Row("", "", "", "", "", "", "", popup.URGENT, status=status)
+        for status in ("open", "merged", "closed", "")
+    ]
+    assert [popup.closed_matches(row, show_closed=False) for row in rows] == [True, False, False, True]
+    assert [popup.closed_matches(row, show_closed=True) for row in rows] == [True, True, True, True]
+
+
+def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
+    finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
+    open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
+    unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
+    ground = theme.DARK.background
+    assert popup.row_background(finished, theme.DARK, ground) == theme.blend(
+        theme.ink(theme.DARK, popup.STATUS_COLOURS["merged"]), ground, popup.CLOSED_TINT
+    )
+    assert popup.row_background(open_row, theme.DARK, ground) is None
+    assert popup.row_background(unknown, theme.DARK, ground) is None
+
+
+def test_every_status_word_has_a_colour():
+    entries = [
+        None,
+        waiting(state="MERGED"),
+        waiting(state="CLOSED"),
+        waiting(isDraft=True),
+        waiting(mergeable="CONFLICTING"),
+        waiting(),
+    ]
+    for word in filter(None, map(popup.pull_request_status, entries)):
+        assert word in popup.STATUS_COLOURS
+
+
+def test_an_involved_pull_request_stands_as_a_quiet_row_under_its_own_filter():
+    entry = {
+        "side": "involved",
+        "repo": "acme/widget",
+        "number": 9,
+        "title": "Something",
+        "url": "https://example.test/9",
+        "author": "bob",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
+    (row,) = popup.rows_from_snapshot({"involved:acme/widget#9": entry}, set())
+    assert (row.label, row.role, row.colour, row.who) == ("Involved", "involved", "blue", "bob")
+    assert popup.role_matches(row, "involved") and not popup.role_matches(row, "reviewer")
+    assert ("involved", "Involved") in popup.FILTER_CHOICES

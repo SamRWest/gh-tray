@@ -1,7 +1,9 @@
-"""The colours the windows are drawn in, following whichever theme the desktop is set to.
+"""The inks the windows draw with, in a dark and a light set, following whichever theme the desktop is set to.
 
-The theme is read once, when a window's process starts. Both windows are launched afresh each time they are opened,
-so they always match a theme the user changed since last time without anything having to watch for it.
+The toolkit paints the windows themselves in the desktop's own colours. What is kept here is the colour a row is
+given for what it is: the reds and ambers of the Change column, the hue a name is dealt, the scale a date is drawn
+on, and the wash a finished pull request sits on. Each comes in a dark and a light form, since a red that reads on
+a near-black ground is lost on white.
 
 Colours are named for what they mean rather than for what they look like, so the same name can be a pale red on a
 white background and a bright one on a dark background without any caller having to know which it got.
@@ -11,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import darkdetect
 from loguru import logger
 from platformdirs import user_data_path
 
@@ -23,22 +24,19 @@ CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 
 @dataclass(frozen=True)
 class Palette:
-    """Every colour a window draws with.
+    """The inks for one theme, and the grounds they are checked against.
 
-    No colour here is a plain grey. Text drawn in one reads as switched off rather than merely quiet, so the quiet
-    inks are tinted towards the surface they sit on and stay part of the same picture.
+    The grounds are what a desktop typically paints a window in that theme. Every ink here reads at 4.5 to 1 or
+    better on both, which a test holds it to, so nothing depends on a well-adjusted monitor. The windows blend
+    towards the colour the toolkit actually painted them, so the grounds are a standard rather than something drawn.
     """
 
     dark: bool
     background: str
     surface: str
-    border: str
-    heading: str
-    text: str
+    # The quiet ink, for a status nobody need act on and a name nobody has. Tinted towards its ground rather than
+    # plain grey, which would read as switched off rather than merely quiet.
     muted: str
-    link: str
-    hover: str
-    selection: str
     # One hue per sort of thing, so a glance down the window tells them apart without reading a word. They are
     # bright enough to stay themselves when dimmed for a row already seen, which a muted colour does not.
     red: str
@@ -54,20 +52,13 @@ class Palette:
     stale: str
 
 
-# Neutral near-black greys in the manner of an IDE's high-contrast dark scheme, with the accents kept muted rather
-# than neon. Every ink here reads at 4.5 to 1 or better against both the background and the surface, which a test
-# holds it to, so nothing depends on a well-adjusted monitor.
+# Neutral near-black grounds in the manner of an IDE's high-contrast dark scheme, with the accents kept muted rather
+# than neon.
 DARK = Palette(
     dark=True,
     background="#1e1f22",
     surface="#2b2d30",
-    border="#43454a",
-    heading="#dfe1e5",
-    text="#ced0d6",
     muted="#9da3ae",
-    link="#589df6",
-    hover="#323438",
-    selection="#2e436e",
     red="#f86270",
     orange="#e08855",
     amber="#d6b85a",
@@ -84,13 +75,7 @@ LIGHT = Palette(
     dark=False,
     background="#ffffff",
     surface="#f2f3f5",
-    border="#c9ccd6",
-    heading="#111318",
-    text="#27282e",
     muted="#575b66",
-    link="#2e55a3",
-    hover="#e6e8ec",
-    selection="#d4e2ff",
     red="#c22b41",
     orange="#a45017",
     amber="#7a6011",
@@ -122,21 +107,36 @@ def blend(colour: str, towards: str, weight: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in mixed)
 
 
+def ink(inks: Palette, name: str) -> str:
+    """Return the colour a named ink is in a palette.
+
+    Rows carry the names of their inks rather than the colours, so a window can follow the desktop from dark to
+    light without the rows having to be built again.
+
+    :param inks: the palette of the theme being drawn in
+    :param name: the ink's name, which is one of the palette's fields
+    """
+    return getattr(inks, name)
+
+
 def is_dark() -> bool:
-    """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told."""
-    try:
-        detected = darkdetect.isDark()
-    except Exception as error:  # any failure here must not stop a window opening
-        logger.debug("could not read the desktop theme: {}", error)
-        return True
-    if detected is None:
+    """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told.
+
+    Asked of the toolkit, which reads the desktop's setting on every platform and needs the application to exist
+    first. It is imported here rather than at the top, so a command that opens no window never loads it.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+
+    scheme = QGuiApplication.styleHints().colorScheme()
+    if scheme == Qt.ColorScheme.Unknown:
         logger.debug("this desktop does not say which theme it is set to, assuming dark")
         return True
-    return bool(detected)
+    return scheme == Qt.ColorScheme.Dark
 
 
 def palette(style: str = FOLLOW_DESKTOP) -> Palette:
-    """Return the colours to draw with.
+    """Return the inks to draw with.
 
     :param style: ``dark`` or ``light`` to insist on one, or ``auto`` to follow whatever the desktop is set to
     """
@@ -150,12 +150,9 @@ def palette(style: str = FOLLOW_DESKTOP) -> Palette:
 def chosen_style() -> str:
     """Return the theme the settings ask for, read from the settings file directly.
 
-    The settings module cannot be imported here, since it needs this one, and a window needs its colours before
-    anything else. The file is small and read once as a window opens, so reading it twice costs nothing.
+    The settings module cannot be imported here, since it needs this one. The file is small and read as a window
+    comes up or the desktop changes, so reading it again costs nothing.
     """
     stored, _damaged = read_json(CONFIG_PATH)
     asked = stored.get("theme") if isinstance(stored, dict) else None
     return asked if asked in STYLES else FOLLOW_DESKTOP
-
-
-PALETTE = palette(chosen_style())

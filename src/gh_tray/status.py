@@ -18,6 +18,8 @@ ICON_SIZE = 64
 # The application's own mark, kept in step with data/icon.svg: three coloured dots reading as three rows of a
 # list, each with the row it belongs to beside it. Drawn on a grid ICON_REFERENCE units square and scaled up.
 APP_ICON_SIZE = 256
+# The sizes desktops show the mark at, from a tray tile to a notification banner. The file holds the largest and is
+# scaled down from there, so the drawing is checked at each of these rather than written at each.
 APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 ICON_REFERENCE = 64
 ICON_CORNER = 16
@@ -124,8 +126,8 @@ def fading_field(size: int) -> Image.Image:
 def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
     """Draw the application's own mark: three coloured dots as three rows of a list.
 
-    The same design as ``data/icon.svg``, which is the editable original and the one Linux desktops are given.
-    Windows and the notification service want a raster image, and drawing it here avoids carrying a renderer for
+    The same design as ``data/icon.svg``, which is the editable original. The desktops and the notification
+    service want a raster image, and drawing it here avoids carrying a renderer for
     vector graphics along with its native libraries just to produce one small picture.
 
     :param size: how many pixels square to draw it
@@ -150,14 +152,16 @@ def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
 
 
 def write_app_icon(path: Path) -> Path:
-    """Write the application's mark where the desktop can pick it up, at the sizes Windows asks for.
+    """Write the application's mark where the desktop can pick it up.
+
+    A portable picture rather than a Windows icon file: the toolkit puts one in a title bar on every platform and
+    every notification service takes one, whereas the icon file is refused outside Windows.
 
     :param path: the file to write
     :return: the same path
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    largest = app_icon(max(APP_ICON_SIZES))
-    largest.save(path, sizes=[(size, size) for size in APP_ICON_SIZES])
+    app_icon(APP_ICON_SIZE).save(path, format="PNG")
     return path
 
 

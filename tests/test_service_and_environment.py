@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 
 import pytest
 
@@ -127,7 +128,8 @@ def test_the_login_start_file_names_this_application():
 
 
 def test_the_launch_command_runs_this_package():
-    assert environment.launch_command()[1:] == ["-m", "gh_tray"]
+    # In the foreground of whatever started it: a login entry has no terminal, and the ordinary start detaches first.
+    assert environment.launch_command()[1:] == ["-m", "gh_tray", "--foreground"]
 
 
 def test_switching_login_start_off_twice_is_harmless(tmp_path, monkeypatch):
@@ -168,3 +170,30 @@ def test_releasing_a_lock_never_taken_is_harmless(tmp_path):
 
 def test_the_application_directory_is_named_after_the_application():
     assert config.APP_DIR.name == "gh-tray"
+
+
+def test_a_console_interrupt_runs_the_stop_it_was_given(monkeypatch):
+    # The portable half: a signal handler is installed that runs the stop. The Windows console handler is the same
+    # stop behind a platform call, proven by interrupting a real tray rather than from here.
+    installed = {}
+    monkeypatch.setattr(environment.sys, "platform", "linux")
+    monkeypatch.setattr(environment.signal, "signal", lambda number, handler: installed.setdefault(number, handler))
+    stopped = []
+    environment.on_console_interrupt(lambda: stopped.append(True))
+    installed[environment.signal.SIGINT](environment.signal.SIGINT, None)
+    assert stopped == [True]
+
+
+def test_keeping_out_of_the_dock_is_harmless_everywhere():
+    environment.hide_from_dock()
+
+
+def test_a_detached_command_runs_on_its_own_and_its_errors_are_kept(tmp_path):
+    kept = tmp_path / "errors.log"
+    said = "import sys; sys.stderr.write('kept'); sys.stderr.flush()"
+    started = environment.start_detached([sys.executable, "-c", said], kept)
+    assert started > 0
+    deadline = time.monotonic() + 15
+    while kept.read_text(encoding="utf-8") != "kept" and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert kept.read_text(encoding="utf-8") == "kept"

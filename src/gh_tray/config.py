@@ -22,20 +22,16 @@ SNAPSHOT_PATH = APP_DIR / "snapshot.json"
 EVENTS_PATH = APP_DIR / "events.jsonl"
 SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
+# Whatever the tray writes to its error stream once it has left the terminal behind, since nobody is watching it.
+STDERR_PATH = APP_DIR / "gh-tray.stderr.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 # Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
-APP_ICON_PATH = APP_DIR / "gh-tray.ico"
-# Left behind by a window asking the tray to poll now, since the two are separate processes and this is the whole
-# of what one needs to say to the other.
-REFRESH_REQUEST_PATH = APP_DIR / "refresh.request"
-# The same the other way round: the tray asking the changes window to show itself. That window stays loaded and
-# hidden between showings, so being asked reaches it in a few milliseconds rather than the second a fresh process
-# takes to start. Its lock is what says one is already waiting.
-POPUP_REQUEST_PATH = APP_DIR / "popup.request"
-POPUP_LOCK_PATH = APP_DIR / "popup.lock"
-# The size the user last dragged the changes window to, and its column widths, so both survive a restart.
-LAYOUT_PATH = APP_DIR / "layout.json"
+APP_ICON_PATH = APP_DIR / "gh-tray.png"
+# The width the user last dragged the changes window to, and its column widths, so both survive a restart. Kept by
+# the toolkit's own settings store in its plain text form, alongside everything else rather than wherever the
+# platform would put it.
+LAYOUT_PATH = APP_DIR / "layout.ini"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
@@ -43,6 +39,10 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
+    "hidden_owners": [],
+    "watch_others": True,
+    "watched_owners": [],
+    "involved": False,
     "theme": "auto",
     "toasts": {
         "review_requested": True,
@@ -56,6 +56,16 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
+# The owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
+# account has a hand in is watched, so an organisation joined later needs no setting, and a repository the account
+# merely contributes to from outside is never lost.
+HIDDEN_OWNERS_KEY = "hidden_owners"
+# Whether owners not listed in the settings are watched at all. Off, only the listed owners left on are, which the
+# settings write down, since the collector cannot see the list without asking GitHub.
+WATCH_OTHERS_KEY = "watch_others"
+WATCHED_OWNERS_KEY = "watched_owners"
+# Whether pull requests the account is involved in some other way are listed too, as the dashboard lists them.
+INVOLVED_KEY = "involved"
 # The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
 
@@ -66,6 +76,23 @@ NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "max_age_days": (0, None),
     "popup_rows": (1, 50),
 }
+
+
+def login_list(value: object) -> list[str]:
+    """Return a list of GitHub logins from a setting, however it was written.
+
+    A hand-edited file may hold one string with commas or spaces between the names rather than a list, and either
+    may repeat a name or carry the @ people write before one.
+
+    :param value: the setting as read
+    """
+    parts = value if isinstance(value, list) else str(value or "").replace(",", " ").split()
+    logins: list[str] = []
+    for part in parts:
+        login = str(part).strip().lstrip("@")
+        if login and login.casefold() not in {kept.casefold() for kept in logins}:
+            logins.append(login)
+    return logins
 
 
 def normalise(config: dict) -> dict:
@@ -83,7 +110,13 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
-    config["toasts"] = {kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()}
+    config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
+    config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
+    config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
+    config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
+    config["toasts"] = {
+        kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
+    }
     if config.get(THEME_KEY) not in STYLES:
         config[THEME_KEY] = DEFAULT_CONFIG[THEME_KEY]
     return config

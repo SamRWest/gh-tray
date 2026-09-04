@@ -130,13 +130,17 @@ def test_concurrent_polls_record_each_change_exactly_once(workspace, monkeypatch
 
 def test_a_seen_marker_in_an_older_timestamp_format_still_hides_older_events(workspace):
     # Text comparison would sort a microsecond stamp before a whole-second one, so moments are compared instead.
-    events.append_events([{"at": "2026-01-01T00:00:00.500000Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}])
+    events.append_events(
+        [{"at": "2026-01-01T00:00:00.500000Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}]
+    )
     (workspace / "seen.json").write_text(json.dumps({"lastSeenAt": "2026-01-01T00:00:01Z"}), encoding="utf-8")
     assert events.unread_events() == []
 
 
 def test_a_seen_marker_in_an_older_timestamp_format_still_shows_newer_events(workspace):
-    events.append_events([{"at": "2026-01-01T00:00:02.000000Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}])
+    events.append_events(
+        [{"at": "2026-01-01T00:00:02.000000Z", "kind": "mention", "key": "a#1", "url": "", "title": "", "detail": ""}]
+    )
     (workspace / "seen.json").write_text(json.dumps({"lastSeenAt": "2026-01-01T00:00:01Z"}), encoding="utf-8")
     assert len(events.unread_events()) == 1
 
@@ -148,13 +152,21 @@ def test_an_unreadable_timestamp_is_treated_as_old_rather_than_crashing(workspac
 
 
 def test_marking_seen_shortens_the_log(workspace):
-    events.append_events([{"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""} for n in range(400)])
+    events.append_events(
+        [
+            {"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""}
+            for n in range(400)
+        ]
+    )
     events.mark_seen()
     assert len(events.read_events()) == events.EVENT_TAIL_KEPT
 
 
 def test_the_log_cannot_grow_without_limit_even_if_nobody_looks(workspace):
-    batch = [{"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""} for n in range(900)]
+    batch = [
+        {"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""}
+        for n in range(900)
+    ]
     for _ in range(3):
         events.append_events(batch)
     assert len(events.read_events()) <= events.EVENT_HARD_LIMIT
@@ -162,7 +174,12 @@ def test_the_log_cannot_grow_without_limit_even_if_nobody_looks(workspace):
 
 def test_the_unread_count_covers_more_than_one_page_of_history(workspace):
     events.mark_seen()
-    events.append_events([{"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""} for n in range(600)])
+    events.append_events(
+        [
+            {"at": events.utc_now(), "kind": "mention", "key": f"a#{n}", "url": "", "title": "", "detail": ""}
+            for n in range(600)
+        ]
+    )
     assert len(events.unread_events()) == 600
 
 
@@ -176,7 +193,14 @@ def settings_file(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "contents",
-    ['{"toasts": null}', '{"toasts": "yes please"}', '{"toasts": ["ci_broken"]}', "[1, 2, 3]", '"just a string"', "null"],
+    [
+        '{"toasts": null}',
+        '{"toasts": "yes please"}',
+        '{"toasts": ["ci_broken"]}',
+        "[1, 2, 3]",
+        '"just a string"',
+        "null",
+    ],
     ids=["null-toasts", "string-toasts", "list-toasts", "top-level-list", "top-level-string", "top-level-null"],
 )
 def test_a_settings_file_of_the_wrong_shape_still_loads(settings_file, contents):

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
+from gh_tray import notifier
 from gh_tray.notifier import MAX_LINES_PER_NOTIFICATION, Notifier
 
 
@@ -48,7 +53,10 @@ def test_a_click_opens_the_change_that_was_reported():
 
 def test_a_click_on_several_changes_opens_the_one_listed_first():
     # Never the dashboard: a click on a notification should always land on a pull request page.
-    changes = [event("ci_broken", key="a#1", url="https://example.test/1"), event("mention", key="b#2", url="https://example.test/2")]
+    changes = [
+        event("ci_broken", key="a#1", url="https://example.test/1"),
+        event("mention", key="b#2", url="https://example.test/2"),
+    ]
     assert Notifier().target_url(changes) == "https://example.test/1"
 
 
@@ -63,3 +71,21 @@ def test_nothing_is_opened_when_no_change_carries_a_page():
 
 def test_no_page_at_all_means_no_click_target_rather_than_an_error():
     assert Notifier().target_url([]) == ""
+
+
+def test_a_desktop_without_a_notification_service_is_told_by_script(monkeypatch):
+    spoken = []
+    monkeypatch.setattr(notifier, "notification_center_available", lambda: False)
+    monkeypatch.setattr(notifier, "notify_by_script", lambda title, body: spoken.append((title, body)))
+    told = Notifier().notify([event("mention")], {"mention": True})
+    assert told is True
+    assert len(spoken) == 1
+    assert spoken[0][0] == "1 GitHub change"
+    assert "acme/widget#7" in spoken[0][1]
+
+
+def test_the_notification_service_is_there_for_the_asking_off_macos():
+    # macOS hands Notification Center to app bundles alone; everywhere else the service is always offered.
+    if sys.platform == "darwin":
+        pytest.skip("whether a Mac offers the service depends on how Python was installed")
+    assert notifier.notification_center_available() is True

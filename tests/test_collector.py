@@ -30,10 +30,21 @@ def node(**overrides) -> dict:
         "reviewDecision": "APPROVED",
         "repository": {"nameWithOwner": "acme/widget"},
         "author": {"login": "someone"},
-        "commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}]},
+        "commits": {
+            "nodes": [
+                {"commit": {"statusCheckRollup": {"state": "SUCCESS"}, "author": {"user": {"login": "committer"}}}}
+            ]
+        },
         "latestReviews": {"nodes": [{"author": {"login": "reviewer"}}]},
         "comments": {"nodes": [{"author": {"login": "commenter"}, "createdAt": "2026-05-30T00:00:00Z"}]},
-        "reviews": {"nodes": [{"author": {"login": "reviewer"}, "comments": {"nodes": [{"createdAt": "2026-05-29T00:00:00Z", "replyTo": None}]}}]},
+        "reviews": {
+            "nodes": [
+                {
+                    "author": {"login": "reviewer"},
+                    "comments": {"nodes": [{"createdAt": "2026-05-29T00:00:00Z", "replyTo": None}]},
+                }
+            ]
+        },
     }
     found.update(overrides)
     return found
@@ -45,11 +56,17 @@ def test_a_complete_pull_request_is_read_in_full():
     assert record["side"] == "authored"
     assert record["ci"] == "SUCCESS"
     assert record["reviewDecision"] == "APPROVED"
-    assert (record["lastCommitBy"], record["lastReviewBy"], record["lastCommentBy"]) == ("committer", "reviewer", "commenter")
+    assert (record["lastCommitBy"], record["lastReviewBy"], record["lastCommentBy"]) == (
+        "committer",
+        "reviewer",
+        "commenter",
+    )
 
 
 def test_a_pull_request_with_no_reviews_or_comments_still_reads():
-    record = collector.normalise(node(latestReviews={"nodes": []}, comments={"nodes": []}, reviews={"nodes": []}), "reviewing")
+    record = collector.normalise(
+        node(latestReviews={"nodes": []}, comments={"nodes": []}, reviews={"nodes": []}), "reviewing"
+    )
     assert record["lastReviewBy"] == ""
     assert record["lastCommentBy"] == ""
 
@@ -65,6 +82,35 @@ def test_a_pull_request_commented_on_only_in_the_margin_still_names_who_did_it()
     # used to have a comment count that moved with nobody to name for it.
     margin_only = node(comments={"nodes": []}, reviews=margin("MattAmos", "2026-05-30T00:00:00Z"))
     assert collector.normalise(margin_only, "authored")["lastCommentBy"] == "MattAmos"
+
+
+def test_the_state_of_a_pull_request_travels_through():
+    assert collector.normalise(node(), "authored")["state"] == "OPEN"
+    assert collector.normalise(node(state="MERGED"), "closed")["state"] == "MERGED"
+
+
+def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkeypatch, tmp_path):
+    searches: list[str] = []
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+
+    def fake_search(_query: str, q: str) -> list[dict]:
+        searches.append(q)
+        return [node(state="MERGED")] if "is:closed" in q else []
+
+    monkeypatch.setattr(collector, "search_pull_requests", fake_search)
+    digest, error = collector.collect({"max_age_days": 365})
+    assert error == "" and digest is not None
+    closed_search = next(q for q in searches if "is:closed" in q)
+    # Newest first and bounded to its own short window, whatever the age cutoff: the search stops after a few
+    # pages, and either omission would let a freshly closed pull request fall off the end of the results.
+    assert "sort:updated-desc" in closed_search
+    stamp = closed_search.rsplit("updated:>", 1)[1].split()[0]
+    window = datetime.now(UTC) - datetime.strptime(stamp, "%Y-%m-%d").replace(tzinfo=UTC)
+    assert window <= timedelta(days=collector.CLOSED_LOOKBACK_DAYS + 1)
+    assert [entry["side"] for entry in digest["closed"]] == ["closed"]
+    assert digest["closed"][0]["state"] == "MERGED"
 
 
 def test_whichever_of_the_two_came_last_is_the_one_named():
@@ -91,7 +137,9 @@ def test_a_comment_that_answers_nobody_reads_as_answering_nobody():
 
 
 def test_a_pull_request_with_no_checks_reads_as_having_none():
-    record = collector.normalise(node(commits={"nodes": [{"commit": {"statusCheckRollup": None, "author": None}}]}), "authored")
+    record = collector.normalise(
+        node(commits={"nodes": [{"commit": {"statusCheckRollup": None, "author": None}}]}), "authored"
+    )
     assert record["ci"] == "NO_CHECKS"
     assert record["lastCommitBy"] == ""
 
@@ -160,7 +208,10 @@ def test_a_pull_request_touched_today_is_never_dropped():
 
 
 def test_an_interface_address_becomes_a_page_a_person_can_open():
-    assert collector.page_url("https://api.github.com/repos/acme/widget/pulls/7") == "https://github.com/acme/widget/pull/7"
+    assert (
+        collector.page_url("https://api.github.com/repos/acme/widget/pulls/7")
+        == "https://github.com/acme/widget/pull/7"
+    )
 
 
 def test_an_address_that_is_already_a_page_is_left_alone():
@@ -270,3 +321,102 @@ def test_something_that_is_not_a_pull_request_is_ignored(monkeypatch):
     mixed = {"search": {"nodes": [node(), {}], "pageInfo": {"hasNextPage": False}}}
     monkeypatch.setattr(github, "graphql", lambda _query, _variables: mixed)
     assert len(github.search_pull_requests("query", "is:pr")) == 1
+
+
+def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
+    feed = [
+        {
+            "reason": "mention",
+            "repository": {"full_name": "acme/widget"},
+            "subject": {
+                "title": "look at this",
+                "url": "https://api.github.com/repos/acme/widget/pulls/217",
+                "type": "PullRequest",
+            },
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+        {
+            "reason": "team_mention",
+            "repository": {"full_name": "acme/widget"},
+            "subject": {
+                "title": "a discussion with no number",
+                "url": "https://api.github.com/repos/acme/widget",
+                "type": "Repository",
+            },
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(collector, "api", lambda _path: feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
+    found = collector.collect_mentions("2026-01-01T00:00:00Z")
+    assert found[0]["number"] == "217"
+    assert found[1]["number"] == ""
+
+
+def test_a_hidden_owner_is_left_out_of_a_search_whether_a_person_or_an_organisation():
+    now = datetime(2026, 1, 31, tzinfo=UTC)
+    assert collector.search_for("is:pr", 0, now, ["acme", "sam"]) == "is:pr -user:acme -org:acme -user:sam -org:sam"
+    assert collector.search_for("is:pr", 30, now, ["acme"]) == "is:pr updated:>2026-01-01 -user:acme -org:acme"
+    assert collector.search_for("is:pr", 0, now) == "is:pr"
+
+
+def test_mentions_from_a_hidden_organisation_are_left_out(monkeypatch):
+    feed = [
+        {
+            "reason": "mention",
+            "repository": {"full_name": "acme/widget", "owner": {"login": "acme"}},
+            "subject": {"url": "", "title": "a"},
+        },
+        {
+            "reason": "mention",
+            "repository": {"full_name": "other/thing", "owner": {"login": "Other"}},
+            "subject": {"url": "", "title": "b"},
+        },
+    ]
+    monkeypatch.setattr(collector, "api", lambda _path: feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
+    monkeypatch.setattr(collector, "thread_author", lambda _url: "")
+    found = collector.collect_mentions("2026-01-01T00:00:00Z", ["other"])
+    assert [mention["repo"] for mention in found] == ["acme/widget"]
+
+
+def test_the_organisations_an_account_belongs_to_are_listed_alphabetically(monkeypatch):
+    monkeypatch.setattr(
+        github, "api", lambda _path: [{"login": "Widgets"}, {"login": "acme"}, {"nope": 1}, {"login": ""}]
+    )
+    assert github.organisations() == ["acme", "Widgets"]
+
+
+def test_no_organisations_reads_as_an_empty_list(monkeypatch):
+    monkeypatch.setattr(github, "api", lambda _path: {"message": "odd"})
+    assert github.organisations() == []
+
+
+def test_the_involved_search_goes_out_only_when_asked_for(monkeypatch, tmp_path):
+    searches: list[str] = []
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: searches.append(q) or [])
+    digest, _error = collector.collect({"max_age_days": 365, "involved": True})
+    assert digest is not None and digest["involved"] == []
+    assert any("is:open involves:@me" in q for q in searches)
+    searches.clear()
+    collector.collect({"max_age_days": 365, "involved": False})
+    assert not any("is:open involves:@me" in q for q in searches)
+
+
+def test_an_involved_pull_request_already_on_another_side_is_not_listed_twice(monkeypatch, tmp_path):
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "viewer", lambda: "me")
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: [node(number=7)] if "is:open" in q else [])
+    digest, _error = collector.collect({"max_age_days": 0, "involved": True})
+    assert digest is not None
+    assert [entry["key"] for entry in digest["authored"]] == ["acme/widget#7"]
+    assert digest["involved"] == []
+
+
+def test_switching_off_everything_else_keeps_only_the_owners_ticked():
+    records = [{"repo": "acme/widget"}, {"repo": "Other/thing"}, {"repo": "me/mine"}]
+    assert collector.owned_by(records, ["acme", "ME"]) == [{"repo": "acme/widget"}, {"repo": "me/mine"}]

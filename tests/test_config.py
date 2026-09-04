@@ -99,6 +99,27 @@ def test_saving_then_loading_round_trips(settings_file):
 
 def test_a_setting_left_over_from_an_older_version_is_dropped(settings_file):
     # The collector used to be a shell script with its own paths, and those settings mean nothing now.
-    settings_file.write_text(json.dumps({"collector": "/somewhere/digest.sh", "bash_path": "/bin/bash", "orgs": "acme"}), encoding="utf-8")
+    settings_file.write_text(
+        json.dumps({"collector": "/somewhere/digest.sh", "bash_path": "/bin/bash", "orgs": "acme"}), encoding="utf-8"
+    )
     loaded = config.load_config()
     assert not {"collector", "bash_path", "orgs"} & set(loaded)
+
+
+def test_hidden_organisations_are_read_from_a_list_or_a_hand_written_string():
+    assert config.login_list(["acme", "widgets"]) == ["acme", "widgets"]
+    assert config.login_list("acme, @widgets acme") == ["acme", "widgets"]
+    assert config.login_list(None) == []
+
+
+def test_hidden_organisations_are_kept_through_a_round_trip(settings_file):
+    config.save_config({**config.DEFAULT_CONFIG, "hidden_owners": "acme widgets"})
+    assert config.load_config()["hidden_owners"] == ["acme", "widgets"]
+
+
+def test_the_involved_and_catch_all_switches_are_read_as_switches(settings_file):
+    config.save_config({**config.DEFAULT_CONFIG, "involved": 1, "watch_others": 0, "watched_owners": "acme, me"})
+    loaded = config.load_config()
+    assert loaded["involved"] is True
+    assert loaded["watch_others"] is False
+    assert loaded["watched_owners"] == ["acme", "me"]
