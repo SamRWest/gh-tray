@@ -70,11 +70,14 @@ def print_status() -> list:
 
     present_mark, installable_mark, manual_mark = lights()
     outstanding = []
+    listed = requirements()
+    # Padded to the longest name, so the notes line up whatever the platform adds to the list.
+    width = max(len(requirement.name) for requirement, _present in listed)
     print(f"{APP_NAME} needs these:\n")
-    for requirement, present in requirements():
+    for requirement, present in listed:
         light = present_mark if present else (installable_mark if requirement.installable else manual_mark)
         note = requirement.summary if present else (" ".join(requirement.command) or requirement.manual)
-        print(f"  {light}  {requirement.name:<14} {note}")
+        print(f"  {light}  {requirement.name:<{width}}  {note}")
         if not present:
             outstanding.append(requirement)
     print()
