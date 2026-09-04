@@ -126,8 +126,8 @@ def fading_field(size: int) -> Image.Image:
 def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
     """Draw the application's own mark: three coloured dots as three rows of a list.
 
-    The same design as ``data/icon.svg``, which is the editable original and the one Linux desktops are given.
-    Windows and the notification service want a raster image, and drawing it here avoids carrying a renderer for
+    The same design as ``data/icon.svg``, which is the editable original. The desktops and the notification
+    service want a raster image, and drawing it here avoids carrying a renderer for
     vector graphics along with its native libraries just to produce one small picture.
 
     :param size: how many pixels square to draw it
