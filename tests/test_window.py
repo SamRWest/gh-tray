@@ -6,10 +6,11 @@ that stops firing shows up as a failure here rather than as a control that silen
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
 from pytestqt.qtbot import QtBot
 
 from gh_tray import popup, theme, window
@@ -98,6 +99,37 @@ def test_escape_hides_the_window(view, qtbot):
     view.show()
     qtbot.keyClick(view, Qt.Key.Key_Escape)
     assert not view.isVisible()
+
+
+def settle(view: window.ChangesWindow) -> None:
+    """Show the window and age it past its settling time, so a loss of focus counts as the user's doing."""
+    view.show()
+    view.shown_at = time.monotonic() - window.FOCUS_SETTLE_SECONDS
+
+
+def test_losing_the_focus_once_settled_puts_the_window_away(view, qapp):
+    settle(view)
+    qapp.sendEvent(view, QEvent(QEvent.Type.WindowDeactivate))
+    assert not view.isVisible()
+
+
+def test_a_desktop_drag_survives_losing_the_activation(view, qapp):
+    # Some desktops, GNOME among them, take the activation for the whole of a move or resize they do on the
+    # window's behalf, and hiding on that loss took the window away the moment an edge was dragged.
+    settle(view)
+    view.desktop_dragging = True
+    qapp.sendEvent(view, QEvent(QEvent.Type.WindowDeactivate))
+    assert view.isVisible(), "losing the activation to the desktop's own drag must not put the window away"
+    qapp.sendEvent(view, QEvent(QEvent.Type.WindowActivate))
+    qapp.sendEvent(view, QEvent(QEvent.Type.WindowDeactivate))
+    assert not view.isVisible(), "a loss of focus after the drag is the user's doing again"
+
+
+def test_a_refused_desktop_resize_leaves_the_dismissal_armed(view):
+    # The offscreen platform refuses to resize on the application's behalf, as a desktop without the protocol does.
+    settle(view)
+    view.start_system_resize(Qt.Edge.RightEdge)
+    assert not view.desktop_dragging
 
 
 def test_close_hides_rather_than_destroys(view):

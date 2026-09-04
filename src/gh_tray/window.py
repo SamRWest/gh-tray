@@ -199,6 +199,9 @@ class ChangesWindow(QWidget):
         # legitimately occur.
         self.shown_at = 0.0
         self.dismissed_at: float | None = None
+        # Whether the desktop is moving or resizing the window on the application's behalf. Some desktops, GNOME
+        # among them, take the activation for the whole of such a drag, and losing it then is not a click elsewhere.
+        self.desktop_dragging = False
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
@@ -696,6 +699,7 @@ class ChangesWindow(QWidget):
         self.place(QRect(left, top, width, height))
         self.shown_at = time.monotonic()
         self.dismissed_at = None
+        self.desktop_dragging = False
         self.show()
         self.raise_()
         self.activateWindow()
@@ -797,7 +801,9 @@ class ChangesWindow(QWidget):
     def start_system_move(self) -> None:
         """Hand the desktop a drag of the whole window, which it carries on until the button is released."""
         handle = self.windowHandle()
-        if handle is None or not handle.startSystemMove():
+        if handle is not None and handle.startSystemMove():
+            self.desktop_dragging = True
+        else:
             logger.debug("this desktop does not move a window on the application's behalf")
 
     def start_system_resize(self, edges: Qt.Edge) -> None:
@@ -806,7 +812,9 @@ class ChangesWindow(QWidget):
         :param edges: which edges are being dragged
         """
         handle = self.windowHandle()
-        if handle is None or not handle.startSystemResize(edges):
+        if handle is not None and handle.startSystemResize(edges):
+            self.desktop_dragging = True
+        else:
             logger.debug("this desktop does not resize a window on the application's behalf")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -872,14 +880,20 @@ class ChangesWindow(QWidget):
         """Put the window away when something else takes the focus, once it has settled after coming up.
 
         A window with no frame has no other way of being clicked away: clicking anything else on screen is what
-        takes the focus. A loss of focus in the window's first moments is part of its arriving, not a dismissal.
+        takes the focus. A loss of focus in the window's first moments is part of its arriving, not a dismissal,
+        and nor is one during a move or resize the desktop is doing on the window's behalf, which on some
+        desktops takes the activation for the whole drag.
 
         :param event: any event the window is sent
         """
+        if event.type() == QEvent.Type.WindowActivate:
+            # The activation comes back with the first click on the window after such a drag, and losing it after
+            # that is the user's doing again.
+            self.desktop_dragging = False
         # Visibility is asked first: events arrive while the window is still being built, before it has a show time.
         deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
         # A menu of this application's own, popped up from the window, is not somebody clicking elsewhere.
-        if deactivated and self.settled() and QApplication.activePopupWidget() is None:
+        if deactivated and self.settled() and not self.desktop_dragging and QApplication.activePopupWidget() is None:
             logger.debug("the focus went elsewhere, putting the window away")
             self.hide()
             self.dismissed_at = time.monotonic()
