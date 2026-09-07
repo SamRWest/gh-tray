@@ -157,9 +157,10 @@ def test_a_single_click_highlights_the_row_and_opens_nothing_and_hiding_drops_th
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
     assert build_window.opened == []
     assert view.isVisible()
-    assert [index.row() for index in view.table.selectionModel().selectedRows()] == [0]
+    assert view.highlighted_url == view.entries[0].url
+    assert view.table.item(0, 0).background().color() != view.table.item(1, 0).background().color()
     view.hide()
-    assert view.table.selectionModel().selectedRows() == []
+    assert view.highlighted_url is None
 
 
 def test_a_double_click_below_the_last_row_opens_nothing(view, qtbot, build_window):
