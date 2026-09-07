@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import pytest
@@ -131,11 +132,16 @@ def test_no_settings_yet_means_following_the_desktop(tmp_path, monkeypatch):
     assert theme.chosen_style() == theme.FOLLOW_DESKTOP
 
 
-def test_the_application_mark_is_drawn_at_every_size_a_desktop_shows_it():
-    from gh_tray.status import APP_ICON_SIZES, app_icon
+# The sizes a desktop shows the mark at, from a tray or a title bar up to a notification.
+MARK_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
-    for size in APP_ICON_SIZES:
-        assert app_icon(size).size == (size, size)
+
+def test_the_application_mark_is_drawn_at_every_size_a_desktop_shows_it():
+    from gh_tray.status import app_icon
+
+    for size in MARK_SIZES:
+        drawn = app_icon(size)
+        assert (drawn.width(), drawn.height()) == (size, size)
 
 
 def test_the_application_mark_is_written_as_a_portable_picture(tmp_path):
@@ -150,23 +156,23 @@ def test_the_application_mark_is_written_as_a_portable_picture(tmp_path):
 
 
 def test_the_mark_carries_its_three_colours_at_every_size_it_is_asked_for():
-    # The mark is three coloured dots on a dark field. At sixteen pixels the dots are two pixels across, so what
-    # matters is that each colour still reaches the picture rather than being smoothed away into the field.
-    from gh_tray.status import APP_ICON_SIZES, ICON_ROWS, app_icon
+    # The mark is three coloured dots on a dark field, and the vector picture is the only place they are drawn. At
+    # sixteen pixels a dot is two pixels across, so what matters is that each colour still reaches its dot's centre
+    # rather than being smoothed away into the field.
+    from gh_tray.status import APP_ICON_SVG, app_icon
 
-    for size in APP_ICON_SIZES:
-        drawn = app_icon(size).convert("RGB")
-        for _middle, _width, colour in ICON_ROWS:
-            wanted = ImageColor.getrgb(colour)
-            assert any(close_to(pixel, wanted) for pixel in channels(drawn)), f"{colour} is missing at {size} pixels"
-
-
-def channels(image) -> list[tuple]:
-    """Return every pixel of a colour picture as its channels.
-
-    A picture holding one number per pixel has no channels to compare, so those are left out rather than guessed at.
-    """
-    return [pixel for pixel in image.get_flattened_data() if isinstance(pixel, tuple)]
+    picture = APP_ICON_SVG.read_text(encoding="utf-8")
+    box = re.search(r'viewBox="0 0 (\d+) \d+"', picture)
+    assert box is not None
+    drawn_across = int(box.group(1))
+    dots = re.findall(r'<circle cx="(\d+)" cy="(\d+)" r="\d+" fill="(#[0-9a-f]{6})"', picture)
+    assert len(dots) == 3
+    for size in MARK_SIZES:
+        drawn = app_icon(size)
+        for across, down, colour in dots:
+            pixel = drawn.pixelColor(round(int(across) * size / drawn_across), round(int(down) * size / drawn_across))
+            found = (pixel.red(), pixel.green(), pixel.blue())
+            assert close_to(found, ImageColor.getrgb(colour)), f"{colour} is missing at {size} pixels"
 
 
 def close_to(pixel: Sequence[int], wanted: Sequence[int], allowance: int = 60) -> bool:

@@ -4,31 +4,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from gh_tray.events import BROKEN_CI, is_urgent
-from gh_tray.theme import blend
+
+if TYPE_CHECKING:
+    from PySide6.QtGui import QImage
 
 RED, AMBER, GREEN, GREY = "#d1242f", "#bf8700", "#1a7f37", "#6e7781"
 
 ICON_SIZE = 64
 
 APP_ICON_SIZE = 256
-APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
-ICON_REFERENCE = 64
-ICON_CORNER = 16
-ICON_TOP = "#2e343d"
-ICON_BOTTOM = "#1e232a"
-ICON_ROWS = ((19, 22, "#ff7b72"), (32, 15, "#ffa657"), (45, 19, "#5ddb6f"))
-ICON_DOT_X = 18
-ICON_DOT_RADIUS = 5
-ICON_BAR_X = 28
-ICON_BAR_HEIGHT = 7
-ICON_BAR_STRENGTH = 0.34
-# Drawn this many times larger then reduced, since hard-edged circles at sixteen pixels would be a mess of steps.
-ICON_OVERSAMPLE = 4
+# The application's mark, drawn once as a vector picture and rendered from there at whatever size is asked for.
+APP_ICON_SVG = files("gh_tray").joinpath("data", "icon.svg")
 # Windows caps a tray tooltip near 128 characters of plain text, and offers no way to style it.
 TOOLTIP_LIMIT = 127
 
@@ -99,38 +92,24 @@ def tooltip_text(status: Status, app_name: str = "gh-tray") -> str:
     return "\n".join(lines)[:TOOLTIP_LIMIT]
 
 
-def fading_field(size: int) -> Image.Image:
-    """Draw the square the mark sits on, fading from the lighter colour at the top to the darker at the bottom.
+def app_icon(size: int = APP_ICON_SIZE) -> QImage:
+    """Render the application's mark from ``data/icon.svg`` at one size, on a see-through ground.
 
     :param size: how many pixels square to draw it
     """
-    column = Image.new("RGB", (1, size))
-    for row in range(size):
-        column.putpixel((0, row), ImageColor.getrgb(blend(ICON_TOP, ICON_BOTTOM, 1.0 - row / max(1, size - 1))))
-    return column.resize((size, size))
+    # Imported here rather than at the top, so a windowless command asking for a summary is not forced to load the
+    # toolkit. The vector renderer itself needs no running application.
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtSvg import QSvgRenderer
 
-
-def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
-    """Draw the application's own mark, matching ``data/icon.svg`` but drawn here to skip a vector-graphics renderer.
-
-    :param size: how many pixels square to draw it
-    """
-    drawn = size * ICON_OVERSAMPLE
-    scale = drawn / ICON_REFERENCE
-    corners = Image.new("L", (drawn, drawn), 0)
-    ImageDraw.Draw(corners).rounded_rectangle((0, 0, drawn - 1, drawn - 1), radius=round(ICON_CORNER * scale), fill=255)
-    image = Image.new("RGBA", (drawn, drawn), (0, 0, 0, 0))
-    image.paste(fading_field(drawn), mask=corners)
-    canvas = ImageDraw.Draw(image)
-    for middle, bar_width, colour in ICON_ROWS:
-        radius = ICON_DOT_RADIUS * scale
-        centre = (ICON_DOT_X * scale, middle * scale)
-        canvas.ellipse((centre[0] - radius, centre[1] - radius, centre[0] + radius, centre[1] + radius), fill=colour)
-        half = ICON_BAR_HEIGHT * scale / 2
-        bar = (ICON_BAR_X * scale, centre[1] - half, (ICON_BAR_X + bar_width) * scale, centre[1] + half)
-        behind = blend(ICON_TOP, ICON_BOTTOM, 1.0 - middle / ICON_REFERENCE)
-        canvas.rounded_rectangle(bar, radius=half, fill=blend(colour, behind, ICON_BAR_STRENGTH))
-    return image.resize((size, size), Image.Resampling.LANCZOS)
+    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(QByteArray(APP_ICON_SVG.read_bytes())).render(painter)
+    painter.end()
+    return image
 
 
 def write_app_icon(path: Path) -> Path:
@@ -141,8 +120,12 @@ def write_app_icon(path: Path) -> Path:
     :param path: the file to write
     :return: the same path
     """
+    if path.suffix.lower() != ".png":
+        raise ValueError(f"the application's mark is written as a PNG, so the path needs that suffix: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    app_icon(APP_ICON_SIZE).save(path, format="PNG")
+    # The picture format follows the suffix; naming it as well trips the toolkit's own argument check.
+    if not app_icon(APP_ICON_SIZE).save(str(path)):
+        raise OSError(f"could not write the application's mark to {path}")
     return path
 
 
