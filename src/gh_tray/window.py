@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, OPACITY_KEY, load_config
+from .config import APP_ICON_PATH, OPACITY_KEY, default_opacity, load_config
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -69,7 +69,7 @@ from .popup import (
 )
 from .status import write_app_icon
 from .theme import Palette, blend, chosen_style, ink, palette
-from .toolkit import compositing_available, layout_store
+from .toolkit import blur_behind, compositing_available, layout_store
 
 EDGE_MARGIN = 12
 # Clears the pointer, and the taskbar for a tray-icon click.
@@ -185,9 +185,13 @@ class ChangesWindow(QWidget):
         self.desktop_dragging = False
         # See-through and rounded only where the desktop composites; elsewhere the window stays square and solid.
         self.translucent = compositing_available()
-        self.opacity = int(load_config().get(OPACITY_KEY, 100))
         if self.translucent:
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Where the desktop blurs behind the window it also shadows it, so the painted shadow is left out.
+        self.blur = blur_behind(self, CORNER) if self.translucent else ""
+        self.shadow = SHADOW if self.translucent and not self.blur else 0
+        self.opacity = 0
+        self.set_opacity(load_config().get(OPACITY_KEY))
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
@@ -755,19 +759,19 @@ class ChangesWindow(QWidget):
         return edges
 
     def frame_margin(self) -> int:
-        """Return the margin around the contents: the grip, plus the shadow where the window is see-through."""
-        return GRIP + SHADOW if self.translucent else GRIP
+        """Return the margin around the contents: the grip, plus the shadow where one is painted."""
+        return GRIP + self.shadow
 
     def ground(self) -> QColor:
         """Return the colour the rows sit on, which is the window's own where the viewport paints none."""
         return self.palette().window().color() if self.translucent else self.table.palette().base().color()
 
-    def set_opacity(self, percent: int) -> None:
+    def set_opacity(self, percent: int | None) -> None:
         """Make the background this solid, where the desktop can draw a see-through window at all.
 
-        :param percent: how solid the background is, up to 100
+        :param percent: how solid the background is, up to 100, or None for the default given the blur
         """
-        self.opacity = int(percent)
+        self.opacity = int(percent) if percent is not None else default_opacity(bool(self.blur))
         self.update()
 
     def start_system_move(self) -> None:
@@ -858,18 +862,23 @@ class ChangesWindow(QWidget):
             painter.end()
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        inner = self.rect().adjusted(SHADOW, SHADOW, -SHADOW - 1, -SHADOW - 1)
+        inner = self.rect().adjusted(self.shadow, self.shadow, -self.shadow - 1, -self.shadow - 1)
         shade = QColor(0, 0, 0)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for step in range(SHADOW, 0, -1):
+        for step in range(self.shadow, 0, -1):
             shade.setAlpha(int(SHADOW_ALPHA * (1 - step / SHADOW) ** 2))
             painter.setPen(shade)
             painter.drawRoundedRect(inner.adjusted(-step, -step, step, step), CORNER + step, CORNER + step)
         ground = self.ground()
         ground.setAlpha(round(255 * self.opacity / 100))
-        painter.setPen(self.palette().mid().color())
         painter.setBrush(ground)
-        painter.drawRoundedRect(inner, CORNER, CORNER)
+        if self.blur == "dwm":
+            # Windows rounds and borders the window itself, and clips the tint to its corners.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(self.rect())
+        else:
+            painter.setPen(self.palette().mid().color())
+            painter.drawRoundedRect(inner, CORNER, CORNER)
         painter.end()
 
     def event(self, event: QEvent) -> bool:

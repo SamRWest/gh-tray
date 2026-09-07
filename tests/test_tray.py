@@ -25,6 +25,7 @@ def build_tray(qtbot, monkeypatch):
     monkeypatch.setattr(tray, "rows_to_show", lambda _count: [])
     monkeypatch.setattr(window, "rows_to_show", lambda _count: [])
     monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20})
+    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: "")
     monkeypatch.setattr(tray, "read_snapshot", lambda: ({}, False))
     monkeypatch.setattr(tray, "autostart_enabled", lambda: False)
     monkeypatch.setattr(tray, "mark_seen", lambda: None)
@@ -185,4 +186,4 @@ def test_the_settings_slider_drives_the_window_live_and_closing_puts_the_saved_v
     subject.settings.opacity.setValue(55)
     assert subject.window.opacity == 55
     subject.settings.reject()
-    assert subject.window.opacity == config.DEFAULT_CONFIG["opacity"]
+    assert subject.window.opacity == config.PLAIN_OPACITY

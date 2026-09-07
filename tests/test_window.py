@@ -13,7 +13,7 @@ import pytest
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
 from pytestqt.qtbot import QtBot
 
-from gh_tray import popup, theme, window
+from gh_tray import config, popup, theme, window
 
 
 def row(
@@ -62,6 +62,7 @@ class WindowBuilder:
         self.opened: list[str] = []
         self.seen_marks: list[tuple[popup.Row, bool]] = []
         monkeypatch.setattr(window.webbrowser, "open", self.opened.append)
+        monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: "")
         monkeypatch.setattr(window, "remember_row_seen", lambda entry, seen: self.seen_marks.append((entry, seen)))
 
     def __call__(self, rows: list[popup.Row] | None = None) -> window.ChangesWindow:
@@ -334,8 +335,20 @@ def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(vie
     assert view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert view.frame_margin() == window.GRIP + window.SHADOW
     assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge.LeftEdge
+    assert view.opacity == config.PLAIN_OPACITY
     view.set_opacity(70)
     assert view.opacity == 70
+    view.set_opacity(None)
+    assert view.opacity == config.PLAIN_OPACITY
+
+
+def test_a_desktop_that_blurs_behind_the_window_supplies_the_shadow_and_gets_a_lower_default(build_window, monkeypatch):
+    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: "cocoa")
+    view = build_window()
+    assert view.blur == "cocoa"
+    assert view.shadow == 0
+    assert view.frame_margin() == window.GRIP
+    assert view.opacity == config.BLURRED_OPACITY
 
 
 def test_a_desktop_without_compositing_keeps_the_square_solid_window(build_window, monkeypatch):

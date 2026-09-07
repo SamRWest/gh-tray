@@ -33,9 +33,11 @@ from .config import (
     INVOLVED_KEY,
     NUMBER_RANGES,
     OPACITY_KEY,
+    OPACITY_RANGE,
     THEME_KEY,
     WATCH_OTHERS_KEY,
     WATCHED_OWNERS_KEY,
+    default_opacity,
     load_config,
     save_config,
 )
@@ -108,13 +110,15 @@ class SettingsDialog(QDialog):
     # The opacity slider is followed live by the changes window, so the effect is seen before it is saved.
     opacity_changed = Signal(int)
 
-    def __init__(self, parent: QWidget | None = None, account: Account | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, account: Account | None = None, blurred: bool = False) -> None:
         """Build the window around the settings as they stand.
 
         :param parent: the window this one belongs to, if any
         :param account: what is already known about the account, or None to look it up now
+        :param blurred: whether the desktop blurs behind the changes window, which sets the opacity default
         """
         super().__init__(parent)
+        self.blurred = blurred
         self.setWindowTitle(f"{APP_NAME} settings")
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
@@ -162,9 +166,9 @@ class SettingsDialog(QDialog):
     def opacity_slider(self) -> QHBoxLayout:
         """Lay out the slider for how solid the changes window is, with its value beside it."""
         self.opacity = QSlider(Qt.Orientation.Horizontal, self)
-        floor, ceiling = NUMBER_RANGES[OPACITY_KEY]
-        self.opacity.setRange(floor, ceiling if ceiling is not None else UNBOUNDED)
-        self.opacity.setValue(int(self.config[OPACITY_KEY]))
+        self.opacity.setRange(*OPACITY_RANGE)
+        stored = self.config.get(OPACITY_KEY)
+        self.opacity.setValue(int(stored) if stored is not None else default_opacity(self.blurred))
         self.opacity_value = QLabel(f"{self.opacity.value()}%", self)
         self.opacity.valueChanged.connect(self.on_opacity_moved)
         if not compositing_available():

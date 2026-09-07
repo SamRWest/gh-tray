@@ -47,8 +47,8 @@ In the changes window:
 - Click a heading to sort. Use the buttons at the bottom to filter, and Ctrl+F to search every column.
 - Hold Ctrl and scroll to change the text size. Drag the title to move the window and an edge to resize it.
 - **Open dashboard** opens gh-dash in a terminal. **Menu** opens the tray menu, for desktops that offer no other way.
-- The window has rounded corners, a shadow and a see-through background where the desktop can draw them. The opacity
-  slider in the settings changes it as you drag.
+- The window has rounded corners and a see-through background where the desktop can draw them, blurred behind on Windows
+  11, macOS and KDE. The opacity slider in the settings changes it as you drag.
 
 You are notified when a review is requested of you, your checks break, a reviewer asks for changes, someone mentions
 you, or a pull request of yours becomes ready to merge. New comments and merge conflicts are listed but not announced

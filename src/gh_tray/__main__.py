@@ -101,13 +101,13 @@ def capture_stray_output() -> None:
 
 
 def linked(path: Path) -> str:
-    """Return a file's name as a terminal hyperlink to it, or its whole path where links cannot be drawn.
+    """Return a file's whole path, as a terminal hyperlink to it where links can be drawn.
 
     :param path: the file to name
     """
     if sys.stdout is None or not sys.stdout.isatty():
         return str(path)
-    return f"\x1b]8;;{path.as_uri()}\x1b\\{path.name}\x1b]8;;\x1b\\"
+    return f"\x1b]8;;{path.as_uri()}\x1b\\{path}\x1b]8;;\x1b\\"
 
 
 def lights() -> tuple[str, str, str]:
@@ -221,7 +221,7 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
         return 0
     lock.release()
     started = start_detached(launch_command(), STDERR_PATH)
-    print(f"{APP_NAME} started as process {started}. Its icon is in the tray; Quit is in its menu.")
+    print(f"{APP_NAME} started as process {started}. App now running in your system tray.")
     print(f"Logging to {linked(LOG_PATH)}. Serious errors to {linked(STDERR_PATH)}.")
     return 0
 

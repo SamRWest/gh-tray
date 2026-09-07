@@ -288,7 +288,7 @@ class Tray(QObject):
     def open_settings(self, *_) -> None:
         """Open the settings window, or bring it forward if it is already open."""
         if self.settings is None:
-            self.settings = SettingsDialog(account=self.account)
+            self.settings = SettingsDialog(account=self.account, blurred=bool(self.window.blur))
             self.settings.accepted.connect(self.on_settings_saved)
             self.settings.finished.connect(self.on_settings_closed)
             self.zoom.changed.connect(self.settings.adjustSize)
@@ -308,7 +308,7 @@ class Tray(QObject):
         self.account = None
         self.lookup.start()
         # The window followed the slider live; this puts it back to what was saved, or was not.
-        self.window.set_opacity(load_config()[OPACITY_KEY])
+        self.window.set_opacity(load_config().get(OPACITY_KEY))
 
     def on_account_found(self, account: Account) -> None:
         """Keep what GitHub said about the account for the next settings window.

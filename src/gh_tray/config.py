@@ -34,7 +34,7 @@ DEFAULT_CONFIG: dict = {
     "watched_owners": [],
     "involved": False,
     "theme": "auto",
-    "opacity": 100,
+    "opacity": None,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -53,13 +53,17 @@ WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
 INVOLVED_KEY = "involved"
 THEME_KEY = "theme"
+# How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
+# what lies behind the window: a blurred background can be more see-through and still read.
 OPACITY_KEY = "opacity"
+OPACITY_RANGE = (40, 100)
+PLAIN_OPACITY = 95
+BLURRED_OPACITY = 80
 
 NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "poll_minutes": (1, None),
     "max_age_days": (0, None),
     "popup_rows": (1, 50),
-    "opacity": (40, 100),
 }
 
 
@@ -92,6 +96,12 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
+    if config.get(OPACITY_KEY) is not None:
+        try:
+            config[OPACITY_KEY] = min(max(OPACITY_RANGE[0], int(config[OPACITY_KEY])), OPACITY_RANGE[1])
+        except (TypeError, ValueError):
+            logger.warning("setting {} is not a whole number, leaving it unset", OPACITY_KEY)
+            config[OPACITY_KEY] = None
     config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
@@ -126,6 +136,14 @@ def merge_stored(config: dict, stored: object) -> dict:
     elif toasts is not None:
         logger.warning("the notification settings are not a set of switches, falling back to defaults")
     return config
+
+
+def default_opacity(blurred: bool) -> int:
+    """Return how solid the changes window is when the settings do not say.
+
+    :param blurred: whether the desktop blurs what lies behind the window
+    """
+    return BLURRED_OPACITY if blurred else PLAIN_OPACITY
 
 
 def load_config() -> dict:

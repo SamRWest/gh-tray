@@ -81,14 +81,14 @@ def test_linked_prints_the_whole_path_where_nobody_draws_links(tmp_path):
     assert __main__.linked(target) == str(target)
 
 
-def test_linked_wraps_the_name_in_a_terminal_hyperlink(tmp_path, monkeypatch):
+def test_linked_wraps_the_whole_path_in_a_terminal_hyperlink(tmp_path, monkeypatch):
     class Terminal(io.StringIO):
         def isatty(self) -> bool:
             return True
 
     monkeypatch.setattr(sys, "stdout", Terminal())
     target = tmp_path / "gh-tray.log"
-    assert __main__.linked(target) == f"\x1b]8;;{target.as_uri()}\x1b\\gh-tray.log\x1b]8;;\x1b\\"
+    assert __main__.linked(target) == f"\x1b]8;;{target.as_uri()}\x1b\\{target}\x1b]8;;\x1b\\"
 
 
 def deferred_imports() -> list[tuple[str, str, int]]:

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import io
 import sys
+from importlib import import_module
 
 from loguru import logger
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QtMsgType, Signal, qInstallMessageHandler
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QKeyEvent, QPalette, QPixmap, QWheelEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 from .config import LAYOUT_PATH
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, DARK
@@ -100,6 +101,142 @@ def x11_compositor_running() -> bool:
         return x11.XGetSelectionOwner(display, x11.XInternAtom(display, b"_NET_WM_CM_S0", 0)) != 0
     finally:
         x11.XCloseDisplay(display)
+
+
+# Desktop window manager attributes (Windows 11 22H2 and later): dark mode, corner rounding, and the backdrop
+# drawn behind a see-through window, of which the transient kind is the blurred acrylic.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_ROUND = 2
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWMSBT_TRANSIENTWINDOW = 3
+# AppKit constants for a visual effect view that blurs what lies behind the window.
+NS_VIEW_WIDTH_SIZABLE = 2
+NS_VIEW_HEIGHT_SIZABLE = 16
+NS_BLENDING_BEHIND_WINDOW = 0
+NS_MATERIAL_POPOVER = 6
+NS_STATE_ACTIVE = 1
+NS_WINDOW_BELOW = -1
+# X11 property KWin reads to blur behind a window, and the atom types the X library expects.
+KDE_BLUR_PROPERTY = b"_KDE_NET_WM_BLUR_BEHIND_REGION"
+XA_CARDINAL = 6
+PROP_MODE_REPLACE = 0
+
+
+def blur_behind(window: QWidget, radius: int) -> str:
+    """Ask the desktop to blur what lies behind a see-through window, where it can.
+
+    Blur is decoration, so a desktop that refuses it is logged and the window goes on without it.
+
+    :param window: a top-level window drawn on a see-through background
+    :param radius: how round the window's corners are, for a desktop that clips the blur to them
+    :return: which desktop did it, ``dwm``, ``cocoa`` or ``kde``, or an empty string for none
+    """
+    try:
+        if sys.platform == "win32":
+            return "dwm" if windows_backdrop(window) else ""
+        if sys.platform == "darwin":
+            return "cocoa" if macos_vibrancy(window, radius) else ""
+        if QGuiApplication.platformName() == "xcb":
+            return "kde" if kde_blur(window) else ""
+    except Exception as error:  # any failure here is the desktop's, and the window must still open
+        logger.debug("blur behind the window refused: {}", error)
+    return ""
+
+
+def windows_backdrop(window: QWidget) -> bool:
+    """Give a window the acrylic backdrop and rounded corners, which Windows 11 22H2 and later draw themselves.
+
+    :param window: the window, whose native handle is created here if it was not yet
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    dwm = ctypes.windll.dwmapi
+    handle = ctypes.c_void_p(int(window.winId()))
+
+    def put(attribute: int, value: int) -> int:
+        holder = ctypes.c_int(value)
+        return dwm.DwmSetWindowAttribute(handle, attribute, ctypes.byref(holder), ctypes.sizeof(holder))
+
+    put(DWMWA_USE_IMMERSIVE_DARK_MODE, int(window.palette().window().color().lightness() < 128))
+    put(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)
+    return put(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW) == 0
+
+
+def macos_vibrancy(window: QWidget, radius: int) -> bool:
+    """Put a visual effect view behind a window's content, which macOS blurs what lies behind the window into.
+
+    :param window: the window, whose native view is created here if it was not yet
+    :param radius: how round the effect's corners are, matching the window's own
+    """
+    if sys.platform != "darwin":
+        return False
+    objc = import_module("objc")
+    appkit = import_module("AppKit")
+    view = objc.objc_object(c_void_p=int(window.winId()))
+    native = view.window()
+    if native is None:
+        return False
+    effect = appkit.NSVisualEffectView.alloc().initWithFrame_(view.bounds())
+    effect.setAutoresizingMask_(NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE)
+    effect.setBlendingMode_(NS_BLENDING_BEHIND_WINDOW)
+    effect.setMaterial_(NS_MATERIAL_POPOVER)
+    effect.setState_(NS_STATE_ACTIVE)
+    effect.setWantsLayer_(True)
+    effect.layer().setCornerRadius_(radius)
+    effect.layer().setMasksToBounds_(True)
+    view.addSubview_positioned_relativeTo_(effect, NS_WINDOW_BELOW, None)
+    native.setOpaque_(False)
+    native.setBackgroundColor_(appkit.NSColor.clearColor())
+    return True
+
+
+def kde_blur(window: QWidget) -> bool:
+    """Mark a window for KWin to blur behind, on a KDE desktop running under X11.
+
+    Other window managers ignore the mark, so it is set only where KDE says it is the desktop.
+
+    :param window: the window, whose X window is created here if it was not yet
+    """
+    import ctypes
+    import ctypes.util
+    import os
+
+    if "KDE" not in os.environ.get("XDG_CURRENT_DESKTOP", "").upper():
+        return False
+    name = ctypes.util.find_library("X11")
+    if not name:
+        return False
+    x11 = ctypes.CDLL(name)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XInternAtom.restype = ctypes.c_ulong
+    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x11.XChangeProperty.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    x11.XFlush.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return False
+    try:
+        atom = x11.XInternAtom(display, KDE_BLUR_PROPERTY, 0)
+        # An empty region means the whole window.
+        x11.XChangeProperty(display, int(window.winId()), atom, XA_CARDINAL, 32, PROP_MODE_REPLACE, None, 0)
+        x11.XFlush(display)
+    finally:
+        x11.XCloseDisplay(display)
+    return True
 
 
 def base_font() -> QFont:

@@ -29,7 +29,9 @@ class DialogBuilder:
         monkeypatch.setattr(settings_window, "set_autostart", self.autostart_calls.append)
         monkeypatch.setattr(settings_window, "follow_theme_setting", self.theme_calls.append)
 
-    def __call__(self, stored: dict, autostart: bool = False, account: Account | None = TESTER) -> SettingsDialog:
+    def __call__(
+        self, stored: dict, autostart: bool = False, account: Account | None = TESTER, blurred: bool = False
+    ) -> SettingsDialog:
         """Build one dialog showing the given stored settings.
 
         :param stored: the settings the dialog should load
@@ -40,7 +42,7 @@ class DialogBuilder:
         self._monkeypatch.setattr(settings_window, "autostart_enabled", lambda: autostart)
         if account is None:
             self._monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
-        dialog = SettingsDialog(account=account)
+        dialog = SettingsDialog(account=account, blurred=blurred)
         self._qtbot.addWidget(dialog)
         return dialog
 
@@ -144,6 +146,11 @@ def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog)
     assert saved["watch_others"] is True
     assert saved["watched_owners"] == ["tester", "acme"]
     assert saved["hidden_owners"] == ["widgets"]
+
+
+def test_the_opacity_slider_starts_at_the_default_for_the_desktop_when_nothing_is_stored(build_dialog):
+    assert build_dialog(copy.deepcopy(config.DEFAULT_CONFIG)).opacity.value() == config.PLAIN_OPACITY
+    assert build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), blurred=True).opacity.value() == config.BLURRED_OPACITY
 
 
 def test_the_opacity_slider_shows_the_stored_value_reports_moves_live_and_is_saved(build_dialog, qtbot):
