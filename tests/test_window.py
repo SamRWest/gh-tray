@@ -347,6 +347,24 @@ def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(vie
     assert view.opacity == config.PLAIN_OPACITY
 
 
+def test_the_table_sits_on_a_ground_a_few_points_more_solid_than_the_window(view, qapp):
+    view.set_opacity(60)
+    view.show()
+    qapp.processEvents()
+    image = view.grab().toImage()
+    margin = image.pixelColor(view.frame_margin() + 2, view.frame_margin() + 2).alpha()
+    table = image.pixelColor(view.table.viewport().mapTo(view, cell_centre(view, 0))).alpha()
+    assert margin == round(255 * 60 / 100)
+    assert abs(table - round(255 * (60 + window.TABLE_OPACITY_OFFSET) / 100)) <= 1
+
+
+def test_the_table_overlay_reaches_the_offset_and_stops_at_solid():
+    assert window.table_overlay_alpha(0, 15) == round(255 * 0.15)
+    assert window.table_overlay_alpha(80, 15) == round(255 * 0.75)
+    assert window.table_overlay_alpha(90, 15) == 255
+    assert window.table_overlay_alpha(100, 15) == 0
+
+
 def test_a_finished_row_and_the_clicked_row_are_washed_not_painted_solid(build_window, qtbot):
     view = build_window([row("#9", status="merged"), row("#7")])
     view.closed_chip.setChecked(True)

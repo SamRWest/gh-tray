@@ -95,6 +95,11 @@ SHADOW = 12
 CORNER = 10
 # How dark the shadow is at the window's edge; it fades to nothing across the margin.
 SHADOW_ALPHA = 90
+# How much more solid the table's ground is than the window's, in percentage points of opacity, so the rows sit on
+# a panel a shade darker (in the dark theme) than the strips around them however see-through the window is; and
+# how round that panel's corners are.
+TABLE_OPACITY_OFFSET = 15
+TABLE_CORNER = 6
 # A focus loss before this is the window arriving, not a click elsewhere; otherwise it hides on every showing.
 FOCUS_SETTLE_SECONDS = 0.3
 # How soon after losing focus a tray click counts as the dismissal, not a fresh request to reopen.
@@ -116,6 +121,23 @@ HINT = (
     "Double-click a row to open it, right-click to mark it seen. Click a heading to sort. "
     "Drag the title to move, an edge to resize. Ctrl and the wheel size the text."
 )
+
+
+def table_overlay_alpha(opacity: int, offset: int) -> int:
+    """Return the alpha to lay the ground over the table at, so the table ends up *offset* points more solid.
+
+    Laying a colour at alpha ``b`` over the same colour at alpha ``a`` gives ``a + b * (1 - a)``, so reaching a
+    target of ``a + offset`` takes ``b = offset / (1 - a)``; a window that is already solid needs nothing.
+
+    :param opacity: how solid the window's own ground is, in percent
+    :param offset: how many points more solid the table should be
+    :return: the overlay's alpha, 0 to 255
+    """
+    window_share = min(opacity, 100) / 100
+    if window_share >= 1.0:
+        return 0
+    target_share = min(100, opacity + offset) / 100
+    return round(255 * (target_share - window_share) / (1 - window_share))
 
 
 def column_of(key: str) -> int:
@@ -939,6 +961,10 @@ class ChangesWindow(QWidget):
         else:
             painter.setPen(self.palette().mid().color())
             painter.drawRoundedRect(inner, CORNER, CORNER)
+        ground.setAlpha(table_overlay_alpha(self.opacity, TABLE_OPACITY_OFFSET))
+        painter.setBrush(ground)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self.table.geometry(), TABLE_CORNER, TABLE_CORNER)
         painter.end()
 
     def event(self, event: QEvent) -> bool:
