@@ -93,6 +93,19 @@ def blend(colour: str, towards: str, weight: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in mixed)
 
 
+def wash(colour: str, strength: float) -> str:
+    """Give a colour an alpha, for a background laid over whatever the window shows through.
+
+    A blend into the ground paints a solid colour, which hides a see-through window's background. A colour that
+    carries its own alpha composes over it instead, and over a solid ground it comes out the same as the blend.
+
+    :param colour: the colour to wash with, as ``#rrggbb``
+    :param strength: how much of the colour shows, where one is solid and zero is nothing
+    :return: the colour as ``#aarrggbb``, which the toolkit reads alpha first
+    """
+    return f"#{round(255 * strength):02x}{colour[1:]}"
+
+
 def ink(inks: Palette, name: str) -> str:
     """Return the colour a named ink is in a palette.
 

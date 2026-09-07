@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
+from PySide6.QtWidgets import QFrame
 from pytestqt.qtbot import QtBot
 
 from gh_tray import config, popup, theme, window
@@ -333,6 +334,10 @@ def test_rows_from_the_same_organisation_or_repository_share_a_colour(build_wind
 
 def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(view):
     assert view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    # The table shows the same background: nothing solid under the rows or the headings, and no frame around them.
+    assert not view.table.viewport().autoFillBackground()
+    assert not view.table.horizontalHeader().viewport().autoFillBackground()
+    assert view.table.frameShape() == QFrame.Shape.NoFrame
     assert view.frame_margin() == window.GRIP + window.SHADOW
     assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge.LeftEdge
     assert view.opacity == config.PLAIN_OPACITY
@@ -340,6 +345,18 @@ def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(vie
     assert view.opacity == 70
     view.set_opacity(None)
     assert view.opacity == config.PLAIN_OPACITY
+
+
+def test_a_finished_row_and_the_clicked_row_are_washed_not_painted_solid(build_window, qtbot):
+    view = build_window([row("#9", status="merged"), row("#7")])
+    view.closed_chip.setChecked(True)
+    finished = view.table.item(0, 0).background().color()
+    assert finished.name() == theme.ink(view.inks, popup.STATUS_COLOURS["merged"])
+    assert 0 < finished.alpha() < 255
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 1))
+    clicked = view.table.item(1, 0).background().color()
+    assert clicked.name() == view.table.palette().highlight().color().name()
+    assert 0 < clicked.alpha() < 255
 
 
 def test_show_below_puts_the_window_under_another_without_the_focus_and_hiding_ends_the_preview(view):

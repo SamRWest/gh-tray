@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import pytest
 from PIL import Image, ImageColor
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QColor, QGuiApplication
 
 from gh_tray import theme
 from gh_tray.theme import blend
@@ -91,6 +91,15 @@ def test_a_faded_row_still_stands_out_from_its_background(name):
     for palette in (theme.DARK, theme.LIGHT):
         faded = blend(getattr(palette, name), palette.background, weakest)
         assert abs(brightness(faded) - brightness(palette.background)) > 0.05, f"{name} disappears when old"
+
+
+def test_a_wash_keeps_the_colour_and_carries_its_strength_as_alpha():
+    washed = theme.wash("#f86270", 0.14)
+    assert washed == "#24f86270"
+    assert QColor(washed).name() == "#f86270"
+    assert QColor(washed).alpha() == 36
+    assert theme.wash("#f86270", 1.0) == "#fff86270"
+    assert theme.wash("#f86270", 0.0) == "#00f86270"
 
 
 def test_the_theme_can_be_forced_either_way():

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -68,7 +69,7 @@ from .popup import (
     sorted_rows,
 )
 from .status import write_app_icon
-from .theme import Palette, blend, chosen_style, ink, palette
+from .theme import Palette, blend, chosen_style, ink, palette, wash
 from .toolkit import Blur, blur_behind, compositing_available, layout_store, show_blur
 
 EDGE_MARGIN = 12
@@ -217,8 +218,7 @@ class ChangesWindow(QWidget):
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
         if self.translucent:
-            # The viewport paints no background of its own, so the window's see-through one shows through the rows.
-            self.table.viewport().setAutoFillBackground(False)
+            self.see_through_table()
         # Selection and focus stay off: the desktop style frames each selected or focused cell, showing as a bar
         # in every cell. The clicked row is highlighted by painting it instead.
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -416,6 +416,18 @@ class ChangesWindow(QWidget):
         ]
         self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
 
+    def see_through_table(self) -> None:
+        """Let the window's see-through background show through the whole table, headings and edge included.
+
+        The rows' viewport and the heading strip each fill themselves with a solid colour unless told not to, the
+        desktop style paints a solid ground under every heading, and the table draws a solid frame around it all.
+        """
+        self.table.viewport().setAutoFillBackground(False)
+        header = self.table.horizontalHeader()
+        header.viewport().setAutoFillBackground(False)
+        header.setStyleSheet("QHeaderView::section { background: transparent; }")
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
+
     def refill(self) -> None:
         """Put the rows into the table in their current order, colour them, and count the unread ones in the title."""
         self.table.setRowCount(len(self.entries))
@@ -429,7 +441,7 @@ class ChangesWindow(QWidget):
     def paint(self) -> None:
         """Colour every cell; a seen row dims except its date, which keeps its own age scale."""
         ground = self.ground().name()
-        highlight = blend(self.table.palette().highlight().color().name(), ground, HIGHLIGHT_STRENGTH)
+        highlight = wash(self.table.palette().highlight().color().name(), HIGHLIGHT_STRENGTH)
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
             owner, _name = org_and_name(entry.repo)
@@ -440,9 +452,9 @@ class ChangesWindow(QWidget):
                 **{column_of(key): ink(self.inks, name_colour(named[key])) for key in NAMED_COLUMNS},
             }
             # A finished pull request's row sits on a wash of its status colour, so it reads as done at a glance.
-            wash = row_background(entry, self.inks, ground)
+            background = row_background(entry, self.inks)
             if entry.url == self.highlighted_url:
-                wash = highlight
+                background = highlight
             for column in range(len(COLUMNS)):
                 colour = inks.get(column) or ink(self.inks, entry.colour)
                 if entry.seen and column != date_column:
@@ -451,7 +463,7 @@ class ChangesWindow(QWidget):
                 if item is None:
                     continue
                 item.setForeground(QBrush(QColor(colour)))
-                item.setBackground(QBrush(QColor(wash)) if wash else QBrush())
+                item.setBackground(QBrush(QColor(background)) if background else QBrush())
 
     def on_cell_clicked(self, row: int, _column: int) -> None:
         """Highlight the row that was clicked.

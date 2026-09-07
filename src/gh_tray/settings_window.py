@@ -169,7 +169,7 @@ class SettingsDialog(QDialog):
 
     def blur_switch(self) -> QCheckBox:
         """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
-        self.blur = QCheckBox("Where the desktop can (Windows 11, macOS, KDE)", self)
+        self.blur = QCheckBox("If supported (Windows 11, macOS, KDE)", self)
         self.blur.setChecked(bool(self.config.get(BLUR_KEY, True)))
         self.blur.setEnabled(self.blurrable)
         if not self.blurrable:

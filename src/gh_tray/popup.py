@@ -28,7 +28,7 @@ from .events import (
     seen_marks,
 )
 from .snapshot import read_snapshot
-from .theme import Palette, blend, ink
+from .theme import Palette, blend, ink, wash
 
 # The inks a row can be drawn in: what blocks, what is worth a look, what is good news, and what needs no action.
 URGENT = "red"
@@ -442,16 +442,16 @@ def closed_matches(row: Row, show_closed: bool) -> bool:
     return show_closed or row.status not in CLOSED_STATUSES
 
 
-def row_background(row: Row, inks: Palette, ground: str) -> str | None:
-    """Return the background a row is drawn on, or None for the table's own; only a finished pull request gets one.
+def row_background(row: Row, inks: Palette) -> str | None:
+    """Return the wash a row is drawn on, or None for the table's own; only a finished pull request gets one.
 
     :param row: the row to judge
     :param inks: the palette of the theme being drawn in
-    :param ground: the colour the table is painted in, which the wash is mixed into
+    :return: the status colour at :data:`CLOSED_TINT` strength, as ``#aarrggbb``
     """
     if row.status not in CLOSED_STATUSES:
         return None
-    return blend(ink(inks, STATUS_COLOURS[row.status]), ground, CLOSED_TINT)
+    return wash(ink(inks, STATUS_COLOURS[row.status]), CLOSED_TINT)
 
 
 # The quick filters along the bottom of the window: what each is called, and which of the user's hats it keeps.
