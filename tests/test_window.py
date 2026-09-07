@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
 from pytestqt.qtbot import QtBot
 
 from gh_tray import config, popup, theme, window
@@ -62,7 +62,7 @@ class WindowBuilder:
         self.opened: list[str] = []
         self.seen_marks: list[tuple[popup.Row, bool]] = []
         monkeypatch.setattr(window.webbrowser, "open", self.opened.append)
-        monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: "")
+        monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur())
         monkeypatch.setattr(window, "remember_row_seen", lambda entry, seen: self.seen_marks.append((entry, seen)))
 
     def __call__(self, rows: list[popup.Row] | None = None) -> window.ChangesWindow:
@@ -342,13 +342,27 @@ def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(vie
     assert view.opacity == config.PLAIN_OPACITY
 
 
+def test_show_below_puts_the_window_under_another_without_the_focus_and_hiding_ends_the_preview(view):
+    view.show_below(QRect(100, 100, 300, 200))
+    assert view.isVisible() and view.previewing
+    assert view.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert view.geometry().top() >= 300
+    view.hide()
+    assert not view.previewing
+
+
 def test_a_desktop_that_blurs_behind_the_window_supplies_the_shadow_and_gets_a_lower_default(build_window, monkeypatch):
-    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: "cocoa")
+    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur("cocoa"))
+    switched: list[bool] = []
+    monkeypatch.setattr(window, "show_blur", lambda _window, _blur, shown: switched.append(shown))
     view = build_window()
-    assert view.blur == "cocoa"
+    assert view.blur.kind == "cocoa" and view.blurred()
     assert view.shadow == 0
     assert view.frame_margin() == window.GRIP
     assert view.opacity == config.BLURRED_OPACITY
+    view.set_blur(False)
+    assert switched == [True, False]
+    assert not view.blurred() and view.opacity == config.PLAIN_OPACITY
 
 
 def test_a_desktop_without_compositing_keeps_the_square_solid_window(build_window, monkeypatch):

@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, OPACITY_KEY, default_opacity, load_config
+from .config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -69,7 +69,7 @@ from .popup import (
 )
 from .status import write_app_icon
 from .theme import Palette, blend, chosen_style, ink, palette
-from .toolkit import blur_behind, compositing_available, layout_store
+from .toolkit import Blur, blur_behind, compositing_available, layout_store, show_blur
 
 EDGE_MARGIN = 12
 # Clears the pointer, and the taskbar for a tray-icon click.
@@ -180,6 +180,8 @@ class ChangesWindow(QWidget):
         self.dismissed_at: float | None = None
         # The row last clicked, by URL so it survives sorting and refilling.
         self.highlighted_url: str | None = None
+        # Shown beside the settings to preview a change, without the focus, and put away when they close.
+        self.previewing = False
         # Some desktops, GNOME included, hold the window's activation for a whole drag, so losing it then is not
         # a click elsewhere.
         self.desktop_dragging = False
@@ -187,11 +189,15 @@ class ChangesWindow(QWidget):
         self.translucent = compositing_available()
         if self.translucent:
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # Where the desktop blurs behind the window it also shadows it, so the painted shadow is left out.
-        self.blur = blur_behind(self, CORNER) if self.translucent else ""
+        # Where the desktop can blur behind the window it also shadows it, so the painted shadow is left out.
+        self.blur = blur_behind(self, CORNER) if self.translucent else Blur()
         self.shadow = SHADOW if self.translucent and not self.blur else 0
+        self.blur_wanted = True
         self.opacity = 0
-        self.set_opacity(load_config().get(OPACITY_KEY))
+        self.wanted_opacity: int | None = None
+        settings = load_config()
+        self.set_blur(bool(settings.get(BLUR_KEY, True)))
+        self.set_opacity(settings.get(OPACITY_KEY))
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
@@ -661,13 +667,7 @@ class ChangesWindow(QWidget):
         top = max(
             usable.top() + EDGE_MARGIN, min(spot.y() - height - POINTER_GAP, usable.bottom() - height - EDGE_MARGIN)
         )
-        self.place(QRect(left, top, width, height))
-        self.shown_at = time.monotonic()
-        self.dismissed_at = None
-        self.desktop_dragging = False
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        self.bring_up(QRect(left, top, width, height))
         logger.debug(
             "showing {} rows in the {} theme at {}",
             len(self.entries),
@@ -693,6 +693,38 @@ class ChangesWindow(QWidget):
             usable.top() + EDGE_MARGIN, min(now.y() + now.height() - height, usable.bottom() - height - EDGE_MARGIN)
         )
         self.place(QRect(left, top, width, height))
+
+    def show_below(self, other: QRect) -> None:
+        """Show the window under another one without taking the focus, so a settings change is seen at once.
+
+        :param other: where the other window is, on screen
+        """
+        self.reload()
+        self.settle_layout()
+        usable = self.usable_screen(other.center())
+        width, height = self.wanted_width(usable), self.wanted_height(usable)
+        left = max(usable.left() + EDGE_MARGIN, min(other.left(), usable.right() - width - EDGE_MARGIN))
+        top = other.bottom() + EDGE_MARGIN
+        if top + height > usable.bottom() - EDGE_MARGIN:
+            top = max(usable.top() + EDGE_MARGIN, other.top() - height - EDGE_MARGIN)
+        self.previewing = True
+        self.bring_up(QRect(left, top, width, height), activate=False)
+
+    def bring_up(self, geometry: QRect, activate: bool = True) -> None:
+        """Place the window and show it, fresh for the dismissal timing.
+
+        :param geometry: where the window goes
+        :param activate: whether it takes the focus, which a preview beside another window must not
+        """
+        self.place(geometry)
+        self.shown_at = time.monotonic()
+        self.dismissed_at = None
+        self.desktop_dragging = False
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not activate)
+        self.show()
+        self.raise_()
+        if activate:
+            self.activateWindow()
 
     def toggle(self, spot: QPoint) -> None:
         """Show the window at a click, or hide it if already shown.
@@ -771,8 +803,23 @@ class ChangesWindow(QWidget):
 
         :param percent: how solid the background is, up to 100, or None for the default given the blur
         """
-        self.opacity = int(percent) if percent is not None else default_opacity(bool(self.blur))
+        self.wanted_opacity = int(percent) if percent is not None else None
+        self.opacity = self.wanted_opacity if self.wanted_opacity is not None else default_opacity(self.blurred())
         self.update()
+
+    def blurred(self) -> bool:
+        """Return whether the desktop is blurring behind the window right now."""
+        return bool(self.blur) and self.blur_wanted
+
+    def set_blur(self, wanted: bool) -> None:
+        """Switch the desktop's blur behind the window off or on, where there is one, keeping the default opacity apt.
+
+        :param wanted: whether the blur should be drawn
+        """
+        self.blur_wanted = wanted
+        if self.blur:
+            show_blur(self, self.blur, wanted)
+        self.set_opacity(self.wanted_opacity)
 
     def start_system_move(self) -> None:
         """Hand the desktop a drag of the whole window, which it carries on until the button is released."""
@@ -847,6 +894,7 @@ class ChangesWindow(QWidget):
         :param event: the hiding
         """
         self.highlighted_url = None
+        self.previewing = False
         super().hideEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -872,7 +920,7 @@ class ChangesWindow(QWidget):
         ground = self.ground()
         ground.setAlpha(round(255 * self.opacity / 100))
         painter.setBrush(ground)
-        if self.blur == "dwm":
+        if self.blur.kind == "dwm":
             # Windows rounds and borders the window itself, and clips the tint to its corners.
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRect(self.rect())

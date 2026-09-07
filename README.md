@@ -48,7 +48,7 @@ In the changes window:
 - Hold Ctrl and scroll to change the text size. Drag the title to move the window and an edge to resize it.
 - **Open dashboard** opens gh-dash in a terminal. **Menu** opens the tray menu, for desktops that offer no other way.
 - The window has rounded corners and a see-through background where the desktop can draw them, blurred behind on Windows
-  11, macOS and KDE. The opacity slider in the settings changes it as you drag.
+  11, macOS and KDE. The blur switch and opacity slider in the settings show their effect as you move them.
 
 You are notified when a review is requested of you, your checks break, a reviewer asks for changes, someone mentions
 you, or a pull request of yours becomes ready to merge. New comments and merge conflicts are listed but not announced

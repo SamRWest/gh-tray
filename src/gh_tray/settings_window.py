@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from . import APP_NAME
 from .config import (
     APP_ICON_PATH,
+    BLUR_KEY,
     HIDDEN_OWNERS_KEY,
     INVOLVED_KEY,
     NUMBER_RANGES,
@@ -107,18 +108,20 @@ class AccountLookup(QObject):
 class SettingsDialog(QDialog):
     """The settings window. Saves settings and login on close; account details arrive later over a signal."""
 
-    # The opacity slider is followed live by the changes window, so the effect is seen before it is saved.
+    # The opacity slider and blur switch are followed live by the changes window, so the effect is seen before
+    # it is saved.
     opacity_changed = Signal(int)
+    blur_changed = Signal(bool)
 
-    def __init__(self, parent: QWidget | None = None, account: Account | None = None, blurred: bool = False) -> None:
+    def __init__(self, parent: QWidget | None = None, account: Account | None = None, blurrable: bool = False) -> None:
         """Build the window around the settings as they stand.
 
         :param parent: the window this one belongs to, if any
         :param account: what is already known about the account, or None to look it up now
-        :param blurred: whether the desktop blurs behind the changes window, which sets the opacity default
+        :param blurrable: whether the desktop can blur behind the changes window
         """
         super().__init__(parent)
-        self.blurred = blurred
+        self.blurrable = blurrable
         self.setWindowTitle(f"{APP_NAME} settings")
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
@@ -157,18 +160,42 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        form.addRow("Blur behind it", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
         self.involved = QCheckBox("Pull requests you only commented on or were assigned", self)
         self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
         form.addRow("Also list", self.involved)
         return form
 
+    def blur_switch(self) -> QCheckBox:
+        """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
+        self.blur = QCheckBox("Where the desktop can (Windows 11, macOS, KDE)", self)
+        self.blur.setChecked(bool(self.config.get(BLUR_KEY, True)))
+        self.blur.setEnabled(self.blurrable)
+        if not self.blurrable:
+            self.blur.setToolTip("This desktop does not blur behind windows.")
+        self.blur.toggled.connect(self.on_blur_switched)
+        return self.blur
+
+    def on_blur_switched(self, wanted: bool) -> None:
+        """Pass the blur switch on, and move an untouched opacity slider to the default for the new state.
+
+        :param wanted: whether the blur should be drawn
+        """
+        self.blur_changed.emit(wanted)
+        if self.config.get(OPACITY_KEY) is None and not self.opacity_moved:
+            self.opacity.setValue(default_opacity(self.blurrable and wanted))
+            self.opacity_moved = False
+
     def opacity_slider(self) -> QHBoxLayout:
         """Lay out the slider for how solid the changes window is, with its value beside it."""
         self.opacity = QSlider(Qt.Orientation.Horizontal, self)
         self.opacity.setRange(*OPACITY_RANGE)
         stored = self.config.get(OPACITY_KEY)
-        self.opacity.setValue(int(stored) if stored is not None else default_opacity(self.blurred))
+        self.opacity.setValue(
+            int(stored) if stored is not None else default_opacity(self.blurrable and self.blur.isChecked())
+        )
+        self.opacity_moved = False
         self.opacity_value = QLabel(f"{self.opacity.value()}%", self)
         self.opacity.valueChanged.connect(self.on_opacity_moved)
         if not compositing_available():
@@ -185,6 +212,7 @@ class SettingsDialog(QDialog):
         :param value: how solid the window should be, in percent
         """
         self.opacity_value.setText(f"{value}%")
+        self.opacity_moved = True
         self.opacity_changed.emit(value)
 
     def notification_switches(self) -> QGroupBox:
@@ -283,6 +311,7 @@ class SettingsDialog(QDialog):
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
+        self.config[BLUR_KEY] = self.blur.isChecked()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
         switches = self.owner_switches_by_login.items()
         self.config[HIDDEN_OWNERS_KEY] = [login for login, switch in switches if not switch.isChecked()]

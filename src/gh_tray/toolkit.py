@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import sys
+from dataclasses import dataclass
 from importlib import import_module
+from typing import ClassVar, Protocol
 
 from loguru import logger
 from PIL import Image
@@ -103,13 +105,21 @@ def x11_compositor_running() -> bool:
         x11.XCloseDisplay(display)
 
 
-# Desktop window manager attributes (Windows 11 22H2 and later): dark mode, corner rounding, and the backdrop
-# drawn behind a see-through window, of which the transient kind is the blurred acrylic.
+# Desktop window manager attributes (Windows 11): dark mode and corner rounding. The blur itself goes through the
+# window composition attribute's accent policy, since the newer system backdrop is drawn as a solid colour on
+# some machines that accept it.
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_ROUND = 2
-DWMWA_SYSTEMBACKDROP_TYPE = 38
-DWMSBT_TRANSIENTWINDOW = 3
+WCA_ACCENT_POLICY = 19
+ACCENT_DISABLED = 0
+ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+# The acrylic's own tint: black at a low alpha, in ABGR, so the window's painted background does the tinting.
+ACRYLIC_TINT = 0x20000000
+# Where Windows keeps the transparency-effects switch, and the metric that says this is a remote session. With the
+# switch off or over a remote session the backdrop is drawn as a solid colour and corners stay square.
+PERSONALISE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+SM_REMOTESESSION = 0x1000
 # AppKit constants for a visual effect view that blurs what lies behind the window.
 NS_VIEW_WIDTH_SIZABLE = 2
 NS_VIEW_HEIGHT_SIZABLE = 16
@@ -123,62 +133,142 @@ XA_CARDINAL = 6
 PROP_MODE_REPLACE = 0
 
 
-def blur_behind(window: QWidget, radius: int) -> str:
+class Hideable(Protocol):
+    """What a macOS view offers for hiding and showing itself."""
+
+    def setHidden_(self, hidden: bool) -> None:
+        """Hide or show the view."""
+
+
+@dataclass
+class Blur:
+    """Which desktop blurs behind a window, and what it needs to switch the blur off and on again."""
+
+    kind: str = ""
+    effect: Hideable | None = None
+
+    def __bool__(self) -> bool:
+        """Whether the desktop blurs behind the window at all."""
+        return bool(self.kind)
+
+
+def blur_behind(window: QWidget, radius: int) -> Blur:
     """Ask the desktop to blur what lies behind a see-through window, where it can.
 
     Blur is decoration, so a desktop that refuses it is logged and the window goes on without it.
 
     :param window: a top-level window drawn on a see-through background
     :param radius: how round the window's corners are, for a desktop that clips the blur to them
-    :return: which desktop did it, ``dwm``, ``cocoa`` or ``kde``, or an empty string for none
+    :return: which desktop did it, ``dwm``, ``cocoa`` or ``kde``, or nothing for none
     """
     try:
         if sys.platform == "win32":
-            return "dwm" if windows_backdrop(window) else ""
+            return Blur("dwm") if windows_acrylic(window, True) else Blur()
         if sys.platform == "darwin":
-            return "cocoa" if macos_vibrancy(window, radius) else ""
+            effect = macos_vibrancy(window, radius)
+            return Blur("cocoa", effect) if effect is not None else Blur()
         if QGuiApplication.platformName() == "xcb":
-            return "kde" if kde_blur(window) else ""
+            return Blur("kde") if kde_blur(window, True) else Blur()
     except Exception as error:  # any failure here is the desktop's, and the window must still open
         logger.debug("blur behind the window refused: {}", error)
-    return ""
+    return Blur()
 
 
-def windows_backdrop(window: QWidget) -> bool:
-    """Give a window the acrylic backdrop and rounded corners, which Windows 11 22H2 and later draw themselves.
+def show_blur(window: QWidget, blur: Blur, shown: bool) -> None:
+    """Switch a desktop's blur behind a window off or back on.
+
+    :param window: the window the blur was given to
+    :param blur: what :func:`blur_behind` returned for it
+    :param shown: whether the blur should be drawn
+    """
+    try:
+        if blur.kind == "dwm":
+            windows_acrylic(window, shown)
+        elif blur.kind == "cocoa" and blur.effect is not None:
+            blur.effect.setHidden_(not shown)
+        elif blur.kind == "kde":
+            kde_blur(window, shown)
+    except Exception as error:  # the blur is decoration; the window must go on
+        logger.debug("could not switch the blur {}: {}", "on" if shown else "off", error)
+
+
+def windows_acrylic(window: QWidget, shown: bool) -> bool:
+    """Blur behind a window with the acrylic accent, and have Windows 11 round its corners.
 
     :param window: the window, whose native handle is created here if it was not yet
+    :param shown: whether the blur should be drawn
     """
     if sys.platform != "win32":
         return False
     import ctypes
 
+    if ctypes.windll.user32.GetSystemMetrics(SM_REMOTESESSION):
+        logger.debug("no blur: a remote session does not draw it")
+        return False
+    if not windows_transparency_effects():
+        logger.debug("no blur: transparency effects are off")
+        return False
+
+    class AccentPolicy(ctypes.Structure):
+        _fields_: ClassVar = [
+            ("state", ctypes.c_int),
+            ("flags", ctypes.c_int),
+            ("colour", ctypes.c_uint),
+            ("animation", ctypes.c_int),
+        ]
+
+    class CompositionAttribute(ctypes.Structure):
+        _fields_: ClassVar = [("attribute", ctypes.c_int), ("data", ctypes.c_void_p), ("size", ctypes.c_size_t)]
+
+    handle = int(window.winId())
     dwm = ctypes.windll.dwmapi
-    handle = ctypes.c_void_p(int(window.winId()))
 
     def put(attribute: int, value: int) -> int:
         holder = ctypes.c_int(value)
-        return dwm.DwmSetWindowAttribute(handle, attribute, ctypes.byref(holder), ctypes.sizeof(holder))
+        return dwm.DwmSetWindowAttribute(
+            ctypes.c_void_p(handle), attribute, ctypes.byref(holder), ctypes.sizeof(holder)
+        )
 
     put(DWMWA_USE_IMMERSIVE_DARK_MODE, int(window.palette().window().color().lightness() < 128))
     put(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)
-    return put(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW) == 0
+    policy = AccentPolicy(ACCENT_ENABLE_ACRYLICBLURBEHIND if shown else ACCENT_DISABLED, 0, ACRYLIC_TINT, 0)
+    data = CompositionAttribute(
+        WCA_ACCENT_POLICY, ctypes.cast(ctypes.pointer(policy), ctypes.c_void_p), ctypes.sizeof(policy)
+    )
+    user32 = ctypes.windll.user32
+    user32.SetWindowCompositionAttribute.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    return bool(user32.SetWindowCompositionAttribute(ctypes.c_void_p(handle), ctypes.byref(data)))
 
 
-def macos_vibrancy(window: QWidget, radius: int) -> bool:
+def windows_transparency_effects() -> bool:
+    """Return whether Windows is set to draw transparency effects; a missing setting counts as on."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALISE_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "EnableTransparency")
+    except OSError:
+        return True
+    return bool(value)
+
+
+def macos_vibrancy(window: QWidget, radius: int) -> Hideable | None:
     """Put a visual effect view behind a window's content, which macOS blurs what lies behind the window into.
 
     :param window: the window, whose native view is created here if it was not yet
     :param radius: how round the effect's corners are, matching the window's own
+    :return: the effect view, kept so it can be hidden, or None where there is no native window
     """
     if sys.platform != "darwin":
-        return False
+        return None
     objc = import_module("objc")
     appkit = import_module("AppKit")
     view = objc.objc_object(c_void_p=int(window.winId()))
     native = view.window()
     if native is None:
-        return False
+        return None
     effect = appkit.NSVisualEffectView.alloc().initWithFrame_(view.bounds())
     effect.setAutoresizingMask_(NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE)
     effect.setBlendingMode_(NS_BLENDING_BEHIND_WINDOW)
@@ -190,15 +280,16 @@ def macos_vibrancy(window: QWidget, radius: int) -> bool:
     view.addSubview_positioned_relativeTo_(effect, NS_WINDOW_BELOW, None)
     native.setOpaque_(False)
     native.setBackgroundColor_(appkit.NSColor.clearColor())
-    return True
+    return effect
 
 
-def kde_blur(window: QWidget) -> bool:
-    """Mark a window for KWin to blur behind, on a KDE desktop running under X11.
+def kde_blur(window: QWidget, shown: bool) -> bool:
+    """Mark a window for KWin to blur behind, on a KDE desktop running under X11, or take the mark off again.
 
     Other window managers ignore the mark, so it is set only where KDE says it is the desktop.
 
     :param window: the window, whose X window is created here if it was not yet
+    :param shown: whether the blur should be drawn
     """
     import ctypes
     import ctypes.util
@@ -224,6 +315,7 @@ def kde_blur(window: QWidget) -> bool:
         ctypes.c_void_p,
         ctypes.c_int,
     ]
+    x11.XDeleteProperty.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
     x11.XFlush.argtypes = [ctypes.c_void_p]
     x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
     display = x11.XOpenDisplay(None)
@@ -231,8 +323,11 @@ def kde_blur(window: QWidget) -> bool:
         return False
     try:
         atom = x11.XInternAtom(display, KDE_BLUR_PROPERTY, 0)
-        # An empty region means the whole window.
-        x11.XChangeProperty(display, int(window.winId()), atom, XA_CARDINAL, 32, PROP_MODE_REPLACE, None, 0)
+        if shown:
+            # An empty region means the whole window.
+            x11.XChangeProperty(display, int(window.winId()), atom, XA_CARDINAL, 32, PROP_MODE_REPLACE, None, 0)
+        else:
+            x11.XDeleteProperty(display, int(window.winId()), atom)
         x11.XFlush(display)
     finally:
         x11.XCloseDisplay(display)

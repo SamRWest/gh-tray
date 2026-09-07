@@ -14,7 +14,7 @@ from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from . import APP_NAME
-from .config import LOG_PATH, OPACITY_KEY, load_config
+from .config import BLUR_KEY, LOG_PATH, OPACITY_KEY, load_config
 from .environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
@@ -288,11 +288,12 @@ class Tray(QObject):
     def open_settings(self, *_) -> None:
         """Open the settings window, or bring it forward if it is already open."""
         if self.settings is None:
-            self.settings = SettingsDialog(account=self.account, blurred=bool(self.window.blur))
+            self.settings = SettingsDialog(account=self.account, blurrable=bool(self.window.blur))
             self.settings.accepted.connect(self.on_settings_saved)
             self.settings.finished.connect(self.on_settings_closed)
             self.zoom.changed.connect(self.settings.adjustSize)
-            self.settings.opacity_changed.connect(self.window.set_opacity)
+            self.settings.opacity_changed.connect(self.on_opacity_moved)
+            self.settings.blur_changed.connect(self.on_blur_switched)
         self.settings.show()
         self.settings.raise_()
         self.settings.activateWindow()
@@ -308,7 +309,32 @@ class Tray(QObject):
         self.account = None
         self.lookup.start()
         # The window followed the slider live; this puts it back to what was saved, or was not.
-        self.window.set_opacity(load_config().get(OPACITY_KEY))
+        if self.window.previewing:
+            self.window.hide()
+        saved = load_config()
+        self.window.set_blur(bool(saved.get(BLUR_KEY, True)))
+        self.window.set_opacity(saved.get(OPACITY_KEY))
+
+    def on_opacity_moved(self, percent: int) -> None:
+        """Follow the settings slider live, bringing the window up under the settings if it is hidden.
+
+        :param percent: the slider's value
+        """
+        self.window.set_opacity(percent)
+        self.preview()
+
+    def on_blur_switched(self, wanted: bool) -> None:
+        """Follow the settings blur switch live.
+
+        :param wanted: whether the blur should be drawn
+        """
+        self.window.set_blur(wanted)
+        self.preview()
+
+    def preview(self) -> None:
+        """Bring the window up under the settings if it is hidden, so a change there is seen at once."""
+        if not self.window.isVisible() and self.settings is not None:
+            self.window.show_below(self.settings.frameGeometry())
 
     def on_account_found(self, account: Account) -> None:
         """Keep what GitHub said about the account for the next settings window.

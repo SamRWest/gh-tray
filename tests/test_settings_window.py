@@ -30,7 +30,7 @@ class DialogBuilder:
         monkeypatch.setattr(settings_window, "follow_theme_setting", self.theme_calls.append)
 
     def __call__(
-        self, stored: dict, autostart: bool = False, account: Account | None = TESTER, blurred: bool = False
+        self, stored: dict, autostart: bool = False, account: Account | None = TESTER, blurrable: bool = False
     ) -> SettingsDialog:
         """Build one dialog showing the given stored settings.
 
@@ -42,7 +42,7 @@ class DialogBuilder:
         self._monkeypatch.setattr(settings_window, "autostart_enabled", lambda: autostart)
         if account is None:
             self._monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
-        dialog = SettingsDialog(account=account, blurred=blurred)
+        dialog = SettingsDialog(account=account, blurrable=blurrable)
         self._qtbot.addWidget(dialog)
         return dialog
 
@@ -148,9 +148,16 @@ def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog)
     assert saved["hidden_owners"] == ["widgets"]
 
 
-def test_the_opacity_slider_starts_at_the_default_for_the_desktop_when_nothing_is_stored(build_dialog):
+def test_the_opacity_slider_starts_at_the_default_for_the_desktop_when_nothing_is_stored(build_dialog, qtbot):
     assert build_dialog(copy.deepcopy(config.DEFAULT_CONFIG)).opacity.value() == config.PLAIN_OPACITY
-    assert build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), blurred=True).opacity.value() == config.BLURRED_OPACITY
+    dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), blurrable=True)
+    assert dialog.opacity.value() == config.BLURRED_OPACITY
+    with qtbot.waitSignal(dialog.blur_changed) as switched:
+        dialog.blur.setChecked(False)
+    assert switched.args == [False]
+    assert dialog.opacity.value() == config.PLAIN_OPACITY
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["blur"] is False
 
 
 def test_the_opacity_slider_shows_the_stored_value_reports_moves_live_and_is_saved(build_dialog, qtbot):

@@ -35,6 +35,7 @@ DEFAULT_CONFIG: dict = {
     "involved": False,
     "theme": "auto",
     "opacity": None,
+    "blur": True,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -56,6 +57,8 @@ THEME_KEY = "theme"
 # How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
 # what lies behind the window: a blurred background can be more see-through and still read.
 OPACITY_KEY = "opacity"
+# Whether to ask the desktop to blur behind the window, where it can.
+BLUR_KEY = "blur"
 OPACITY_RANGE = (40, 100)
 PLAIN_OPACITY = 95
 BLURRED_OPACITY = 80
@@ -106,6 +109,7 @@ def normalise(config: dict) -> dict:
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
     config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
+    config[BLUR_KEY] = bool(config.get(BLUR_KEY, DEFAULT_CONFIG[BLUR_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
     }
