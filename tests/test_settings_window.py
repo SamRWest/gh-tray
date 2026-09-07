@@ -137,6 +137,7 @@ def test_look_up_account_gathers_the_sign_in_state_login_and_organisations(monke
 def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog):
     dialog = build_dialog({**config.DEFAULT_CONFIG, "involved": True, "watch_others": False})
     assert dialog.involved.isChecked() and not dialog.others.isChecked()
+    assert dialog.involved.parentWidget().title() == "Notify me about"
     dialog.involved.setChecked(False)
     dialog.others.setChecked(True)
     dialog.owner_switches_by_login["widgets"].setChecked(False)

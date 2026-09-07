@@ -147,7 +147,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard command and the Also list switch."""
+        """Lay out the numbers, the dashboard command and the window's blur and opacity."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -160,11 +160,8 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
-        form.addRow("Blur behind it", self.blur_switch())
+        form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
-        self.involved = QCheckBox("Pull requests you only commented on or were assigned", self)
-        self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
-        form.addRow("Also list", self.involved)
         return form
 
     def blur_switch(self) -> QCheckBox:
@@ -216,7 +213,11 @@ class SettingsDialog(QDialog):
         self.opacity_changed.emit(value)
 
     def notification_switches(self) -> QGroupBox:
-        """Lay out one switch per kind of change that can raise a notification."""
+        """Lay out one switch per kind of change that can raise a notification, then the otherwise-involved switch.
+
+        The last switch widens which pull requests are watched at all, not which changes are reported: it adds the
+        ones the user only commented on or was assigned, which are then listed and notified about like the rest.
+        """
         group = QGroupBox("Notify me about", self)
         column = QVBoxLayout(group)
         self.toggles: dict[str, QCheckBox] = {}
@@ -225,6 +226,10 @@ class SettingsDialog(QDialog):
             switch.setChecked(bool(self.config["toasts"].get(kind)))
             column.addWidget(switch)
             self.toggles[kind] = switch
+        self.involved = QCheckBox("Otherwise involved (commented on or assigned)", group)
+        self.involved.setToolTip("Also lists these pull requests in the window, so their changes can be noticed.")
+        self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
+        column.addWidget(self.involved)
         return group
 
     def owner_switches(self) -> QGroupBox:
