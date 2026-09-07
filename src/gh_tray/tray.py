@@ -20,7 +20,7 @@ from .events import mark_seen
 from .notifier import Notifier
 from .popup import rows_to_show
 from .service import PollResult, poll
-from .settings_window import SettingsDialog
+from .settings_window import Account, AccountLookup, SettingsDialog
 from .snapshot import read_snapshot
 from .status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
 from .toolkit import FontZoom, application, follow_theme_setting, icon_from, layout_store
@@ -151,6 +151,10 @@ class Tray(QObject):
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
+        # The account is looked up before the settings window is asked for, so the window comes up filled in.
+        self.account: Account | None = None
+        self.lookup = AccountLookup()
+        self.lookup.found.connect(self.on_account_found)
         self.heartbeat = QTimer(self)
         self.quit_asked.connect(self.on_quit)
         self.build_menu()
@@ -304,7 +308,7 @@ class Tray(QObject):
     def open_settings(self, *_) -> None:
         """Open the settings window, or bring it forward if it is already open."""
         if self.settings is None:
-            self.settings = SettingsDialog()
+            self.settings = SettingsDialog(account=self.account)
             self.settings.accepted.connect(self.on_settings_saved)
             self.settings.finished.connect(self.on_settings_closed)
             self.zoom.changed.connect(self.settings.adjustSize)
@@ -318,8 +322,20 @@ class Tray(QObject):
         self.window.on_scheme_changed()
 
     def on_settings_closed(self, _result: int) -> None:
-        """Forget the settings window once it is closed, so the next opening builds a fresh one."""
+        """Forget the settings window once it is closed, and look the account up again for the next one.
+
+        A sign-in or a new organisation between two openings is caught this way.
+        """
         self.settings = None
+        self.account = None
+        self.lookup.start()
+
+    def on_account_found(self, account: Account) -> None:
+        """Keep what GitHub said about the account for the next settings window.
+
+        :param account: what GitHub said
+        """
+        self.account = account
 
     def on_quit(self, *_) -> None:
         """Stop the poller, the notifier, the window and the icon, then the application.
@@ -344,4 +360,5 @@ class Tray(QObject):
         self.heartbeat.start(HEARTBEAT_MS)
         self.icon.show()
         self.poller.start()
+        self.lookup.start()
         application().exec()

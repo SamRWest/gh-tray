@@ -142,19 +142,32 @@ def test_close_hides_rather_than_destroys(view):
     assert view.isVisible()
 
 
-def test_a_left_click_on_a_row_opens_its_url_and_hides(view, qtbot, build_window):
+def test_a_double_click_on_a_row_opens_its_url_and_hides(view, qtbot, build_window):
     view.show()
     url = view.entries[0].url
+    # The table opens a row only on a double click that follows a press on the same row, as a real one does.
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
+    qtbot.mouseDClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
     assert build_window.opened == [url]
     assert not view.isVisible()
 
 
-def test_a_click_below_the_last_row_opens_nothing(view, qtbot, build_window):
+def test_a_single_click_highlights_the_row_and_opens_nothing_and_hiding_drops_the_highlight(view, qtbot, build_window):
+    view.show()
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
+    assert build_window.opened == []
+    assert view.isVisible()
+    assert [index.row() for index in view.table.selectionModel().selectedRows()] == [0]
+    view.hide()
+    assert view.table.selectionModel().selectedRows() == []
+
+
+def test_a_double_click_below_the_last_row_opens_nothing(view, qtbot, build_window):
     view.resize(900, 500)
     view.show()
     below = QPoint(10, view.table.viewport().height() - 2)
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=below)
+    qtbot.mouseDClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=below)
     assert build_window.opened == []
     assert view.isVisible()
 

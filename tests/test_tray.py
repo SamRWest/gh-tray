@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QSystemTrayIcon
 
 from gh_tray import config, tray, window
 from gh_tray.service import PollResult
+from gh_tray.settings_window import Account
 from gh_tray.status import GREEN, GREY, RED, Status, summary_line
 from gh_tray.tray import Tray
 
@@ -57,6 +58,19 @@ def test_trigger_toggles_the_window_and_double_click_does_not(build_tray, qapp):
     subject.on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
     qapp.processEvents()
     assert subject.window.isVisible(), "a double click must leave the window exactly as the trigger left it"
+
+
+def test_the_account_found_ahead_of_time_fills_the_settings_window_at_once(build_tray, monkeypatch, qtbot):
+    from gh_tray import settings_window
+
+    monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
+    monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
+    subject = build_tray()
+    subject.on_account_found(Account(login="tester", organisations=("acme",), signed_in=True, sign_in_summary="ok"))
+    subject.open_settings()
+    qtbot.addWidget(subject.settings)
+    assert list(subject.settings.owner_switches_by_login) == ["tester", "acme"]
+    assert subject.settings.sign_in.text() == "ok"
 
 
 def test_on_quit_twice_stops_the_poller_and_notifier_once(build_tray):

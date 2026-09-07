@@ -133,16 +133,21 @@ def github_cli() -> str | None:
     return shutil.which("gh")
 
 
-def github_auth_summary() -> str:
-    """Return a one-line description of the GitHub sign-in state, for the settings window."""
+def github_auth_state() -> tuple[bool, str]:
+    """Return whether the GitHub command line tool is signed in, and one line saying as whom.
+
+    One call to the tool answers both, and each call takes a moment, so a caller wanting both asks once.
+    """
     github = github_cli()
     if not github:
-        return "GitHub CLI (gh) not found on PATH"
+        return False, "GitHub CLI (gh) not found on PATH"
     done = run_quietly([github, "auth", "status"])
     lines = (done.stdout + done.stderr).splitlines()
     summary = next((line.strip() for line in lines if "Logged in" in line), "")
     # The tool prefixes the line with a tick, which says nothing the words do not.
-    return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
+    if not summary:
+        return False, "Not signed in to GitHub"
+    return done.returncode == 0, summary.lstrip("✓✔* ").strip()
 
 
 def applescript_string(text: str) -> str:

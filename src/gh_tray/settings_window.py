@@ -1,8 +1,12 @@
-"""The settings window: polling, notification rules, the dashboard command, colours, login start and GitHub sign-in."""
+"""The settings window: polling, notification rules, the dashboard command, owners, colours, login start and sign-in."""
 
 from __future__ import annotations
 
+import threading
+from dataclasses import dataclass
+
 from loguru import logger
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -33,35 +37,86 @@ from .config import (
     load_config,
     save_config,
 )
-from .environment import autostart_enabled, github_auth_summary, hide_from_dock, open_in_terminal, set_autostart
+from .environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
 from .events import RULE_LABELS
 from .github import GitHubError, organisations, viewer
-from .prerequisites import signed_in
 from .status import write_app_icon
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
 from .toolkit import FontZoom, application, follow_theme_setting, layout_store
 
-# The numeric settings and what each is called in the window. Their ranges come from the settings module, so the
-# window cannot accept what the settings would then clamp.
+# The numeric settings and their labels. The ranges come from the settings module, so the window cannot accept
+# what the settings would then clamp.
 NUMBER_FIELDS = {
     "poll_minutes": "Poll every (minutes)",
     "max_age_days": "Hide pull requests older than (days, 0 = keep all)",
     "popup_rows": "Changes shown when you click the tray icon",
 }
-# A spin box has to have a ceiling; a setting that has none is given one nobody will reach.
+# A spin box needs a ceiling; a setting with none gets one nobody will reach.
 UNBOUNDED = 100_000
 
-# The theme choices offered, and what each is called in the window.
+# The theme choices offered, and their labels.
 THEME_CHOICES = ((FOLLOW_DESKTOP, "Follow the desktop"), (ALWAYS_DARK, "Dark"), (ALWAYS_LIGHT, "Light"))
+
+LOOKING_UP_OWNERS = "Looking up your organisations..."
+CHECKING_SIGN_IN = "Checking GitHub sign-in..."
+NO_OWNERS = "GitHub named no owner. Everything you have a hand in is watched."
+
+
+@dataclass(frozen=True)
+class Account:
+    """What the window shows about the signed-in account, each part learned from GitHub."""
+
+    login: str = ""
+    organisations: tuple[str, ...] = ()
+    signed_in: bool = False
+    sign_in_summary: str = ""
+    # Why the organisations could not be listed, when they could not.
+    trouble: str = ""
+
+
+def look_up_account() -> Account:
+    """Ask GitHub about the account. Slow, so called off the toolkit's thread."""
+    signed_in, summary = github_auth_state()
+    try:
+        login, listed, trouble = viewer(), tuple(organisations()), ""
+    except GitHubError as error:
+        login, listed, trouble = "", (), str(error)
+    return Account(login, listed, signed_in, summary, trouble)
+
+
+class AccountLookup(QObject):
+    """Looks the account up on a thread of its own and hands the answer back over a signal.
+
+    The toolkit delivers the signal on its own thread, where windows may be touched.
+    """
+
+    found = Signal(object)
+
+    def start(self) -> None:
+        """Look the account up, without waiting."""
+        threading.Thread(target=self.run, daemon=True, name=f"{APP_NAME}-account").start()
+
+    def run(self) -> None:
+        """Look the account up and report it, reporting the failure instead if the lookup dies."""
+        try:
+            self.found.emit(look_up_account())
+        except Exception as error:  # a window is waiting on the answer, so it has to get one
+            logger.exception("looking up the account failed")
+            self.found.emit(Account(trouble=str(error)[:100]))
 
 
 class SettingsDialog(QDialog):
-    """The settings window. Saving writes the settings file and the login entry, and applies the colours at once."""
+    """The settings window. Saving writes the settings file and the login entry, and applies the colours at once.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    Everything is drawn from the settings file at once. What GitHub knows about the account, the owners to list and
+    the sign-in state, arrives later over a signal unless it was looked up beforehand, so the window never waits.
+    """
+
+    def __init__(self, parent: QWidget | None = None, account: Account | None = None) -> None:
         """Build the window around the settings as they stand.
 
         :param parent: the window this one belongs to, if any
+        :param account: what is already known about the account, or None to look it up now
         """
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} settings")
@@ -70,6 +125,7 @@ class SettingsDialog(QDialog):
         except OSError as error:
             logger.debug("could not put the application's mark on the settings window: {}", error)
         self.config = load_config()
+        self.owner_switches_by_login: dict[str, QCheckBox] = {}
         column = QVBoxLayout(self)
         column.addLayout(self.fields())
         column.addWidget(self.notification_switches())
@@ -80,9 +136,15 @@ class SettingsDialog(QDialog):
         column.addWidget(self.autostart)
         column.addWidget(self.sign_in_state())
         column.addWidget(self.buttons())
+        self.lookup = AccountLookup()
+        self.lookup.found.connect(self.take_account)
+        if account is None:
+            self.lookup.start()
+        else:
+            self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers and the dashboard command."""
+        """Lay out the numbers, the dashboard command and the Also list switch."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -113,36 +175,48 @@ class SettingsDialog(QDialog):
         return group
 
     def owner_switches(self) -> QGroupBox:
-        """Lay out a switch per owner, the account itself and each organisation, on unless the user turned it off.
+        """Lay out the catch-all owner switch, with room under it for a switch per owner once GitHub names them.
 
-        The owners are the account itself and every organisation it belongs to. Off rather than on is what is
-        remembered, so an organisation joined later is watched without a visit here, and pull requests in a
-        repository the account merely contributes to from outside are never lost. One turned off stays listed after
-        the account leaves it, so it can be turned on again.
+        Off rather than on is what is remembered, so an organisation joined later is watched without a visit here,
+        and pull requests in a repository the account merely contributes to are never lost.
         """
         group = QGroupBox("Repository owners to watch", self)
-        column = QVBoxLayout(group)
-        # The catch-all first: every owner not listed below. Off, only the owners ticked below are watched.
+        self.owner_column = QVBoxLayout(group)
         self.others = QCheckBox("Any other owner not listed here", group)
         self.others.setChecked(bool(self.config.get(WATCH_OTHERS_KEY, True)))
-        column.addWidget(self.others)
-        hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
-        try:
-            own = viewer()
-            known = ([own] if own else []) + organisations()
-        except GitHubError as error:
-            own, known = "", []
-            column.addWidget(QLabel(f"Could not list your organisations: {error}", group))
-        listed = known + [login for login in hidden if login.casefold() not in {name.casefold() for name in known}]
-        self.owner_switches_by_login: dict[str, QCheckBox] = {}
-        for login in listed:
-            switch = QCheckBox(f"{login} (your own repositories)" if login == own else login, group)
-            switch.setChecked(login.casefold() not in {name.casefold() for name in hidden})
-            column.addWidget(switch)
-            self.owner_switches_by_login[login] = switch
-        if not listed:
-            column.addWidget(QLabel("GitHub named no owner. Everything you have a hand in is watched.", group))
+        self.owner_column.addWidget(self.others)
+        self.owner_note = QLabel(LOOKING_UP_OWNERS, group)
+        self.owner_note.setWordWrap(True)
+        self.owner_column.addWidget(self.owner_note)
         return group
+
+    def take_account(self, account: Account) -> None:
+        """Fill in what GitHub said: a switch per owner, and the sign-in state.
+
+        The owners are the account itself and every organisation it belongs to. One turned off stays listed after
+        the account leaves it, so it can be turned on again.
+
+        :param account: what GitHub said
+        """
+        hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
+        known = ([account.login] if account.login else []) + list(account.organisations)
+        listed = known + [login for login in hidden if login.casefold() not in {name.casefold() for name in known}]
+        for login in listed:
+            text = f"{login} (your own repositories)" if login == account.login else login
+            switch = QCheckBox(text, self.owner_note.parentWidget())
+            switch.setChecked(login.casefold() not in {name.casefold() for name in hidden})
+            self.owner_column.addWidget(switch)
+            self.owner_switches_by_login[login] = switch
+        if account.trouble:
+            self.owner_note.setText(f"Could not list your organisations: {account.trouble}")
+        elif listed:
+            self.owner_note.hide()
+        else:
+            self.owner_note.setText(NO_OWNERS)
+        inks = palette(chosen_style())
+        self.sign_in.setText(account.sign_in_summary)
+        self.sign_in.setStyleSheet(f"color: {ink(inks, 'green' if account.signed_in else 'red')}")
+        self.adjustSize()
 
     def colour_choices(self) -> QGroupBox:
         """Lay out the choice between following the desktop's theme and insisting on one."""
@@ -159,17 +233,15 @@ class SettingsDialog(QDialog):
         return group
 
     def sign_in_state(self) -> QLabel:
-        """Say whether GitHub is signed in, in colour as well as in words, since that decides whether anything works."""
-        inks = palette(chosen_style())
-        state = QLabel(github_auth_summary(), self)
-        state.setWordWrap(True)
-        state.setStyleSheet(f"color: {ink(inks, 'green') if signed_in() else ink(inks, 'red')}")
-        return state
+        """Lay out the line that says whether GitHub is signed in, coloured once that is known."""
+        self.sign_in = QLabel(CHECKING_SIGN_IN, self)
+        self.sign_in.setWordWrap(True)
+        return self.sign_in
 
     def buttons(self) -> QDialogButtonBox:
-        """Lay out the buttons: sign in, cancel, and the one that commits, which stands out and answers Enter."""
+        """Lay out the buttons: sign in, cancel, and Save, which stands out and answers Enter."""
         box = QDialogButtonBox(self)
-        box.addButton("Sign in to GitHub", QDialogButtonBox.ButtonRole.ActionRole).clicked.connect(self.sign_in)
+        box.addButton("Sign in to GitHub", QDialogButtonBox.ButtonRole.ActionRole).clicked.connect(self.start_sign_in)
         box.addButton(QDialogButtonBox.StandardButton.Cancel)
         box.addButton("Save", QDialogButtonBox.ButtonRole.AcceptRole).setDefault(True)
         box.accepted.connect(self.save_and_close)
@@ -180,15 +252,15 @@ class SettingsDialog(QDialog):
         """Return the theme the user has chosen."""
         return next((value for value, button in self.style_buttons.items() if button.isChecked()), FOLLOW_DESKTOP)
 
-    def sign_in(self) -> None:
-        """Launch an interactive GitHub sign-in in a terminal window."""
+    def start_sign_in(self) -> None:
+        """Start an interactive GitHub sign-in in a terminal window."""
         try:
             open_in_terminal("gh auth login", "gh auth")
         except RuntimeError as error:
             QMessageBox.critical(self, APP_NAME, str(error))
 
     def save_and_close(self) -> None:
-        """Persist the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
+        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()

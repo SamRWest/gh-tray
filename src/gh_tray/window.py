@@ -25,6 +25,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QGuiApplication,
+    QHideEvent,
     QIcon,
     QKeyEvent,
     QKeySequence,
@@ -122,7 +123,7 @@ WIDTH_KEY = "window/characters"
 COLUMN_KEY = "columns/{}/characters"
 
 HINT = (
-    "Click a row to open it, right-click to mark it seen. Click a heading to sort. "
+    "Double-click a row to open it, right-click to mark it seen. Click a heading to sort. "
     "Drag the title to move, an edge to resize. Ctrl and the wheel size the text."
 )
 
@@ -219,9 +220,10 @@ class ChangesWindow(QWidget):
         self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
-        # Nothing is ever selected: a click opens the row and puts the window away, so a selection could only be the
-        # last thing clicked, and the desktop's style draws one as a frame at the edge of every cell in the row.
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        # A click highlights a row, as in any table, and a double click opens it. The table never takes the focus,
+        # because the desktop's style draws focus as a frame at the edge of every cell in the row.
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
@@ -235,7 +237,7 @@ class ChangesWindow(QWidget):
         header.setStretchLastSection(False)
         header.sectionClicked.connect(self.on_heading_clicked)
         header.sectionResized.connect(self.on_column_resized)
-        self.table.cellClicked.connect(self.on_cell_clicked)
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         # Right clicks are seen before the table does anything with them, since the table has no say in marking.
         self.table.viewport().installEventFilter(self)
         self.size_rows()
@@ -474,10 +476,10 @@ class ChangesWindow(QWidget):
                 item.setForeground(QBrush(QColor(colour)))
                 item.setBackground(QBrush(QColor(wash)) if wash else QBrush())
 
-    def on_cell_clicked(self, row: int, _column: int) -> None:
-        """Open the row that was left-clicked on GitHub, and put the window away.
+    def on_cell_double_clicked(self, row: int, _column: int) -> None:
+        """Open the row that was double-clicked on GitHub, and put the window away.
 
-        :param row: which row was clicked
+        :param row: which row was double-clicked
         """
         if 0 <= row < len(self.entries) and self.entries[row].url:
             self.open(self.entries[row].url)
@@ -864,6 +866,14 @@ class ChangesWindow(QWidget):
         """
         self.unsetCursor()
         super().leaveEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Drop the row highlight as the window goes away, so it does not come back with a stale one.
+
+        :param event: the hiding
+        """
+        self.table.clearSelection()
+        super().hideEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         """Draw a line around the window, since without a frame nothing else says where it ends.

@@ -15,13 +15,13 @@ You only need [uv](https://docs.astral.sh/uv/getting-started/installation/) and 
 Then you can either run it straight from GitHub, with nothing permanently installed:
 
 ```bash
-uvx --from git+https://github.com/SamRWest/gh-tray gh-tray
+uvx --refresh --from git+https://github.com/SamRWest/gh-tray gh-tray
 ```
 
 Or install it as a permanent system tool, which puts `gh-tray` on your path:
 
 ```bash
-uv tool install git+https://github.com/SamRWest/gh-tray
+uv tool install --refresh git+https://github.com/SamRWest/gh-tray
 ```
 
 And uninstall using:
