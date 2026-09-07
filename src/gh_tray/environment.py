@@ -49,12 +49,12 @@ def no_console_flag() -> int:
 def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     """Run a command without a console window and return what it printed.
 
-    The encoding is named rather than left to the system. The GitHub tool writes UTF-8 whatever the machine's
-    locale says, so on a Windows console reading it as the local codepage turns a tick into ``a-hat`` and would
-    mangle any non-English pull request title on its way through.
+    The encoding is named rather than left to the system, because the GitHub tool always writes UTF-8. Reading
+    that as a Windows console's local codepage would turn a tick into ``a-hat`` and mangle any non-English pull
+    request title.
 
     A command that fails is returned rather than raised on: every caller here reads the exit code itself, since a
-    tool that is missing, signed out or rate limited says so on the way out.
+    missing, signed-out or rate-limited tool says so on its own way out.
 
     :param command: the program and its arguments
     :param timeout: how long to wait, or None to wait as long as it takes
@@ -80,11 +80,11 @@ _CONSOLE_HANDLERS: list[object] = []
 def on_console_interrupt(stop: Callable[[], None]) -> None:
     """Arrange for something to run when the console asks the process to stop, such as Ctrl+C.
 
-    A plain signal handler is not enough for a tray application. It can only run between Python instructions on
-    the main thread, and the tray's main thread spends its life blocked inside the desktop's message loop, so
-    Ctrl+C would sit undelivered until the next stray mouse movement. Windows offers a console handler instead,
-    called on a thread of its own, which works however busy or idle the main thread is. The signal handler is
-    still installed as well, for platforms where blocking calls are interrupted and it does fire.
+    A plain signal handler is not enough for a tray application. It only runs between Python instructions on the
+    main thread. That thread spends its life blocked inside the desktop's message loop, so Ctrl+C would sit
+    undelivered until the next stray mouse movement. Windows offers a console handler instead, called on a thread
+    of its own; it works however busy or idle the main thread is. The signal handler is still installed too, for
+    platforms where a blocking call is interrupted and it does fire.
 
     :param stop: what to run; it must be safe to call from any thread
     """
@@ -112,9 +112,9 @@ def on_console_interrupt(stop: Callable[[], None]) -> None:
 def hide_from_dock() -> None:
     """Keep this process out of the macOS Dock and the application switcher.
 
-    A process that draws a window or a menu bar item is given a Dock icon unless it says otherwise, and the tray,
-    the hidden changes window and the settings window would each show one reading "Python". Elsewhere there is
-    nothing to do.
+    A process that draws a window or a menu bar item gets a Dock icon unless told otherwise. Without this, the
+    tray, the hidden changes window and the settings window would each show one labelled "Python". On other
+    platforms there is nothing to do.
     """
     if sys.platform != "darwin":
         return
@@ -174,8 +174,8 @@ def notify_by_script(title: str, body: str) -> None:
 def in_utf8(command: str) -> str:
     """Return a Windows command that puts the console into UTF-8 before running.
 
-    A console starts on whatever code page the machine's region asks for, while a program that draws itself out of
-    box characters and icons writes UTF-8 regardless. The two then disagree and the drawing arrives as rubbish.
+    A console starts on whatever code page the machine's region asks for. A program that draws itself out of box
+    characters and icons writes UTF-8 regardless, so the two disagree and the drawing arrives as rubbish.
 
     :param command: the shell command to run
     """
@@ -251,8 +251,9 @@ def launch_command() -> list[str]:
 def start_detached(command: list[str], errors: Path) -> int:
     """Start a command that outlives this process and the terminal it came from, and return its process id.
 
-    On Windows the child would otherwise share this console and go with it; elsewhere a session of its own keeps the
-    hang-up that closing a terminal sends from reaching it. Its error stream goes to a file, since nobody is watching.
+    On Windows the child would otherwise share this console and go down with it. Elsewhere, a session of its own
+    keeps the hang-up that closing a terminal sends from reaching it. Its error stream goes to a file, since
+    nobody is watching.
 
     :param command: the program and its arguments
     :param errors: where to keep whatever the command writes to its error stream
@@ -262,8 +263,8 @@ def start_detached(command: list[str], errors: Path) -> int:
     quiet = subprocess.DEVNULL
     with errors.open("w", encoding="utf-8") as kept:
         if sys.platform == "win32":
-            # A hidden console of its own, which the interpreter behind a venv's launcher inherits. Given no console
-            # at all, that interpreter, a console program, opens a visible one of its own.
+            # Gives the child a hidden console of its own, which the interpreter behind a venv's launcher inherits.
+            # With no console at all, that interpreter, itself a console program, would open a visible one instead.
             flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
@@ -278,8 +279,9 @@ def start_detached(command: list[str], errors: Path) -> int:
 def autostart_path() -> Path:
     """Return the file that makes the tray start at login on this platform.
 
-    The roaming and configuration directories are asked of the environment first, since either can be moved away
-    from its usual place under the home directory, and a file written to the usual place would then never be read.
+    The roaming and configuration directories are read from the environment first, since either can be moved
+    away from its usual place under the home directory. A file written to the usual place would then never be
+    read.
     """
     home = Path.home()
     if sys.platform == "win32":
@@ -322,8 +324,9 @@ def autostart_body(command: list[str]) -> str:
     :param command: the argument vector that starts the tray
     """
     if sys.platform == "win32":
-        # A script is used rather than a shortcut because it can run the command with its window hidden. Doubling
-        # each quote is the VBScript escape, so a path containing spaces survives into the command line quoted.
+        # A script is used rather than a shortcut, because a script can run the command with its window hidden.
+        # Doubling each quote is the VBScript escape, so a path containing spaces survives into the command line
+        # intact.
         quoted = " ".join(f'""{part}""' if " " in part else part for part in command)
         return f'CreateObject("WScript.Shell").Run "{quoted}", 0, False\n'
     if sys.platform == "darwin":
@@ -348,8 +351,8 @@ def autostart_body(command: list[str]) -> str:
 def autostart_encoding() -> str:
     """Return the encoding the login-start file must use on this platform.
 
-    Windows Script Host reads a script as the system codepage unless it finds a byte order mark, so a path holding
-    any non-ASCII character would otherwise be mangled and the entry would fail at login.
+    Windows Script Host reads a script using the system codepage, unless it finds a byte order mark. Without one,
+    a path holding any non-ASCII character would be mangled, and the entry would fail at login.
     """
     return "utf-16" if sys.platform == "win32" else "utf-8"
 
@@ -372,8 +375,9 @@ def set_autostart(enabled: bool) -> None:
 class SingleInstance:
     """An exclusive lock on a file, held for the life of the process so a second tray cannot start.
 
-    File locking is used rather than a stored process id because a stale id can be reused by an unrelated process,
-    whereas a lock is released by the operating system as soon as the holder exits, however it exits.
+    File locking is used rather than a stored process id, because a stale id can be reused by an unrelated
+    process. A lock, by contrast, is released by the operating system as soon as the holder exits, however it
+    exits.
     """
 
     def __init__(self, path: Path) -> None:

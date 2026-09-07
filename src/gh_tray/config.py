@@ -22,15 +22,14 @@ SNAPSHOT_PATH = APP_DIR / "snapshot.json"
 EVENTS_PATH = APP_DIR / "events.jsonl"
 SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
-# Whatever the tray writes to its error stream once it has left the terminal behind, since nobody is watching it.
+# The tray's own error output once it has left the terminal behind, where nobody would otherwise see it.
 STDERR_PATH = APP_DIR / "gh-tray.stderr.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
 # Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
 APP_ICON_PATH = APP_DIR / "gh-tray.png"
-# The width the user last dragged the changes window to, and its column widths, so both survive a restart. Kept by
-# the toolkit's own settings store in its plain text form, alongside everything else rather than wherever the
-# platform would put it.
+# The changes window's last width and column widths, kept so both survive a restart. Stored by the toolkit's own
+# settings store, in plain text, alongside everything else rather than wherever the platform would normally put it.
 LAYOUT_PATH = APP_DIR / "layout.ini"
 
 # A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
@@ -56,12 +55,11 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
-# The owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
-# account has a hand in is watched, so an organisation joined later needs no setting, and a repository the account
-# merely contributes to from outside is never lost.
+# Owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
+# account has a hand in is watched, so a new organisation needs no setting and an outside contribution is never lost.
 HIDDEN_OWNERS_KEY = "hidden_owners"
-# Whether owners not listed in the settings are watched at all. Off, only the listed owners left on are, which the
-# settings write down, since the collector cannot see the list without asking GitHub.
+# Whether owners not listed in the settings are watched at all. When off, only the listed owners left on are watched;
+# this is recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
 # Whether pull requests the account is involved in some other way are listed too, as the dashboard lists them.
@@ -81,8 +79,8 @@ NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
 def login_list(value: object) -> list[str]:
     """Return a list of GitHub logins from a setting, however it was written.
 
-    A hand-edited file may hold one string with commas or spaces between the names rather than a list, and either
-    may repeat a name or carry the @ people write before one.
+    A hand-edited file may hold a comma- or space-separated string instead of a list, with a repeated name or a
+    leading @.
 
     :param value: the setting as read
     """
@@ -125,9 +123,9 @@ def normalise(config: dict) -> dict:
 def merge_stored(config: dict, stored: object) -> dict:
     """Fold a settings document read from disk into the defaults, ignoring anything of the wrong shape.
 
-    A settings file is hand-editable, so it can hold valid JSON that is nonetheless the wrong type. Every such value
-    is dropped with a warning rather than raised, because the settings window is the way to repair the file and a
-    settings error that stops the application starting also stops that window opening.
+    A hand-edited settings file can hold valid JSON of the wrong type. Such values are dropped with a warning rather
+    than raised: an error that stopped the application starting would also block the settings window that could fix
+    the file.
 
     :param config: the defaults, modified in place
     :param stored: whatever was parsed out of the settings file

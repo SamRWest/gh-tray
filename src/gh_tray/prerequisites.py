@@ -1,8 +1,8 @@
 """Checking for the outside tools this application needs, and installing the ones that can be installed safely.
 
-Only installs that manage their own elevation are ever run: a package manager that prompts for administrator rights
-itself, or a GitHub extension that lands in the user's own directory. Anything needing a root shell is printed for
-the user to run, because a desktop application quietly acquiring root is not a thing anyone should have to trust.
+Only installs that manage their own elevation are ever run here: a package manager that prompts for administrator
+rights itself, or a GitHub extension that lands in the user's own directory. Anything needing a root shell is
+printed for the user to run instead, since a desktop application should never quietly acquire root.
 """
 
 from __future__ import annotations
@@ -137,8 +137,8 @@ def requirements() -> list[tuple[Requirement, bool]]:
                 "GitHub sign-in",
                 "without it every call is refused",
                 [],
-                # The protocol it asks about is for git itself and makes no difference here; HTTPS just asks less.
-                manual="run: gh auth login (answer HTTPS to the protocol question: SSH only adds key questions)",
+                # The protocol question is about git itself and makes no difference here; HTTPS just asks less.
+                manual="run: gh auth login (choose HTTPS; SSH only adds extra key questions)",
             ),
             signed_in(),
         ),
@@ -151,8 +151,8 @@ def requirements() -> list[tuple[Requirement, bool]]:
             ),
             gh_dash_installed(),
         ),
-        # Last, and only where there is anything to check: without it the toolkit stops the tray with a page of its
-        # own complaints, which this says in one line instead.
+        # Checked last, and only where relevant: without this, the toolkit stops the tray with a page of its own
+        # complaints, which this reports in one line instead.
         *(
             [
                 (

@@ -85,7 +85,7 @@ def test_a_desktop_without_a_notification_service_is_told_by_script(monkeypatch)
 
 
 def test_the_notification_service_is_there_for_the_asking_off_macos():
-    # macOS hands Notification Center to app bundles alone; everywhere else the service is always offered.
+    # macOS hands Notification Center to app bundles alone. Everywhere else the service is always offered.
     if sys.platform == "darwin":
         pytest.skip("whether a Mac offers the service depends on how Python was installed")
     assert notifier.notification_center_available() is True

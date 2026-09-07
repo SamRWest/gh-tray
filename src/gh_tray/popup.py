@@ -1,13 +1,13 @@
 """What the changes window lists: the rows, in what order, in which inks, and what is remembered about them.
 
-The list is what changed since the user last looked, then what is merely waiting on them. Changes alone would leave
-the window saying "nothing" on a quiet day while three reviews sat in the queue, which is the opposite of useful.
+The list shows what changed since the user last looked, then what is merely waiting on them. Changes alone would
+leave the window saying "nothing" on a quiet day while three reviews sat in the queue.
 
-A row is drawn as seen once it has been marked, and as unseen again if anything happens to it afterwards.
+A row is drawn as seen once marked, and as unseen again if anything happens to it afterwards.
 
 Nothing here draws. Rows carry the names of the inks they are drawn in, and the window looks each up in the palette
-of whichever theme the desktop is set to at the time, so following the desktop from dark to light never means
-building the rows again.
+of whichever theme the desktop is set to, so following the desktop from dark to light never means rebuilding the
+rows.
 """
 
 from __future__ import annotations
@@ -43,13 +43,13 @@ ROUTINE = "amber"
 GOOD = "green"
 QUIET = "muted"
 
-# How strongly a row is drawn once the user has seen it. This is the only thing that dims a row: how old something
-# is has a scale of its own in the date column, and dimming for that as well left two rows of the same sort looking
-# different for a reason nobody could name.
+# How strongly a row is drawn once the user has seen it. This is the only thing that dims a row: age already has
+# its own scale in the date column, and dimming for that too left two rows of the same sort looking different for
+# no nameable reason.
 SEEN_STRENGTH = 0.58
 
 # One hue per sort of change, so a glance down the window tells them apart before a word is read. Anything not
-# named here falls back to red when it blocks somebody and amber otherwise.
+# named here falls back to red when it blocks somebody, amber otherwise.
 KIND_COLOURS: dict[str, str] = {
     "review_requested": "orange",
     "ci_broken": "red",
@@ -108,8 +108,7 @@ class Row:
     who: str
     when: str
     url: str
-    # The name of the ink the row is drawn in, looked up in the palette of whichever theme is current when it is
-    # drawn.
+    # The name of the ink the row is drawn in, looked up in the palette of whichever theme is current.
     colour: str
     at: str = ""
     seen: bool = False
@@ -125,9 +124,9 @@ class Row:
 
 
 # The inks a name can be drawn in. Every name, whether a person's, an organisation's or a repository's, is dealt one
-# by a stable digest of its spelling, so the same name reads as the same colour in every row, every showing and every
-# restart, and rows about the same organisation or repository group by eye. In these columns a colour is an identity
-# tag and carries none of the meaning the Change column gives it.
+# by a stable digest of its spelling, so it reads as the same colour in every row, every showing and every restart,
+# and rows about the same organisation or repository group by eye. Here a colour is only an identity tag; it carries
+# none of the meaning the Change column gives it.
 NAME_COLOURS: tuple[str, ...] = ("blue", "green", "violet", "orange", "pink", "amber", "red")
 
 
@@ -141,9 +140,9 @@ def name_colour(name: str) -> str:
     return NAME_COLOURS[zlib.crc32(name.encode("utf-8")) % len(NAME_COLOURS)]
 
 
-# The mark at the head of a row: filled while it still wants attention, hollow once seen. A plain shape rather than
-# a coloured emoji, which is drawn from the font in one colour whatever the character is. Drawn in the row's own
-# colour, this one is the filled colour those were meant to be.
+# The mark at the head of a row: filled while it still wants attention, hollow once seen. A plain shape, not a
+# coloured emoji, because the font draws an emoji in one fixed colour whatever the character is. Drawn in the row's
+# own colour instead, so the mark carries the colour an emoji could not.
 UNSEEN_GLYPH = "●"
 SEEN_GLYPH = "○"
 GLYPHS = (UNSEEN_GLYPH, SEEN_GLYPH)
@@ -203,10 +202,9 @@ def days_old(stamp: str, now: datetime | None = None) -> float:
 def age_colour(stamp: str, inks: Palette, now: datetime | None = None) -> str:
     """Return the colour a date is drawn in: blue for just-happened, through violet, to red for long-forgotten.
 
-    The scale is by the logarithm of the age rather than the age itself, because the difference between an hour and
-    a day matters and the difference between forty and fifty weeks does not. It runs through violet rather than
-    straight from one end to the other, because mixing blue directly into red passes through grey and the middle of
-    the scale stops saying anything.
+    The scale runs on the logarithm of the age, not the age itself, because an hour versus a day matters far more
+    than forty weeks versus fifty. It passes through violet rather than straight from blue to red, since mixing
+    those two directly passes through grey and the middle of the scale would say nothing.
 
     :param stamp: when it happened
     :param inks: the palette of the theme being drawn in
@@ -297,8 +295,8 @@ def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str,
 
     These fill the window when little has changed lately, so it never says "nothing" while a review is waiting.
 
-    Only a mark on the row itself dims one of these. A review that has been waiting a fortnight is still waiting,
-    however long ago the user last cleared the list, so the moment of that clearing says nothing about it.
+    Only a mark on the row itself dims one of these. A review waiting a fortnight is still waiting no matter when
+    the user last cleared the list, so that moment says nothing about it.
 
     :param entries: pull requests as the last poll recorded them
     :param already_listed: addresses of pull requests a change has already put in the list
@@ -369,9 +367,9 @@ def one_per_pull_request(rows: list[Row]) -> list[Row]:
 def rows_to_show(count: int) -> list[Row]:
     """Return the lines to list: what changed since the user last looked, plus what is waiting on them.
 
-    Standing state is included, so the window is useful even on a quiet day and never disagrees with the hover
-    summary about whether anything wants attention. The whole list is then ordered newest first, so the most recent
-    thing is at the top wherever it came from, and thinned to one row per pull request.
+    Standing state is included, so the window stays useful on a quiet day and never disagrees with the hover summary
+    about whether anything wants attention. The list is then ordered newest first and thinned to one row per pull
+    request.
 
     :param count: how many rows to return at most
     """

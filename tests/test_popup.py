@@ -1,7 +1,7 @@
 """What the click-through window decides to show, and how it marks what is still unread.
 
-The window itself is not built here: drawing it needs a display, and the parts worth protecting are the choice of
-rows and their marking, both of which are ordinary functions.
+The window itself is not built here: drawing it needs a display. What is worth testing is the choice of rows and
+their marking, both of which are ordinary functions.
 """
 
 from __future__ import annotations

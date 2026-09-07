@@ -19,8 +19,8 @@ SNAPSHOT_VERSION = 4
 def read_snapshot() -> tuple[dict | None, bool]:
     """Return the snapshot written by the previous poll.
 
-    A missing snapshot and an unusable one are reported separately, because only the first is a genuine fresh start.
-    Treating a damaged file as a fresh start would mark every unread change as seen.
+    A missing snapshot and an unusable one are reported separately, since only the first is a genuine fresh start.
+    Treating a damaged file as a fresh start would wrongly mark every unread change as seen.
 
     :return: the stored entries, and whether a snapshot existed but could not be used
     """

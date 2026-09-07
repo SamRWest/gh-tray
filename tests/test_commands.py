@@ -1,9 +1,9 @@
 """Every command can reach what it imports.
 
-The commands that open a window import it inside the function, so the cost of a window toolkit is not paid by a
-command that never opens one. The price of that is a rename which moves the target going unnoticed: nothing fails
-until somebody runs the command, and the window opens as its own process with no console, so the failure is
-silent. These cases resolve each of those imports without running anything.
+The commands that open a window import it inside the function. This way, a command that never opens a window
+does not pay the cost of loading the toolkit. The price is that a rename moving an import's target can go
+unnoticed: nothing fails until someone runs the command. The window then opens as its own process with no
+console, so the failure is silent. These cases resolve every such import without running anything.
 """
 
 from __future__ import annotations

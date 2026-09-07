@@ -1,8 +1,8 @@
 """Reading and writing the small state files this application keeps.
 
-Every write goes to a temporary file first and is then moved into place. A process killed part way through a plain
-write leaves a truncated file behind, and a truncated state file is worse than a missing one: it reads as valid but
-incomplete, so the change history it describes is silently wrong.
+Every write goes to a temporary file first, then is moved into place. A process killed part way through a plain
+write leaves a truncated file behind. A truncated state file is worse than a missing one: it reads as valid but
+incomplete. So the change history it describes is silently wrong.
 """
 
 from __future__ import annotations
@@ -14,9 +14,10 @@ from pathlib import Path
 
 from loguru import logger
 
-# How many times, and how long apart, to retry moving a finished file into place. On Windows a file another program
-# is reading cannot be replaced, and a virus scanner opening everything written is enough to cause that. It lasts a
-# few tens of milliseconds, so waiting rides it out; anything longer is a real problem and is raised.
+# How many times, and how long apart, to retry moving a finished file into place. On Windows a file another
+# program is reading cannot be replaced. A virus scanner that opens everything written is enough to cause that.
+# It lasts only a few tens of milliseconds, so waiting rides it out. Anything longer is a real problem and is
+# raised.
 REPLACE_ATTEMPTS = 5
 REPLACE_PAUSE_SECONDS = 0.05
 

@@ -32,31 +32,30 @@ TITLE_LIMIT = 50
 # A failed poll is usually a transient GitHub error, so the next attempt comes sooner than a normal interval.
 RETRY_FRACTION = 4
 MINIMUM_WAIT_SECONDS = 60
-# How often the toolkit's loop is nudged so that Python gets to run a signal handler. That is what lets Ctrl+C in
-# the terminal that started the tray stop it on the platforms that have no console handler to offer.
+# How often the toolkit's loop is nudged so Python can run a signal handler. This lets Ctrl+C in the terminal
+# that started the tray stop it, on platforms with no console handler of their own.
 HEARTBEAT_MS = 500
 
 
 def open_dashboard(config: dict) -> None:
     """Open the terminal dashboard maximised, or whichever command the settings name instead.
 
-    A command named in the settings is run as given, since how its own window opens is then the user's business.
+    A command named in settings runs exactly as typed, so how its window opens is then up to the user.
     """
     if config.get("dashboard_command"):
-        # Through a shell on purpose: this is a command line the user typed into their own settings, and running it
-        # any other way would refuse the pipes, quoting and arguments that make it worth setting at all.
+        # Run through a shell on purpose: this is a command line the user typed into their own settings, and any
+        # other way of running it would break the pipes, quoting and arguments that make it worth setting at all.
         subprocess.Popen(config["dashboard_command"], shell=True)  # noqa: S602
         return
     open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", maximised=True)
 
 
 class Poller(QObject):
-    """Polls GitHub on the configured interval, sooner when asked, and reports each result from a thread of its own.
+    """Polls GitHub on the configured interval, or sooner when asked, and reports each result from its own thread.
 
-    Polling runs on a background thread so the icon and its menu stay responsive while GitHub is slow. Each result
-    is handed back over a signal, which the toolkit delivers on its own thread, where the icon and the window may
-    be touched. Polls are serialised by there being one thread: two at once would run two collectors against the
-    same baseline and announce the same change twice.
+    Polling runs on a background thread so the icon and menu stay responsive while GitHub is slow. Each result
+    comes back over a signal, which the toolkit delivers on its own thread, where the icon and window may safely
+    be touched. Only one thread ever polls, so two polls can never run at once and report the same change twice.
     """
 
     polled = Signal(object)
@@ -120,7 +119,7 @@ class Poller(QObject):
 class Tray(QObject):
     """The tray icon, its menu, the changes window, and the poller that keeps them current."""
 
-    # Raised from whatever thread a console interrupt arrives on, so that quitting happens on the toolkit's thread.
+    # Raised from whichever thread a console interrupt arrives on, so quitting happens on the toolkit's own thread.
     quit_asked = Signal()
 
     def __init__(self) -> None:
@@ -137,8 +136,8 @@ class Tray(QObject):
         self.poller.failed.connect(self.on_failed)
         self.icon = QSystemTrayIcon(icon_from(build_image(GREY, 0)), self)
         self.icon.setToolTip(f"{APP_NAME} - starting")
-        # The menu is the application's own and is never handed to the desktop's tray. A desktop given a menu tends
-        # to open it on every button, and the left click that should show the window never reaches the application.
+        # The menu belongs to the application and is never handed to the desktop's tray. A desktop given a menu
+        # tends to open it on every click, so the left click that should show the window would never arrive.
         # Instead the menu is shown here on a right click, where the desktop reports one, and from the window.
         self.menu = QMenu()
         self.icon.activated.connect(self.on_activated)
@@ -162,8 +161,8 @@ class Tray(QObject):
     def build_menu(self) -> None:
         """Rebuild the right-click menu against the current status and unread events."""
         self.menu.clear()
-        # Clearing removes the entries but not a submenu, which stays a child of the menu, so a rebuild on every
-        # poll would otherwise leave a review list behind each time.
+        # Clearing removes the actions but not a submenu, which stays a child of the menu. Without this, each
+        # poll's rebuild would leave an old review list behind.
         for stale in self.menu.findChildren(QMenu):
             stale.deleteLater()
         self.menu.addAction(summary_line(self.status)).setEnabled(False)
@@ -227,8 +226,8 @@ class Tray(QObject):
             result.error,
         )
         self.repaint()
-        # Notifying happens on a thread of its own. It talks to the desktop's notification service, which is outside
-        # this application's control, and once wedged it would otherwise take the whole application with it.
+        # Notifying runs on its own thread. It talks to the desktop's notification service, which this application
+        # does not control, so a hang there must not take the whole application down with it.
         if result.events:
             threading.Thread(
                 target=self.notifier.notify,
@@ -276,8 +275,8 @@ class Tray(QObject):
     def on_dashboard(self, *_) -> None:
         """Open the dashboard.
 
-        Opening it says nothing about what the user has read, so nothing is marked seen. Rows are marked by
-        clicking them in the changes window, and everything at once from this menu.
+        Opening it says nothing about what the user has read, so it marks nothing seen. Rows are marked seen by
+        clicking them in the changes window, or all at once with this menu's "Mark all seen" entry.
         """
         try:
             open_dashboard(self.config)
@@ -317,14 +316,14 @@ class Tray(QObject):
         self.settings.activateWindow()
 
     def on_settings_saved(self) -> None:
-        """Take up the saved settings: the colours at once, and the rest on the next poll."""
+        """Apply the saved settings: colours change at once, everything else on the next poll."""
         self.config = load_config()
         self.window.on_scheme_changed()
 
     def on_settings_closed(self, _result: int) -> None:
-        """Forget the settings window once it is closed, and look the account up again for the next one.
+        """Forget the settings window once closed, and look up the account again for next time.
 
-        A sign-in or a new organisation between two openings is caught this way.
+        This way, a sign-in or a newly joined organisation between two openings is caught.
         """
         self.settings = None
         self.account = None

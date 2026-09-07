@@ -1,7 +1,7 @@
 """The login-start file must be valid for its platform, including for awkward installation paths.
 
-Each case parses the generated file back with the parser that platform actually uses, so a malformed file fails the
-test rather than failing silently at login where nobody would see it.
+Each case parses the generated file back with the parser that platform actually uses. This way a malformed file
+fails the test, rather than failing silently at login where nobody would see it.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ def test_the_macos_agent_passes_the_property_list_checker(command, monkeypatch, 
 
 @pytest.mark.skipif(not shutil.which("cscript"), reason="the script host is only on Windows")
 def test_the_windows_script_runs_under_the_script_host(monkeypatch, tmp_path):
-    # Run for real with a command that does nothing, so a script the host cannot parse fails here rather than at login.
+    # Run for real with a harmless command, so a script the host cannot parse fails here, not at login.
     monkeypatch.setattr(environment.sys, "platform", "win32")
     target = tmp_path / "gh-tray.vbs"
     target.write_text(environment.autostart_body(["cmd", "/c", "exit"]), encoding=environment.autostart_encoding())

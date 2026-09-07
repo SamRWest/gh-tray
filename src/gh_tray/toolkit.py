@@ -1,7 +1,7 @@
 """Starting the toolkit, and the little of it the tray and both windows share.
 
-The toolkit is the user interface library. It draws the windows in the desktop's own colours and follows the desktop
-between light and dark, which is why the windows carry no palette of their own beyond the inks in :mod:`theme`.
+The toolkit is the user interface library. It draws the windows in the desktop's own colours and follows it between
+light and dark, so the windows carry no palette of their own beyond the inks in :mod:`theme`.
 """
 
 from __future__ import annotations
@@ -43,10 +43,10 @@ def route_toolkit_messages() -> None:
 
 
 def application() -> QApplication:
-    """Return the application object, starting the toolkit if nothing has yet.
+    """Return the application object, starting the toolkit if it has not started yet.
 
-    Closing the last window must not quit: the tray has no window up most of the time, and the settings window is
-    closed far more often than the tray is.
+    Closing the last window must not quit: the tray has no window up most of the time, and the settings window
+    closes far more often than the tray does.
     """
     running = QApplication.instance()
     if isinstance(running, QApplication):
@@ -86,8 +86,8 @@ def base_font() -> QFont:
 class FontZoom(QObject):
     """Ctrl and the mouse wheel change the size of every window's text, and the change is remembered.
 
-    Installed on the application, so it sees the wheel before whichever widget is under the pointer does, and a
-    table, a spin box and a button all zoom alike. Only the font changes: the widgets take their sizes from it, so
+    Installed on the application, so it sees the wheel before whichever widget is under the pointer does. This way
+    a table, a spin box and a button all zoom alike. Only the font changes; widgets take their sizes from it, so
     rows, headings and buttons follow. Ctrl and 0 put the text back to the platform's own size.
     """
 
@@ -152,7 +152,7 @@ class FontZoom(QObject):
         self.step(-self.steps)
 
     def apply(self) -> None:
-        """Set the application's font to the platform's own, taken the remembered number of steps larger or smaller."""
+        """Set the application's font to the platform's own size, adjusted by the remembered number of zoom steps."""
         font = QFont(base_font())
         if font.pointSize() > 0:
             font.setPointSize(max(1, font.pointSize() + self.steps))
@@ -160,9 +160,9 @@ class FontZoom(QObject):
             font.setPixelSize(max(1, font.pixelSize() + self.steps))
         app = application()
         app.setFont(font)
-        # The application's font reaches the windows already up in their own time, and sizes taken from them straight
-        # afterwards would be a step behind, so each is handed the font here and now. Windows built later take it
-        # from the application.
+        # Windows already open pick up the application's font in their own time, so reading their size right after
+        # this call would be a step behind. Each open window is handed the font directly, here and now. Windows
+        # built later take it from the application automatically.
         for shown in app.topLevelWidgets():
             shown.setFont(font)
 
@@ -171,19 +171,19 @@ class FontZoom(QObject):
         application().removeEventFilter(self)
 
 
-# The widget style that draws light whatever scheme it is given, which is the one Windows before 11 starts with, and
-# the style that draws whichever it is given everywhere.
+# The widget style that always draws light, whatever scheme it is given (the one Windows before 11 starts with),
+# and the style that draws whichever scheme it is given, on any platform.
 STYLE_THAT_STAYS_LIGHT = "windowsvista"
 SCHEME_FOLLOWING_STYLE = "Fusion"
-# The application remembers the widget style it started with under this name, so that light can go back to it.
+# The application remembers the widget style it started with under this name, so light can go back to it.
 STARTING_STYLE_PROPERTY = "starting_style"
 
 
 def wanted_scheme(style: str) -> Qt.ColorScheme:
-    """Return the scheme the windows should be drawn in: the one insisted on, or the desktop's, or dark.
+    """Return the scheme to draw the windows in: the one insisted on, else the desktop's, else dark.
 
-    Dark is what a desktop that cannot be told gets, as it is for the row inks, so the two agree. A server edition of
-    Windows is one such desktop: it lacks the setting the toolkit reads.
+    A desktop that cannot report its scheme gets dark, matching the row inks. A server edition of Windows is one
+    such desktop: it lacks the setting the toolkit reads.
 
     :param style: ``dark``, ``light``, or anything else to follow the desktop
     """
@@ -222,10 +222,10 @@ def dark_palette() -> QPalette:
 
 
 def follow_theme_setting(style: str) -> None:
-    """Draw the windows dark or light as the settings say, or as the desktop is, taking a style that can if need be.
+    """Draw the windows dark or light as settings say, or as the desktop is, switching style if needed.
 
-    The widget style Windows starts with before 11 draws light whatever it is told, so where dark is wanted under it
-    the windows take the toolkit's own style instead, and go back when light is wanted again.
+    The widget style Windows starts with before version 11 always draws light. Where dark is wanted under that
+    style, the windows switch to the toolkit's own style instead, and switch back when light is wanted again.
 
     :param style: ``dark``, ``light``, or anything else to follow the desktop
     """
@@ -239,7 +239,7 @@ def follow_theme_setting(style: str) -> None:
         app.setStyle(SCHEME_FOLLOWING_STYLE)
     elif app.style().name() != starting:
         app.setStyle(starting)
-    # A platform that will not be told a scheme is handed a palette instead, and given the style's own back for light.
+    # A platform that ignores a requested scheme is given a palette instead, and the style's own palette for light.
     if QGuiApplication.styleHints().colorScheme() != scheme:
         app.setPalette(dark_palette() if scheme == Qt.ColorScheme.Dark else app.style().standardPalette())
     logger.debug("theme setting {!r}: drawing {} in the {} style", style, scheme.name, app.style().name())

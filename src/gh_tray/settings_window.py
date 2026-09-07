@@ -1,4 +1,4 @@
-"""The settings window: polling, notification rules, the dashboard command, owners, colours, login start and sign-in."""
+"""The settings window: polling, notifications, dashboard command, owners, colours, login start and sign-in."""
 
 from __future__ import annotations
 
@@ -44,8 +44,8 @@ from .status import write_app_icon
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
 from .toolkit import FontZoom, application, follow_theme_setting, layout_store
 
-# The numeric settings and their labels. The ranges come from the settings module, so the window cannot accept
-# what the settings would then clamp.
+# The numeric settings and their labels. Ranges come from the settings module, so the window cannot accept a value
+# the settings would clamp anyway.
 NUMBER_FIELDS = {
     "poll_minutes": "Poll every (minutes)",
     "max_age_days": "Hide pull requests older than (days, 0 = keep all)",
@@ -108,8 +108,8 @@ class AccountLookup(QObject):
 class SettingsDialog(QDialog):
     """The settings window. Saving writes the settings file and the login entry, and applies the colours at once.
 
-    Everything is drawn from the settings file at once. What GitHub knows about the account, the owners to list and
-    the sign-in state, arrives later over a signal unless it was looked up beforehand, so the window never waits.
+    The settings load immediately from the settings file. Account details, the owners to list and the sign-in state
+    arrive later over a signal, unless already known, so the window never has to wait.
     """
 
     def __init__(self, parent: QWidget | None = None, account: Account | None = None) -> None:
@@ -123,7 +123,7 @@ class SettingsDialog(QDialog):
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
-            logger.debug("could not put the application's mark on the settings window: {}", error)
+            logger.debug("could not set the settings window's icon: {}", error)
         self.config = load_config()
         self.owner_switches_by_login: dict[str, QCheckBox] = {}
         column = QVBoxLayout(self)
@@ -175,10 +175,10 @@ class SettingsDialog(QDialog):
         return group
 
     def owner_switches(self) -> QGroupBox:
-        """Lay out the catch-all owner switch, with room under it for a switch per owner once GitHub names them.
+        """Lay out the catch-all owner switch, with room below it for one switch per owner once GitHub lists them.
 
-        Off rather than on is what is remembered, so an organisation joined later is watched without a visit here,
-        and pull requests in a repository the account merely contributes to are never lost.
+        Only turned-off owners are remembered. An organisation joined later is then watched without a visit here,
+        and a repository the account merely contributes to is never lost.
         """
         group = QGroupBox("Repository owners to watch", self)
         self.owner_column = QVBoxLayout(group)
@@ -191,12 +191,12 @@ class SettingsDialog(QDialog):
         return group
 
     def take_account(self, account: Account) -> None:
-        """Fill in what GitHub said: a switch per owner, and the sign-in state.
+        """Fill in what GitHub reported: a switch per owner, and the sign-in state.
 
-        The owners are the account itself and every organisation it belongs to. One turned off stays listed after
-        the account leaves it, so it can be turned on again.
+        Owners are the account itself plus every organisation it belongs to. A switch turned off stays listed even
+        after the account leaves that organisation, so it can be turned back on.
 
-        :param account: what GitHub said
+        :param account: what GitHub reported
         """
         hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
         known = ([account.login] if account.login else []) + list(account.organisations)

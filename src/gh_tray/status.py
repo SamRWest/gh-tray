@@ -26,8 +26,8 @@ ICON_CORNER = 16
 # The field the mark sits on, which fades down the square rather than sitting flat.
 ICON_TOP = "#2e343d"
 ICON_BOTTOM = "#1e232a"
-# Each row: how far down it sits, how long its bar is, and its colour, being the three the window uses for what
-# wants attention.
+# Each row: how far down it sits, how long its bar is, and its colour, the same three colours the window uses for
+# what wants attention.
 ICON_ROWS = ((19, 22, "#ff7b72"), (32, 15, "#ffa657"), (45, 19, "#5ddb6f"))
 ICON_DOT_X = 18
 ICON_DOT_RADIUS = 5
@@ -126,9 +126,9 @@ def fading_field(size: int) -> Image.Image:
 def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
     """Draw the application's own mark: three coloured dots as three rows of a list.
 
-    The same design as ``data/icon.svg``, which is the editable original. The desktops and the notification
-    service want a raster image, and drawing it here avoids carrying a renderer for
-    vector graphics along with its native libraries just to produce one small picture.
+    The same design as ``data/icon.svg``, the editable original. Desktops and the notification service want a
+    raster image, and drawing it here avoids bundling a vector-graphics renderer and its native libraries just to
+    produce one small picture.
 
     :param size: how many pixels square to draw it
     """

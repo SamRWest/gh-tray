@@ -2,9 +2,9 @@
 
 Clicking a notification opens the pull request it is about in the default browser.
 
-Notifications are raised from a long-lived event loop on its own thread. The platform backend calls back into the
-sending loop when a notification is clicked or dismissed, which can happen long after the send returns, so a loop
-that is closed straight after sending would raise on that callback and no click could ever be handled.
+Notifications are raised from a long-lived event loop on its own thread. The platform backend calls back into that
+loop when a notification is clicked or dismissed, which can happen long after the send returns. A loop closed right
+after sending would raise on that callback and no click could ever be handled.
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ SEND_TIMEOUT_SECONDS = 30
 def own_icon() -> Icon | None:
     """Return the application's own mark for a notification to carry, or nothing if it cannot be drawn.
 
-    Without one the notification service falls back to the icon of whatever program raised it, which for a Python
-    application is the Python logo: nothing to do with this application and no help in telling it apart.
+    Without one, the notification service falls back to the icon of whatever process raised it: the Python logo for
+    a Python application. That has nothing to do with this application and does not help tell it apart.
 
     :return: the icon, or None where drawing it failed
     """
@@ -67,13 +67,13 @@ class Notifier:
     def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, DesktopNotifier | None]:
         """Return the running loop and backend, starting them on first use.
 
-        Nothing slow or unpredictable happens while the lock is held: the icon is drawn first, and everything this
-        needs is imported when the module is. Doing either inside the lock, on the thread that also holds the poll
-        lock, is what wedged the whole application once.
+        Nothing slow or unpredictable happens while the lock is held: the icon is drawn first, and everything else
+        needed is imported at module load. Doing either inside the lock, on the thread that also holds the poll
+        lock, once wedged the whole application.
 
         Both values are read inside the lock and returned as locals, so a concurrent stop cannot leave the caller
-        holding a half-torn-down pair. Once stopped, nothing is started again: a notification after shutdown would
-        otherwise raise a fresh loop and thread that nobody would ever stop.
+        with a half-torn-down pair. Once stopped, nothing starts again: a notification after shutdown would
+        otherwise spawn a fresh loop and thread that nobody would ever stop.
 
         :return: the event loop and the desktop notifier bound to it, or a pair of None once stopped
         """
@@ -111,7 +111,7 @@ class Notifier:
         """Return the page a click on the notification should open.
 
         The notification lists changes in the order they were detected, so the first one carrying a page is the one
-        the reader sees at the top and the one a click most plausibly means.
+        the reader sees first and the one a click most likely means.
 
         :param events: the changes the notification describes
         :return: the address to open, empty when none of them carries one

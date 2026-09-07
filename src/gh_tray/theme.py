@@ -1,12 +1,12 @@
-"""The inks the windows draw with, in a dark and a light set, following whichever theme the desktop is set to.
+"""The inks windows draw with, in a dark and a light set, following whichever theme the desktop is set to.
 
-The toolkit paints the windows themselves in the desktop's own colours. What is kept here is the colour a row is
-given for what it is: the reds and ambers of the Change column, the hue a name is dealt, the scale a date is drawn
-on, and the wash a finished pull request sits on. Each comes in a dark and a light form, since a red that reads on
-a near-black ground is lost on white.
+The toolkit paints the windows themselves in the desktop's own colours. This module holds the colour for what a row
+means: the reds and ambers of the Change column, the hue dealt to a name, the scale a date is drawn on, and the wash
+behind a finished pull request. Each has a dark and a light form, since a red that reads on near-black is lost on
+white.
 
-Colours are named for what they mean rather than for what they look like, so the same name can be a pale red on a
-white background and a bright one on a dark background without any caller having to know which it got.
+Inks are named for what they mean rather than what they look like, so the same name gives a pale red on white and a
+bright one on dark without the caller needing to know which.
 """
 
 from __future__ import annotations
@@ -26,19 +26,20 @@ CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 class Palette:
     """The inks for one theme, and the grounds they are checked against.
 
-    The grounds are what a desktop typically paints a window in that theme. Every ink here reads at 4.5 to 1 or
-    better on both, which a test holds it to, so nothing depends on a well-adjusted monitor. The windows blend
-    towards the colour the toolkit actually painted them, so the grounds are a standard rather than something drawn.
+    The grounds are what a desktop typically paints a window in that theme. A test holds every ink here to a
+    contrast of 4.5 to 1 or better on both, so legibility does not depend on a well-adjusted monitor. Windows blend
+    towards whatever ground the toolkit actually painted, so these grounds are a reference standard, not a colour
+    that gets drawn.
     """
 
     dark: bool
     background: str
     surface: str
-    # The quiet ink, for a status nobody need act on and a name nobody has. Tinted towards its ground rather than
+    # The quiet ink, for a status needing no action and a name nobody has. Tinted towards its ground rather than
     # plain grey, which would read as switched off rather than merely quiet.
     muted: str
-    # One hue per sort of thing, so a glance down the window tells them apart without reading a word. They are
-    # bright enough to stay themselves when dimmed for a row already seen, which a muted colour does not.
+    # One hue per sort of thing, so a glance down the window tells them apart without reading a word. Bright enough
+    # to stay themselves when dimmed for an already-seen row, which a muted colour would not.
     red: str
     orange: str
     amber: str
@@ -46,8 +47,8 @@ class Palette:
     blue: str
     violet: str
     pink: str
-    # The two ends of the scale a date is drawn on: blue for something that just happened, through to red for
-    # something long forgotten, so age reads at a glance rather than as two shades of the same thing.
+    # The two ends of the date scale: blue for something that just happened, red for something long forgotten. Age
+    # reads at a glance rather than as two shades of the same thing.
     fresh: str
     stale: str
 
@@ -111,7 +112,7 @@ def ink(inks: Palette, name: str) -> str:
     """Return the colour a named ink is in a palette.
 
     Rows carry the names of their inks rather than the colours, so a window can follow the desktop from dark to
-    light without the rows having to be built again.
+    light without rebuilding them.
 
     :param inks: the palette of the theme being drawn in
     :param name: the ink's name, which is one of the palette's fields
@@ -122,8 +123,8 @@ def ink(inks: Palette, name: str) -> str:
 def is_dark() -> bool:
     """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told.
 
-    Asked of the toolkit, which reads the desktop's setting on every platform and needs the application to exist
-    first. It is imported here rather than at the top, so a command that opens no window never loads it.
+    Asks the toolkit, which reads the desktop's setting on every platform but needs the application to exist first.
+    Imported here, not at the top, so a command that opens no window never loads it.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication

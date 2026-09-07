@@ -12,9 +12,9 @@ from PySide6.QtGui import QGuiApplication
 from gh_tray import theme
 from gh_tray.theme import blend
 
-# The offscreen platform used for testing has no real desktop behind it, so QStyleHints.setColorScheme() is a no-op
-# and colorScheme() always reads back Unknown; is_dark() is exercised by replacing what colorScheme() itself
-# returns, which needs a QApplication to exist first (an implicit dependency every test below carries via qapp).
+# The offscreen platform used for testing has no real desktop, so QStyleHints.setColorScheme() is a no-op and
+# colorScheme() always reads back Unknown. is_dark() is tested instead by replacing what colorScheme() returns,
+# which needs a QApplication to exist first (an implicit dependency every test below carries via qapp).
 
 
 def forced_scheme(qapp, monkeypatch, scheme: Qt.ColorScheme) -> None:

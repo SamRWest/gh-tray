@@ -1,11 +1,10 @@
-"""Talking to GitHub through the signed-in command line tool.
+"""Talks to GitHub through the signed-in command line tool.
 
-The tool is used rather than the web interface directly so that this application never handles a token: it borrows
-whatever the user has already signed in with, and stops working the moment they sign out, which is what anyone
-would expect.
+The tool is used instead of the web interface directly, so this application never handles a token. It borrows
+whatever the user has already signed in with, and stops working the moment they sign out, as anyone would expect.
 
-Every call goes out and comes back as JSON. Failures are raised as one exception type carrying a description short
-enough to put in front of a user, since the caller turns them into a line of hover text.
+Every call goes out and comes back as JSON. Failures are raised as one exception type, carrying a description
+short enough to put in front of a user, since the caller turns it into a line of hover text.
 """
 
 from __future__ import annotations
@@ -90,8 +89,8 @@ def looks_permanent(description: str) -> bool:
     """Return whether a failure is one a retry cannot fix.
 
     GitHub names the status it answered with. Anything in the client-error range means the request itself is the
-    problem - the thing is deleted, private, or never existed - and asking again gets the same answer. The one
-    exception is the too-many-requests status, which is exactly what retrying with a pause is for.
+    problem: the thing is deleted, private, or never existed, and asking again gets the same answer. The one
+    exception is the too-many-requests status, which is exactly what a paused retry is for.
 
     :param description: the failure as :func:`first_error_line` reported it
     """
@@ -101,9 +100,9 @@ def looks_permanent(description: str) -> bool:
 def api(path: str) -> object:
     """Fetch one REST path, retrying while GitHub is unhappy.
 
-    Retried for the same reason the query path is: GitHub fails transiently often enough that one failure says
-    nothing, and a lookup that silently comes back empty loses a name for good. A failure naming a client error is
-    raised at once instead, since a deleted comment stays deleted however many times it is asked for.
+    Retried for the same reason as the query path: GitHub fails transiently often enough that one failure says
+    nothing, and a lookup that silently comes back empty loses a name for good. A client-error failure is raised
+    at once instead, since a deleted comment stays deleted however many times it is asked for.
 
     :param path: the path to fetch, such as ``notifications?all=false``
     :raises GitHubError: when every attempt fails, or the failure is one retrying cannot fix
@@ -137,7 +136,7 @@ def graphql(query: str, variables: dict[str, str]) -> dict:
     """Run one GraphQL query, retrying while GitHub is unhappy.
 
     An error from GitHub arrives as well-formed JSON carrying no data, so a reply counts as usable only once it
-    actually holds results. Accepting one that does not would abandon the whole collection rather than retry it.
+    holds results. Accepting one that does not would abandon the whole collection instead of retrying it.
 
     :param query: the query text
     :param variables: values for the query's variables

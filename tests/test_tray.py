@@ -74,7 +74,7 @@ def test_the_account_found_ahead_of_time_fills_the_settings_window_at_once(build
 
 
 def test_on_quit_twice_stops_the_poller_and_notifier_once(build_tray):
-    # Quitting can be asked for twice at once: from the menu and from a Ctrl+C, or from an impatient second Ctrl+C.
+    # Quitting can be asked for twice at once: from the menu and a Ctrl+C, or from an impatient second Ctrl+C.
     subject = build_tray()
     subject.poller = Stoppable()
     subject.notifier = Stoppable()

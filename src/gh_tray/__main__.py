@@ -30,10 +30,10 @@ app = cyclopts.App(name=APP_NAME, version=__version__, help=__doc__)
 
 
 def start_logging(to_console: bool, verbose: bool = False) -> None:
-    """Send diagnostics to a rotating file, and optionally to the console as well.
+    """Send diagnostics to a rotating file, and optionally to the console too.
 
-    The file takes everything down to the debug level, which is what a report from another desktop needs, and the
-    rotation keeps that from ever amounting to much. The console takes the debug level only when asked.
+    The file keeps everything down to debug level, since a report from another machine needs that detail;
+    rotation keeps it from growing large. The console gets debug level only when asked.
 
     :param to_console: whether to also log to standard error, which suits a foreground command
     :param verbose: whether the console should carry the debug level too
@@ -49,9 +49,9 @@ def start_logging(to_console: bool, verbose: bool = False) -> None:
 class LinesToLog(io.TextIOBase):
     """A stand-in for the standard error stream that hands complete lines to the log.
 
-    Anything the tray would have printed to a file nobody reads lands in the one log instead: a stray print, the
-    warnings module, whatever a library writes. A write made while a line is already being logged goes to the real
-    stream instead, because that is the log reporting trouble of its own, and logging it would go round forever.
+    Anything the tray would otherwise print to a file nobody reads lands in the one log instead: a stray print, a
+    warning, whatever a library writes. A write that happens while a line is already being logged goes to the real
+    stream instead, since that write is the log reporting its own trouble, and logging it would loop forever.
     """
 
     def __init__(self) -> None:
@@ -204,22 +204,22 @@ def setup(yes: bool = False) -> int:
 def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     """Start the tray, which then runs on its own, and return.
 
-    The tray outlives the terminal it was started from and prints nothing there, so this says that it started and
-    where it writes, and comes straight back. With ``--foreground`` the tray runs in this process instead, attached
-    to the terminal, where Ctrl+C stops it and its log is written to the console as well.
+    The tray outlives the terminal it was started from and prints nothing there. So this command reports that it
+    started, says where it writes its log, and returns at once. With ``--foreground`` the tray runs in this
+    process instead, attached to the terminal, where Ctrl+C stops it and its log also goes to the console.
 
     :param foreground: run the tray here rather than as a process of its own
     :param verbose: write the debug level to the console as well, which the log file always carries
     :return: process exit code
     """
-    # The console is written to only when somebody can read it. A tray started on its own, or by a login entry, runs
-    # in the foreground of no terminal, and its log has a file of its own.
+    # The console is written to only when someone can read it. A tray started on its own, or by a login entry, has
+    # no terminal attached, so its log goes to a file of its own instead.
     start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty(), verbose=verbose)
     from .prerequisites import missing
 
     if missing():
-        # Started from a terminal, this can ask. Started from a login entry there is nobody to ask, so it says what
-        # is wrong and stops rather than showing an icon that could never report anything.
+        # Started from a terminal, this can ask. Started from a login entry, there is nobody to ask, so it reports
+        # what is wrong and stops, rather than showing an icon that could never report anything.
         if sys.stdin is not None and sys.stdin.isatty():
             if not offer_to_install():
                 return 1
@@ -242,7 +242,7 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     # Probed only: the tray takes the lock for itself in a moment, and holding it here would keep it out.
     lock.release()
     started = start_detached(launch_command(), STDERR_PATH)
-    print(f"{APP_NAME} started as process {started}. Its icon is in the tray, and Quit is in the icon's menu.")
+    print(f"{APP_NAME} started as process {started}. Its icon is in the tray; Quit is in its menu.")
     print(f"Logging to {linked(LOG_PATH)}. Serious errors to {linked(STDERR_PATH)}.")
     return 0
 

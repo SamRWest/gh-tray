@@ -1,14 +1,14 @@
-"""Detecting, recording and reading changes between polls.
+"""Detects, records and reads changes between polls.
 
-Only transitions produce events. A pull request that was already failing when the previous poll ran is not reported
-again, which is what stops a large backlog of red pull requests becoming a wall of notifications.
+Only transitions produce events. A pull request that was already failing when the previous poll ran is not
+reported again. That is what stops a large backlog of red pull requests turning into a wall of notifications.
 
-Polling and looking are tracked separately: the collector advances its baseline every run, but the unread count is
+Polling and looking are tracked separately. The collector advances its baseline every run, but the unread count is
 measured against what the user has actually looked at, so nothing is lost between a change landing and being read.
 
-What counts as looked at comes from two places. Clicking a row in the window marks that one row, either way, and
-those marks are kept per row. Marking everything seen sets a single timestamp, and anything older than it counts as
-seen without needing a mark of its own.
+What counts as looked at comes from two places. Clicking a row in the window marks that one row, seen or unseen,
+and those marks are kept per row. Marking everything seen sets a single timestamp, and anything older than it
+counts as seen without needing its own mark.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from loguru import logger
 from .config import EVENTS_PATH, SEEN_PATH
 from .storage import read_json, write_json_atomic, write_text_atomic
 
-# Each rule names the change it detects, the wording used in menus and notifications, and whether it should turn the
-# icon red rather than amber. Red means someone is blocked, or something the user owns is broken.
+# Each rule names the change it detects, the wording shown in menus and notifications, and whether it should turn
+# the icon red rather than amber. Red means someone is blocked, or something the user owns is broken.
 RULE_LABELS: dict[str, tuple[str, bool]] = {
     "review_requested": ("Review requested", True),
     "ci_broken": ("Checks broke", True),
@@ -35,15 +35,15 @@ RULE_LABELS: dict[str, tuple[str, bool]] = {
 
 BROKEN_CI = frozenset({"FAILURE", "ERROR"})
 
-# Changes that are not worth telling the user about when the user is the one who made them. A comment they wrote
-# themselves is not news; their own commit breaking the checks still is, so only these two are dropped.
+# Changes not worth telling the user about when they caused them. Their own comment is not news, but their own
+# commit breaking the checks still is, so only these two kinds are dropped.
 SELF_CAUSED_KINDS = frozenset({"new_comment", "mention"})
 
 # Field values that mean "not worked out yet" rather than a real state, and so must never be compared against.
 UNINFORMATIVE_VALUES: dict[str, frozenset[str]] = {"mergeable": frozenset({"UNKNOWN"})}
 
-# What each snapshot field falls back to when the collector reports it as absent. A field left as None would make
-# every later comparison against it meaningless, so the fallbacks stand in for "nothing known yet".
+# What each snapshot field falls back to when the collector reports it as absent. Leaving a field as None would
+# make every later comparison against it meaningless, so these stand in for "nothing known yet".
 SNAPSHOT_DEFAULTS: dict = {
     "repo": "",
     "number": 0,
@@ -64,9 +64,9 @@ SNAPSHOT_DEFAULTS: dict = {
 }
 
 # Whose name to show against each kind of change. The collector reports the last person to act in each of these
-# ways, so the rule that fired decides which of them is the one worth naming. A conflict names the pull request's
-# author, whose branch has to take the rebase: it is a consequence of somebody else's merge into the base branch,
-# and GitHub does not record whose, so the one name that means something is the one on the door.
+# ways, so the rule that fired picks which one is worth naming. A conflict names the pull request's author, whose
+# branch has to take the rebase: it is caused by somebody else's merge into the base branch, and GitHub does not
+# record who, so the author's name is the only one that means anything.
 ACTOR_FIELDS: dict[str, str] = {
     "review_requested": "author",
     "ci_broken": "lastCommitBy",
@@ -81,17 +81,17 @@ SNAPSHOT_FIELDS = tuple(SNAPSHOT_DEFAULTS)
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 # How many polls a pull request may be missing from the collector's results before it is treated as gone. The
-# collector's GitHub queries fail and truncate intermittently, and without this a pull request that blinks out of
-# one result would be reported as newly arrived when it came back.
+# collector's GitHub queries fail and truncate intermittently, so without this, a pull request that briefly
+# vanishes would be reported as newly arrived when it came back.
 ABSENCE_GRACE_POLLS = 3
 
-# The event log is trimmed to the tail whenever the user marks everything seen, and capped regardless so that never
+# The event log is trimmed to the tail whenever the user marks everything seen, and capped regardless, so never
 # looking cannot grow the file without limit.
 EVENT_TAIL_KEPT = 200
 EVENT_HARD_LIMIT = 2000
 
-# What the record of looking holds: when the user last marked everything seen, and the rows they have since marked
-# one at a time. The second is capped, since a row marked long ago has usually dropped out of the window entirely.
+# What the record of looking holds: when the user last marked everything seen, and the rows they have since
+# marked one at a time. The rows are capped, since one marked long ago has usually dropped out of the window.
 LAST_SEEN_KEY = "lastSeenAt"
 SEEN_ROWS_KEY = "rows"
 SEEN_ROWS_KEPT = 200
@@ -110,8 +110,8 @@ def is_urgent(kind: str) -> bool:
 def utc_now() -> str:
     """Return the current time as a sortable UTC timestamp.
 
-    Sub-second precision matters: unread changes are those stamped later than the moment the user last looked, so at
-    whole-second resolution a change detected in the same second as a manual refresh would never be counted.
+    Sub-second precision matters. Unread changes are those stamped later than the moment the user last looked, so
+    at whole-second resolution, a change detected in the same second as a manual refresh would never count.
     """
     return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
@@ -119,8 +119,8 @@ def utc_now() -> str:
 def moment(stamp: str) -> datetime:
     """Parse a stored timestamp into a comparable moment.
 
-    Timestamps are compared as moments rather than as text because text comparison is only sound while every stamp
-    shares one format, and a stamp written by an older version would otherwise sort the wrong way round.
+    Timestamps are compared as moments rather than as text, because text comparison only works while every stamp
+    shares one format. A stamp written by an older version would otherwise sort the wrong way round.
 
     :param stamp: a timestamp as written into the event log or the seen marker
     :return: the moment it names, or the earliest representable moment when it cannot be read
@@ -161,8 +161,8 @@ def role_of(side: object) -> str:
 def snapshot_key(side: str, key: str) -> str:
     """Return the snapshot key for one pull request on one side of the digest.
 
-    The side is part of the key because the same pull request can appear both as the user's own and as one awaiting
-    their review, and collapsing the two would discard whichever arrived first along with its change history.
+    The side is part of the key because the same pull request can appear both as the user's own and as one
+    awaiting their review. Collapsing the two would discard whichever arrived first, along with its history.
 
     :param side: ``authored``, ``reviewing``, ``involved`` or ``closed``
     :param key: the collector's own key, being repository and number
@@ -192,9 +192,9 @@ def snapshot_of(digest: dict) -> dict:
 def carry_known_values(previous: dict, current: dict) -> dict:
     """Replace values meaning "not worked out yet" with the last value that meant something.
 
-    GitHub works out whether a pull request can be merged only when asked, so it commonly reads as unknown on one
-    poll and returns to its real value on the next. Comparing against the unknown would report that return as a
-    fresh change, over and over, for a pull request whose state never actually moved.
+    GitHub works out whether a pull request can be merged only when asked, so it often reads as unknown on one
+    poll and returns to its real value on the next. Comparing against the unknown would keep reporting that
+    return as a fresh change, for a pull request whose state never actually moved.
 
     :param previous: the snapshot stored by the last poll
     :param current: the snapshot just built from a fresh result
@@ -311,8 +311,8 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
                 events.append(_event("changes_requested", pull_request, "a reviewer asked for changes", at))
             if mergeable_now(pull_request) and not mergeable_now(was):
                 events.append(_event("ready_to_merge", pull_request, "approved, green and conflict free", at))
-            # Only on the user's own: a conflict is for whoever has to rebase, and on a pull request they are
-            # merely reviewing that is somebody else.
+            # Only on the user's own: a conflict is for whoever has to rebase, and on a pull request they merely
+            # review that is somebody else.
             if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
                 events.append(_event("conflict", pull_request, "needs a rebase", at))
         if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(
@@ -387,8 +387,8 @@ def caused_by(event: dict, login: str) -> bool:
 def read_events(limit: int | None = None) -> list[dict]:
     """Return events from the log, oldest first.
 
-    The whole log is read by default, because the unread count must cover everything the user has not seen and the
-    log is kept small by trimming rather than by reading only part of it.
+    The whole log is read by default, because the unread count must cover everything the user has not seen. The
+    log is kept small by trimming it, not by reading only part of it.
 
     :param limit: when given, read only this many trailing entries
     """
@@ -456,8 +456,8 @@ def seen_marks() -> dict[str, dict]:
 def row_identity(url: str, repo: str = "", number: str | int = "") -> str:
     """Return what a row is remembered by once the user has marked it.
 
-    The address is used where there is one, since it names the thing itself rather than where it happens to sit in
-    a list. Where there is none, the repository and number stand in.
+    The address is used where there is one, since it names the thing itself rather than where it sits in a list.
+    Where there is none, the repository and number stand in.
 
     :param url: the page the row leads to
     :param repo: the repository the row is about
