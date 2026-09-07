@@ -57,3 +57,10 @@ def test_a_style_that_stays_light_gives_way_to_one_that_follows_the_scheme(qapp,
     )
     toolkit.follow_theme_setting("dark")
     assert qapp.style().name().casefold() == toolkit.SCHEME_FOLLOWING_STYLE.casefold()
+
+
+def test_compositing_is_taken_as_available_off_x11_and_asked_of_x11(qapp, monkeypatch):
+    assert toolkit.compositing_available()
+    monkeypatch.setattr(toolkit.QGuiApplication, "platformName", staticmethod(lambda: "xcb"))
+    monkeypatch.setattr(toolkit, "x11_compositor_running", lambda: False)
+    assert not toolkit.compositing_available()

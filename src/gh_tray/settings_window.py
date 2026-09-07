@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 
 from loguru import logger
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QRadioButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -31,6 +32,7 @@ from .config import (
     HIDDEN_OWNERS_KEY,
     INVOLVED_KEY,
     NUMBER_RANGES,
+    OPACITY_KEY,
     THEME_KEY,
     WATCH_OTHERS_KEY,
     WATCHED_OWNERS_KEY,
@@ -42,7 +44,7 @@ from .events import RULE_LABELS
 from .github import GitHubError, organisations, viewer
 from .status import write_app_icon
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
-from .toolkit import FontZoom, application, follow_theme_setting, layout_store
+from .toolkit import FontZoom, application, compositing_available, follow_theme_setting, layout_store
 
 # Ranges come from the settings module, so the window cannot accept a value the settings would clamp anyway.
 NUMBER_FIELDS = {
@@ -103,6 +105,9 @@ class AccountLookup(QObject):
 class SettingsDialog(QDialog):
     """The settings window. Saves settings and login on close; account details arrive later over a signal."""
 
+    # The opacity slider is followed live by the changes window, so the effect is seen before it is saved.
+    opacity_changed = Signal(int)
+
     def __init__(self, parent: QWidget | None = None, account: Account | None = None) -> None:
         """Build the window around the settings as they stand.
 
@@ -148,10 +153,35 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        form.addRow("Window opacity", self.opacity_slider())
         self.involved = QCheckBox("Pull requests you only commented on or were assigned", self)
         self.involved.setChecked(bool(self.config.get(INVOLVED_KEY)))
         form.addRow("Also list", self.involved)
         return form
+
+    def opacity_slider(self) -> QHBoxLayout:
+        """Lay out the slider for how solid the changes window is, with its value beside it."""
+        self.opacity = QSlider(Qt.Orientation.Horizontal, self)
+        floor, ceiling = NUMBER_RANGES[OPACITY_KEY]
+        self.opacity.setRange(floor, ceiling if ceiling is not None else UNBOUNDED)
+        self.opacity.setValue(int(self.config[OPACITY_KEY]))
+        self.opacity_value = QLabel(f"{self.opacity.value()}%", self)
+        self.opacity.valueChanged.connect(self.on_opacity_moved)
+        if not compositing_available():
+            self.opacity.setEnabled(False)
+            self.opacity.setToolTip("This desktop cannot draw see-through windows.")
+        row = QHBoxLayout()
+        row.addWidget(self.opacity, 1)
+        row.addWidget(self.opacity_value)
+        return row
+
+    def on_opacity_moved(self, value: int) -> None:
+        """Show the slider's value and pass it on.
+
+        :param value: how solid the window should be, in percent
+        """
+        self.opacity_value.setText(f"{value}%")
+        self.opacity_changed.emit(value)
 
     def notification_switches(self) -> QGroupBox:
         """Lay out one switch per kind of change that can raise a notification."""
@@ -248,6 +278,7 @@ class SettingsDialog(QDialog):
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
+        self.config[OPACITY_KEY] = self.opacity.value()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
         switches = self.owner_switches_by_login.items()
         self.config[HIDDEN_OWNERS_KEY] = [login for login, switch in switches if not switch.isChecked()]

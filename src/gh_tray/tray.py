@@ -14,7 +14,7 @@ from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from . import APP_NAME
-from .config import LOG_PATH, load_config
+from .config import LOG_PATH, OPACITY_KEY, load_config
 from .environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from .events import mark_seen
 from .notifier import Notifier
@@ -292,6 +292,7 @@ class Tray(QObject):
             self.settings.accepted.connect(self.on_settings_saved)
             self.settings.finished.connect(self.on_settings_closed)
             self.zoom.changed.connect(self.settings.adjustSize)
+            self.settings.opacity_changed.connect(self.window.set_opacity)
         self.settings.show()
         self.settings.raise_()
         self.settings.activateWindow()
@@ -306,6 +307,8 @@ class Tray(QObject):
         self.settings = None
         self.account = None
         self.lookup.start()
+        # The window followed the slider live; this puts it back to what was saved, or was not.
+        self.window.set_opacity(load_config()[OPACITY_KEY])
 
     def on_account_found(self, account: Account) -> None:
         """Keep what GitHub said about the account for the next settings window.

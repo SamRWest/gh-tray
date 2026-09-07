@@ -66,6 +66,42 @@ def layout_store() -> QSettings:
     return QSettings(str(LAYOUT_PATH), QSettings.Format.IniFormat)
 
 
+def compositing_available() -> bool:
+    """Return whether the desktop composites windows, which see-through and rounded ones need.
+
+    Windows, macOS and Wayland always composite. X11 does only with a compositing manager, which owns the
+    _NET_WM_CM_S0 selection; without one a translucent window shows black where it should be see-through.
+    """
+    if QGuiApplication.platformName() != "xcb":
+        return True
+    return x11_compositor_running()
+
+
+def x11_compositor_running() -> bool:
+    """Return whether an X11 compositing manager owns the first screen, asked of the X library directly."""
+    import ctypes
+    import ctypes.util
+
+    name = ctypes.util.find_library("X11")
+    if not name:
+        return False
+    x11 = ctypes.CDLL(name)
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XInternAtom.restype = ctypes.c_ulong
+    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x11.XGetSelectionOwner.restype = ctypes.c_ulong
+    x11.XGetSelectionOwner.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return False
+    try:
+        return x11.XGetSelectionOwner(display, x11.XInternAtom(display, b"_NET_WM_CM_S0", 0)) != 0
+    finally:
+        x11.XCloseDisplay(display)
+
+
 def base_font() -> QFont:
     """Return the font the platform gave the application, as it was before any zoom."""
     app = application()

@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME
-from .config import APP_ICON_PATH, load_config
+from .config import APP_ICON_PATH, OPACITY_KEY, load_config
 from .popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -69,7 +69,7 @@ from .popup import (
 )
 from .status import write_app_icon
 from .theme import Palette, blend, chosen_style, ink, palette
-from .toolkit import layout_store
+from .toolkit import compositing_available, layout_store
 
 EDGE_MARGIN = 12
 # Clears the pointer, and the taskbar for a tray-icon click.
@@ -89,6 +89,11 @@ TALLEST_SHARE_OF_SCREEN = 0.55
 ROW_PADDING = 10
 # Width of the resize border and margin, so a press anywhere in the margin grabs an edge.
 GRIP = 8
+# The see-through margin around a rounded window that holds its shadow, and how round the corners are.
+SHADOW = 12
+CORNER = 10
+# How dark the shadow is at the window's edge; it fades to nothing across the margin.
+SHADOW_ALPHA = 90
 # A focus loss before this is the window arriving, not a click elsewhere; otherwise it hides on every showing.
 FOCUS_SETTLE_SECONDS = 0.3
 # How soon after losing focus a tray click counts as the dismissal, not a fresh request to reopen.
@@ -178,6 +183,11 @@ class ChangesWindow(QWidget):
         # Some desktops, GNOME included, hold the window's activation for a whole drag, so losing it then is not
         # a click elsewhere.
         self.desktop_dragging = False
+        # See-through and rounded only where the desktop composites; elsewhere the window stays square and solid.
+        self.translucent = compositing_available()
+        self.opacity = int(load_config().get(OPACITY_KEY, 100))
+        if self.translucent:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
@@ -190,11 +200,15 @@ class ChangesWindow(QWidget):
     def build(self) -> None:
         """Lay out the title strip, the table, the strip of controls under it, and the hint at the bottom."""
         column = QVBoxLayout(self)
-        column.setContentsMargins(GRIP, GRIP, GRIP, GRIP)
+        margin = self.frame_margin()
+        column.setContentsMargins(margin, margin, margin, margin)
         column.addWidget(self.title_strip())
         self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
+        if self.translucent:
+            # The viewport paints no background of its own, so the window's see-through one shows through the rows.
+            self.table.viewport().setAutoFillBackground(False)
         # Selection and focus stay off: the desktop style frames each selected or focused cell, showing as a bar
         # in every cell. The clicked row is highlighted by painting it instead.
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -404,7 +418,7 @@ class ChangesWindow(QWidget):
 
     def paint(self) -> None:
         """Colour every cell; a seen row dims except its date, which keeps its own age scale."""
-        ground = self.table.palette().base().color().name()
+        ground = self.ground().name()
         highlight = blend(self.table.palette().highlight().color().name(), ground, HIGHLIGHT_STRENGTH)
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
@@ -583,6 +597,7 @@ class ChangesWindow(QWidget):
         :param usable: how much of the screen a window may use
         """
         wanted = sum(self.characters(width) for _key, _heading, width, _stretches in COLUMNS) + WIDTH_ALLOWANCE
+        wanted += 2 * (self.frame_margin() - GRIP)
         return min(wanted, int(usable.width() * WIDEST_SHARE_OF_SCREEN))
 
     def wanted_width(self, usable: QRect) -> int:
@@ -728,15 +743,32 @@ class ChangesWindow(QWidget):
         :param spot: a point in the window's own coordinates
         """
         edges = Qt.Edge(0)
-        if spot.x() < GRIP:
+        grip = self.frame_margin()
+        if spot.x() < grip:
             edges |= Qt.Edge.LeftEdge
-        if spot.x() >= self.width() - GRIP:
+        if spot.x() >= self.width() - grip:
             edges |= Qt.Edge.RightEdge
-        if spot.y() < GRIP:
+        if spot.y() < grip:
             edges |= Qt.Edge.TopEdge
-        if spot.y() >= self.height() - GRIP:
+        if spot.y() >= self.height() - grip:
             edges |= Qt.Edge.BottomEdge
         return edges
+
+    def frame_margin(self) -> int:
+        """Return the margin around the contents: the grip, plus the shadow where the window is see-through."""
+        return GRIP + SHADOW if self.translucent else GRIP
+
+    def ground(self) -> QColor:
+        """Return the colour the rows sit on, which is the window's own where the viewport paints none."""
+        return self.palette().window().color() if self.translucent else self.table.palette().base().color()
+
+    def set_opacity(self, percent: int) -> None:
+        """Make the background this solid, where the desktop can draw a see-through window at all.
+
+        :param percent: how solid the background is, up to 100
+        """
+        self.opacity = int(percent)
+        self.update()
 
     def start_system_move(self) -> None:
         """Hand the desktop a drag of the whole window, which it carries on until the button is released."""
@@ -814,14 +846,30 @@ class ChangesWindow(QWidget):
         super().hideEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw a line around the window, since without a frame nothing else says where it ends.
+        """Draw the background: rounded, see-through and shadowed where the desktop composites, else a border.
 
         :param event: what needs painting
         """
         super().paintEvent(event)
         painter = QPainter(self)
+        if not self.translucent:
+            painter.setPen(self.palette().mid().color())
+            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+            painter.end()
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inner = self.rect().adjusted(SHADOW, SHADOW, -SHADOW - 1, -SHADOW - 1)
+        shade = QColor(0, 0, 0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for step in range(SHADOW, 0, -1):
+            shade.setAlpha(int(SHADOW_ALPHA * (1 - step / SHADOW) ** 2))
+            painter.setPen(shade)
+            painter.drawRoundedRect(inner.adjusted(-step, -step, step, step), CORNER + step, CORNER + step)
+        ground = self.ground()
+        ground.setAlpha(round(255 * self.opacity / 100))
         painter.setPen(self.palette().mid().color())
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.setBrush(ground)
+        painter.drawRoundedRect(inner, CORNER, CORNER)
         painter.end()
 
     def event(self, event: QEvent) -> bool:

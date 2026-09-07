@@ -34,6 +34,7 @@ DEFAULT_CONFIG: dict = {
     "watched_owners": [],
     "involved": False,
     "theme": "auto",
+    "opacity": 100,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -52,11 +53,13 @@ WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
 INVOLVED_KEY = "involved"
 THEME_KEY = "theme"
+OPACITY_KEY = "opacity"
 
 NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "poll_minutes": (1, None),
     "max_age_days": (0, None),
     "popup_rows": (1, 50),
+    "opacity": (40, 100),
 }
 
 

@@ -169,3 +169,20 @@ def test_the_window_carries_the_same_menu(build_tray):
     subject = build_tray()
     assert subject.window.menu_button.menu() is subject.menu
     assert subject.window.menu_button.isVisibleTo(subject.window)
+
+
+def test_the_settings_slider_drives_the_window_live_and_closing_puts_the_saved_value_back(
+    build_tray, monkeypatch, qtbot
+):
+    from gh_tray import settings_window
+
+    monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
+    monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
+    subject = build_tray()
+    subject.on_account_found(Account())
+    subject.open_settings()
+    qtbot.addWidget(subject.settings)
+    subject.settings.opacity.setValue(55)
+    assert subject.window.opacity == 55
+    subject.settings.reject()
+    assert subject.window.opacity == config.DEFAULT_CONFIG["opacity"]

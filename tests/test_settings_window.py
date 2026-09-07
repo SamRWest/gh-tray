@@ -144,3 +144,15 @@ def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog)
     assert saved["watch_others"] is True
     assert saved["watched_owners"] == ["tester", "acme"]
     assert saved["hidden_owners"] == ["widgets"]
+
+
+def test_the_opacity_slider_shows_the_stored_value_reports_moves_live_and_is_saved(build_dialog, qtbot):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "opacity": 80})
+    assert dialog.opacity.value() == 80
+    assert dialog.opacity_value.text() == "80%"
+    with qtbot.waitSignal(dialog.opacity_changed) as moved:
+        dialog.opacity.setValue(65)
+    assert moved.args == [65]
+    assert dialog.opacity_value.text() == "65%"
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["opacity"] == 65

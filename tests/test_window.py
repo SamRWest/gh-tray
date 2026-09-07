@@ -328,3 +328,19 @@ def test_rows_from_the_same_organisation_or_repository_share_a_colour(build_wind
     owner = first.repo.split("/")[0]
     assert view.table.item(0, org).foreground().color().name() == theme.ink(view.inks, popup.name_colour(owner))
     assert view.table.item(0, repo).foreground().color().name() == theme.ink(view.inks, popup.name_colour(first.repo))
+
+
+def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(view):
+    assert view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert view.frame_margin() == window.GRIP + window.SHADOW
+    assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge.LeftEdge
+    view.set_opacity(70)
+    assert view.opacity == 70
+
+
+def test_a_desktop_without_compositing_keeps_the_square_solid_window(build_window, monkeypatch):
+    monkeypatch.setattr(window, "compositing_available", lambda: False)
+    view = build_window()
+    assert not view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert view.frame_margin() == window.GRIP
+    assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge(0)
