@@ -1,8 +1,4 @@
-"""Settings storage, defaults and the application's data locations.
-
-Every path is either discovered at runtime or held in the settings file, so nothing about one machine or one account
-is written into the code.
-"""
+"""Settings storage, defaults and data locations; paths are discovered at runtime, not hardcoded to one machine."""
 
 from __future__ import annotations
 
@@ -22,17 +18,12 @@ SNAPSHOT_PATH = APP_DIR / "snapshot.json"
 EVENTS_PATH = APP_DIR / "events.jsonl"
 SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
-# The tray's own error output once it has left the terminal behind, where nobody would otherwise see it.
 STDERR_PATH = APP_DIR / "gh-tray.stderr.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
-# Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
 APP_ICON_PATH = APP_DIR / "gh-tray.png"
-# The changes window's last width and column widths, kept so both survive a restart. Stored by the toolkit's own
-# settings store, in plain text, alongside everything else rather than wherever the platform would normally put it.
 LAYOUT_PATH = APP_DIR / "layout.ini"
 
-# A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
     "poll_minutes": 10,
@@ -55,20 +46,13 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
-# Owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
-# account has a hand in is watched, so a new organisation needs no setting and an outside contribution is never lost.
 HIDDEN_OWNERS_KEY = "hidden_owners"
-# Whether owners not listed in the settings are watched at all. When off, only the listed owners left on are watched;
-# this is recorded because the collector cannot see the owner list without asking GitHub.
+# Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
-# Whether pull requests the account is involved in some other way are listed too, as the dashboard lists them.
 INVOLVED_KEY = "involved"
-# The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
 
-# Each numeric setting and the range it must fall in. A popup taller than this stops being a popup, and a poll
-# interval below a minute would hammer the GitHub API for no benefit.
 NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "poll_minutes": (1, None),
     "max_age_days": (0, None),
@@ -79,10 +63,7 @@ NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
 def login_list(value: object) -> list[str]:
     """Return a list of GitHub logins from a setting, however it was written.
 
-    A hand-edited file may hold a comma- or space-separated string instead of a list, with a repeated name or a
-    leading @.
-
-    :param value: the setting as read
+    :param value: the setting as read, possibly a comma- or space-separated string with duplicates or a leading @
     """
     parts = value if isinstance(value, list) else str(value or "").replace(",", " ").split()
     logins: list[str] = []
@@ -123,9 +104,7 @@ def normalise(config: dict) -> dict:
 def merge_stored(config: dict, stored: object) -> dict:
     """Fold a settings document read from disk into the defaults, ignoring anything of the wrong shape.
 
-    A hand-edited settings file can hold valid JSON of the wrong type. Such values are dropped with a warning rather
-    than raised: an error that stopped the application starting would also block the settings window that could fix
-    the file.
+    Bad values are dropped with a warning, not raised, since crashing here would also block the settings window.
 
     :param config: the defaults, modified in place
     :param stored: whatever was parsed out of the settings file

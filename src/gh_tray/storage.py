@@ -1,9 +1,4 @@
-"""Reading and writing the small state files this application keeps.
-
-Every write goes to a temporary file first, then is moved into place. A process killed part way through a plain
-write leaves a truncated file behind. A truncated state file is worse than a missing one: it reads as valid but
-incomplete. So the change history it describes is silently wrong.
-"""
+"""State files write to a temp file first, then swap in, so a crash leaves nothing, not a wrong truncated file."""
 
 from __future__ import annotations
 
@@ -14,20 +9,13 @@ from pathlib import Path
 
 from loguru import logger
 
-# How many times, and how long apart, to retry moving a finished file into place. On Windows a file another
-# program is reading cannot be replaced. A virus scanner that opens everything written is enough to cause that.
-# It lasts only a few tens of milliseconds, so waiting rides it out. Anything longer is a real problem and is
-# raised.
+# Windows can briefly refuse to replace an open file (a virus scanner, say); tens of ms is normal, longer is raised.
 REPLACE_ATTEMPTS = 5
 REPLACE_PAUSE_SECONDS = 0.05
 
 
 def replace_when_free(temporary: Path, path: Path) -> None:
-    """Move a finished file into place, waiting briefly if something else is holding the destination.
-
-    :param temporary: the file holding the new contents
-    :param path: where it belongs
-    """
+    """Move a finished file into place, waiting briefly if something else is holding the destination."""
     for attempt in range(REPLACE_ATTEMPTS):
         try:
             os.replace(temporary, path)
@@ -64,11 +52,8 @@ def write_json_atomic(path: Path, value: object, indent: int | None = None) -> N
 def read_json(path: Path) -> tuple[object | None, bool]:
     """Read a JSON document.
 
-    The caller usually needs to tell "there is no file yet" from "the file is damaged", because the first is a
-    normal starting state and the second must not be mistaken for one.
-
     :param path: the file to read
-    :return: the parsed document and whether the file existed but could not be read
+    :return: the parsed document, and whether the file existed but could not be read
     """
     if not path.exists():
         return None, False

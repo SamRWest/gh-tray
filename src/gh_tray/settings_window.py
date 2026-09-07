@@ -44,8 +44,7 @@ from .status import write_app_icon
 from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
 from .toolkit import FontZoom, application, follow_theme_setting, layout_store
 
-# The numeric settings and their labels. Ranges come from the settings module, so the window cannot accept a value
-# the settings would clamp anyway.
+# Ranges come from the settings module, so the window cannot accept a value the settings would clamp anyway.
 NUMBER_FIELDS = {
     "poll_minutes": "Poll every (minutes)",
     "max_age_days": "Hide pull requests older than (days, 0 = keep all)",
@@ -54,7 +53,6 @@ NUMBER_FIELDS = {
 # A spin box needs a ceiling; a setting with none gets one nobody will reach.
 UNBOUNDED = 100_000
 
-# The theme choices offered, and their labels.
 THEME_CHOICES = ((FOLLOW_DESKTOP, "Follow the desktop"), (ALWAYS_DARK, "Dark"), (ALWAYS_LIGHT, "Light"))
 
 LOOKING_UP_OWNERS = "Looking up your organisations..."
@@ -85,10 +83,7 @@ def look_up_account() -> Account:
 
 
 class AccountLookup(QObject):
-    """Looks the account up on a thread of its own and hands the answer back over a signal.
-
-    The toolkit delivers the signal on its own thread, where windows may be touched.
-    """
+    """Looks the account up off the GUI thread and answers back on it, where widgets are safe to touch."""
 
     found = Signal(object)
 
@@ -106,11 +101,7 @@ class AccountLookup(QObject):
 
 
 class SettingsDialog(QDialog):
-    """The settings window. Saving writes the settings file and the login entry, and applies the colours at once.
-
-    The settings load immediately from the settings file. Account details, the owners to list and the sign-in state
-    arrive later over a signal, unless already known, so the window never has to wait.
-    """
+    """The settings window. Saves settings and login on close; account details arrive later over a signal."""
 
     def __init__(self, parent: QWidget | None = None, account: Account | None = None) -> None:
         """Build the window around the settings as they stand.
@@ -175,11 +166,7 @@ class SettingsDialog(QDialog):
         return group
 
     def owner_switches(self) -> QGroupBox:
-        """Lay out the catch-all owner switch, with room below it for one switch per owner once GitHub lists them.
-
-        Only turned-off owners are remembered. An organisation joined later is then watched without a visit here,
-        and a repository the account merely contributes to is never lost.
-        """
+        """Lay out the owner switches. Only turned-off owners are stored, so new orgs are watched and old repos kept."""
         group = QGroupBox("Repository owners to watch", self)
         self.owner_column = QVBoxLayout(group)
         self.others = QCheckBox("Any other owner not listed here", group)
@@ -191,10 +178,7 @@ class SettingsDialog(QDialog):
         return group
 
     def take_account(self, account: Account) -> None:
-        """Fill in what GitHub reported: a switch per owner, and the sign-in state.
-
-        Owners are the account itself plus every organisation it belongs to. A switch turned off stays listed even
-        after the account leaves that organisation, so it can be turned back on.
+        """Fill in what GitHub reported: an owner switch (kept after leaving, to re-enable) and the sign-in state.
 
         :param account: what GitHub reported
         """

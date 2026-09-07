@@ -32,30 +32,24 @@ TITLE_LIMIT = 50
 # A failed poll is usually a transient GitHub error, so the next attempt comes sooner than a normal interval.
 RETRY_FRACTION = 4
 MINIMUM_WAIT_SECONDS = 60
-# How often the toolkit's loop is nudged so Python can run a signal handler. This lets Ctrl+C in the terminal
-# that started the tray stop it, on platforms with no console handler of their own.
+# Nudges the toolkit's loop so Ctrl+C can be handled where there is no console handler of its own.
 HEARTBEAT_MS = 500
 
 
 def open_dashboard(config: dict) -> None:
-    """Open the terminal dashboard maximised, or whichever command the settings name instead.
-
-    A command named in settings runs exactly as typed, so how its window opens is then up to the user.
-    """
+    """Open the terminal dashboard maximised, or run the command settings name, exactly as typed."""
     if config.get("dashboard_command"):
-        # Run through a shell on purpose: this is a command line the user typed into their own settings, and any
-        # other way of running it would break the pipes, quoting and arguments that make it worth setting at all.
+        # A user-typed command line needs a shell for its pipes, quoting and arguments to work.
         subprocess.Popen(config["dashboard_command"], shell=True)  # noqa: S602
         return
     open_in_terminal(DEFAULT_DASHBOARD, "gh-dash", maximised=True)
 
 
 class Poller(QObject):
-    """Polls GitHub on the configured interval, or sooner when asked, and reports each result from its own thread.
+    """Polls GitHub on a thread of its own and reports each result over a signal.
 
-    Polling runs on a background thread so the icon and menu stay responsive while GitHub is slow. Each result
-    comes back over a signal, which the toolkit delivers on its own thread, where the icon and window may safely
-    be touched. Only one thread ever polls, so two polls can never run at once and report the same change twice.
+    The signal is delivered on the toolkit's thread, where the icon and window may be touched. One thread polls,
+    so two polls can never run at once and report the same change twice.
     """
 
     polled = Signal(object)
@@ -92,7 +86,7 @@ class Poller(QObject):
                 result = poll(self.config)
                 succeeded = not result.error
                 self.polled.emit(result)
-            except Exception as error:  # a failed poll must not kill the timer
+            except Exception as error:
                 logger.exception("poll failed unexpectedly")
                 self.failed.emit(str(error)[:100])
             waiting = self.wait_seconds(succeeded)
@@ -136,12 +130,9 @@ class Tray(QObject):
         self.poller.failed.connect(self.on_failed)
         self.icon = QSystemTrayIcon(icon_from(build_image(GREY, 0)), self)
         self.icon.setToolTip(f"{APP_NAME} - starting")
-        # The menu belongs to the application and is never handed to the desktop's tray. A desktop given a menu
-        # tends to open it on every click, so the left click that should show the window would never arrive.
-        # Instead the menu is shown here on a right click, where the desktop reports one, and from the window.
+        # Not given to the desktop tray: it opens on every click, swallowing left clicks; shown here on right-click.
         self.menu = QMenu()
         self.icon.activated.connect(self.on_activated)
-        # The zoom is taken up before the window is built, so the window measures itself against the zoomed text.
         self.layout = layout_store()
         self.zoom = FontZoom(self.layout)
         self.window = ChangesWindow(rows_to_show(self.config["popup_rows"]), self.layout)
@@ -150,7 +141,6 @@ class Tray(QObject):
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
-        # The account is looked up before the settings window is asked for, so the window comes up filled in.
         self.account: Account | None = None
         self.lookup = AccountLookup()
         self.lookup.found.connect(self.on_account_found)
@@ -161,8 +151,7 @@ class Tray(QObject):
     def build_menu(self) -> None:
         """Rebuild the right-click menu against the current status and unread events."""
         self.menu.clear()
-        # Clearing removes the actions but not a submenu, which stays a child of the menu. Without this, each
-        # poll's rebuild would leave an old review list behind.
+        # Clearing removes actions but not a submenu; without this, each rebuild leaves a stale review list.
         for stale in self.menu.findChildren(QMenu):
             stale.deleteLater()
         self.menu.addAction(summary_line(self.status)).setEnabled(False)
@@ -226,8 +215,7 @@ class Tray(QObject):
             result.error,
         )
         self.repaint()
-        # Notifying runs on its own thread. It talks to the desktop's notification service, which this application
-        # does not control, so a hang there must not take the whole application down with it.
+        # Notifying runs on its own thread so a hang in the desktop's notification service cannot freeze the app.
         if result.events:
             threading.Thread(
                 target=self.notifier.notify,
@@ -247,10 +235,7 @@ class Tray(QObject):
         self.window.on_polled(False)
 
     def on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Show or put away the changes window on a left click, and show the menu on a right or middle click.
-
-        A middle click shows the menu because some desktops keep the right click to themselves and pass on only the
-        middle one. A double click is the second of two left clicks, which has already been answered.
+        """Show/hide the window on left click; menu on right or middle click (some desktops route only middle-click).
 
         :param reason: what was done to the icon
         """
@@ -273,11 +258,7 @@ class Tray(QObject):
         self.window.toggle(spot)
 
     def on_dashboard(self, *_) -> None:
-        """Open the dashboard.
-
-        Opening it says nothing about what the user has read, so it marks nothing seen. Rows are marked seen by
-        clicking them in the changes window, or all at once with this menu's "Mark all seen" entry.
-        """
+        """Open the dashboard; marking seen happens elsewhere, by clicking a row or via "Mark all seen"."""
         try:
             open_dashboard(self.config)
         except RuntimeError as error:
@@ -321,10 +302,7 @@ class Tray(QObject):
         self.window.on_scheme_changed()
 
     def on_settings_closed(self, _result: int) -> None:
-        """Forget the settings window once closed, and look up the account again for next time.
-
-        This way, a sign-in or a newly joined organisation between two openings is caught.
-        """
+        """Forget the settings window, then look up the account again to catch changes made since it opened."""
         self.settings = None
         self.account = None
         self.lookup.start()
@@ -337,11 +315,7 @@ class Tray(QObject):
         self.account = account
 
     def on_quit(self, *_) -> None:
-        """Stop the poller, the notifier, the window and the icon, then the application.
-
-        Idempotent, because quitting can be asked for twice at once: once from the menu and again from a Ctrl+C, or
-        from an impatient second Ctrl+C while the first is still stopping things.
-        """
+        """Stop everything, then the app; idempotent, since quitting can be asked twice at once (menu plus Ctrl+C)."""
         if self.stopping:
             return
         self.stopping = True

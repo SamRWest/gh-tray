@@ -1,8 +1,4 @@
-"""Command line entry point.
-
-Running with no command shows the tray. ``once`` polls a single time and prints the result, which is the quickest
-way to check the collector and the GitHub sign-in. ``settings`` opens the settings window on its own.
-"""
+"""Command line entry point: shows the tray by default, ``once`` polls once, ``settings`` opens settings."""
 
 from __future__ import annotations
 
@@ -32,10 +28,7 @@ app = cyclopts.App(name=APP_NAME, version=__version__, help=__doc__)
 def start_logging(to_console: bool, verbose: bool = False) -> None:
     """Send diagnostics to a rotating file, and optionally to the console too.
 
-    The file keeps everything down to debug level, since a report from another machine needs that detail;
-    rotation keeps it from growing large. The console gets debug level only when asked.
-
-    :param to_console: whether to also log to standard error, which suits a foreground command
+    :param to_console: whether to also log to standard error, for a foreground command
     :param verbose: whether the console should carry the debug level too
     """
     logger.remove()
@@ -47,15 +40,13 @@ def start_logging(to_console: bool, verbose: bool = False) -> None:
 
 
 class LinesToLog(io.TextIOBase):
-    """A stand-in for the standard error stream that hands complete lines to the log.
+    """A stand-in for standard error that hands complete lines to the log.
 
-    Anything the tray would otherwise print to a file nobody reads lands in the one log instead: a stray print, a
-    warning, whatever a library writes. A write that happens while a line is already being logged goes to the real
-    stream instead, since that write is the log reporting its own trouble, and logging it would loop forever.
+    A reentrant write goes straight to the real stream, since logging its own failure would otherwise loop forever.
     """
 
     def __init__(self) -> None:
-        """Start with nothing buffered."""
+        """Start with no partial line and no write under way."""
         self.tail = ""
         self.forwarding = threading.local()
 
@@ -102,9 +93,7 @@ def log_uncaught_in_thread(args: threading.ExceptHookArgs) -> None:
 def capture_stray_output() -> None:
     """Send everything the tray would have written to standard error to the log instead.
 
-    The tray runs in the foreground of no terminal, so anything printed is otherwise read by nobody. Only writes
-    from native code, which never pass through Python, still land in the standard error file, which is what it is
-    kept for.
+    The tray has no terminal, so a print reaches nobody; native writes bypass Python and still need this file.
     """
     sys.excepthook = log_uncaught
     threading.excepthook = log_uncaught_in_thread
@@ -124,8 +113,7 @@ def linked(path: Path) -> str:
 def lights() -> tuple[str, str, str]:
     """Return the marks for present, installable and needs-you, in a form this console can actually print.
 
-    A Windows console still running a legacy codepage cannot encode a coloured circle and raises rather than
-    substituting, so plain words stand in where that is the case.
+    A legacy-codepage console raises on a coloured circle rather than substituting, so plain words replace it.
     """
     try:
         for light in LIGHTS:
@@ -138,8 +126,6 @@ def lights() -> tuple[str, str, str]:
 def print_status() -> list:
     """Print every outside tool with a light saying whether it is here, and return the ones that are not.
 
-    Green is present, amber is missing but can be installed from here, red is missing and needs the user to act.
-
     :return: the requirements that are not satisfied
     """
     from .prerequisites import requirements
@@ -147,7 +133,6 @@ def print_status() -> list:
     present_mark, installable_mark, manual_mark = lights()
     outstanding = []
     listed = requirements()
-    # Padded to the longest name, so the notes line up whatever the platform adds to the list.
     width = max(len(requirement.name) for requirement, _present in listed)
     print(f"{APP_NAME} needs these:\n")
     for requirement, present in listed:
@@ -202,24 +187,19 @@ def setup(yes: bool = False) -> int:
 
 @app.default
 def run_tray(foreground: bool = False, verbose: bool = False) -> int:
-    """Start the tray, which then runs on its own, and return.
+    """Start the tray, which then runs on its own.
 
-    The tray outlives the terminal it was started from and prints nothing there. So this command reports that it
-    started, says where it writes its log, and returns at once. With ``--foreground`` the tray runs in this
-    process instead, attached to the terminal, where Ctrl+C stops it and its log also goes to the console.
-
+    With ``--foreground`` it runs here instead, so Ctrl+C stops it and the log also reaches the console.
     :param foreground: run the tray here rather than as a process of its own
     :param verbose: write the debug level to the console as well, which the log file always carries
     :return: process exit code
     """
-    # The console is written to only when someone can read it. A tray started on its own, or by a login entry, has
-    # no terminal attached, so its log goes to a file of its own instead.
+    # Written to the console only when someone can read it; a tray started standalone or by a login entry has none.
     start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty(), verbose=verbose)
     from .prerequisites import missing
 
     if missing():
-        # Started from a terminal, this can ask. Started from a login entry, there is nobody to ask, so it reports
-        # what is wrong and stops, rather than showing an icon that could never report anything.
+        # A terminal can be asked; a login entry cannot, so this reports the problem instead of showing a silent icon.
         if sys.stdin is not None and sys.stdin.isatty():
             if not offer_to_install():
                 return 1
@@ -239,7 +219,6 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
         finally:
             lock.release()
         return 0
-    # Probed only: the tray takes the lock for itself in a moment, and holding it here would keep it out.
     lock.release()
     started = start_detached(launch_command(), STDERR_PATH)
     print(f"{APP_NAME} started as process {started}. Its icon is in the tray; Quit is in its menu.")
@@ -255,7 +234,6 @@ def run_here() -> None:
     from .toolkit import application, route_toolkit_messages
     from .tray import Tray
 
-    # Nobody is watching a tray's console, so whatever would have been printed is logged instead.
     capture_stray_output()
     route_toolkit_messages()
     app = application()
@@ -275,9 +253,7 @@ def run_here() -> None:
 def once(verbose: bool = False) -> int:
     """Poll a single time, print the status and any changes, then exit.
 
-    Refuses to run while the tray is up. Both would poll against the same stored comparison point, so whichever ran
-    first would consume the changes and the other would never report them.
-
+    Refuses to run while the tray is up, since both would consume the same stored comparison point.
     :param verbose: write the debug level to the console as well, which shows each search and what it returned
     :return: process exit code, non-zero when the poll failed or the tray is already running
     """

@@ -1,15 +1,4 @@
-"""Gathers everything the application needs from GitHub, in one pass.
-
-Collecting is separate from deciding what changed. This module only reports what is true now. It knows nothing
-about what was true last time.
-
-The pull request search asks for the last commit's author, the last reviewer and the last commenter, alongside
-each pull request's state. Those are what name the person behind a change. The notifications feed names a mention
-only by the comment it points at, so the first few mentions are looked up one by one.
-
-Recently closed pull requests are collected too, kept apart from the open ones. Closed pull requests raise no
-notifications, but a row about one can then say it is merged or closed rather than guessing.
-"""
+"""Gathers everything the application needs from GitHub, in one pass; deciding what changed happens elsewhere."""
 
 from __future__ import annotations
 
@@ -24,33 +13,24 @@ from .storage import read_json, write_json_atomic, write_text_atomic
 
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 FIRST_RUN_WINDOW = timedelta(days=1)
-# One request each, so only the first few mentions are traced back to whoever wrote them.
+# A mention often lands on a pull request neither authored nor reviewed, so only the first few are traced back.
 MENTION_LOOKUP_LIMIT = 10
-# How many requests go out at once. GitHub asks callers not to flood it, and four overlaps the waiting without
-# becoming a flood.
+# GitHub asks callers not to flood it; four overlaps the waiting without becoming a flood.
 CONCURRENT_ASKINGS = 4
 CONCURRENT_LOOKUPS = 4
 
 AUTHORED = "is:pr is:open author:@me archived:false"
 REVIEWING = "is:pr is:open review-requested:@me archived:false"
-# Everything else open the user has a hand in. The dashboard lists this only when asked, and drops whatever the
-# other two searches already found, so a pull request lands on one side only.
+# Listed only when asked; drops whatever the other two searches already found, so each lands on one side only.
 INVOLVED = "is:pr is:open involves:@me archived:false"
-# Closed pull requests the user had a hand in, so a row about one can say it is finished rather than guessing.
-# Sorted newest first and capped to a short window: the search stops after a few pages, and GitHub's best-match
-# order can drop a freshly closed pull request while keeping old history. Newest first, the cap only drops the
-# oldest.
+# Sorted newest first, since GitHub's best-match order can drop a freshly closed pull request from the results.
 CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
-# How far back to look for closed pull requests, regardless of the configured age cutoff. A row about one lives
-# in the event log, which is trimmed to a short tail, so anything older than this has already left the window.
+# Anything older has already left the event log's trimmed tail, regardless of the age cutoff.
 CLOSED_LOOKBACK_DAYS = 30
 
 
 def search_for(base: str, max_age_days: int, now: datetime, hidden_owners: list[str] | None = None) -> str:
-    """Add the age cutoff and the excluded owners to a search, so GitHub filters out what this would drop anyway.
-
-    Without the cutoff, the search returns everything ever opened and most of it gets dropped here. On a
-    long-lived account that means fetching two pages to keep one, and each page is a slow request.
+    """Add the age cutoff and excluded owners (without it, a long-lived account pays for pages it then discards).
 
     :param base: the search expression
     :param max_age_days: how old is too old, or zero to keep everything
@@ -60,8 +40,7 @@ def search_for(base: str, max_age_days: int, now: datetime, hidden_owners: list[
     qualifiers = [base]
     if max_age_days:
         qualifiers.append(f"updated:>{(now - timedelta(days=max_age_days)).strftime('%Y-%m-%d')}")
-    # A hyphen before a qualifier tells GitHub to leave it out. GitHub uses one word for a person's repositories
-    # and another for an organisation's, and a login could be either, so both are said.
+    # A hyphen excludes a qualifier; a login could name a person or an organisation, so both are said.
     for login in hidden_owners or []:
         qualifiers += [f"-user:{login}", f"-org:{login}"]
     return " ".join(qualifiers)
@@ -95,10 +74,7 @@ def now_stamp() -> str:
 
 
 def nested(node: dict, *path: str) -> str:
-    """Follow a chain of keys through a reply, returning an empty string the moment one is missing.
-
-    GitHub omits fields rather than nulling them, and a login can go missing at any level: a deleted account, a
-    commit by someone with no GitHub account, or a pull request with no reviews yet.
+    """Follow a chain of keys, returning an empty string the moment one is missing (GitHub omits absent fields).
 
     :param node: the object to walk
     :param path: the keys to follow, where a list is entered at its first element
@@ -117,12 +93,7 @@ def nested(node: dict, *path: str) -> str:
 
 
 def newest_comment_is_marginal(node: dict) -> bool:
-    """Return whether a pull request's newest comment sits against the diff rather than in the conversation.
-
-    GitHub's comment count covers both, but the comment list it returns holds only the conversation. A pull
-    request reviewed entirely in the margin has a count that moves with nothing to show for it, so the margin is
-    checked separately: the newest comment of the last review, since a reply always arrives in a fresh review. A
-    review with no comments in the margin carries no time here and never wins.
+    """Return whether the newest comment sits against the diff (the comment list holds only the conversation half).
 
     :param node: a pull request as GitHub returned it
     """
@@ -132,10 +103,7 @@ def newest_comment_is_marginal(node: dict) -> bool:
 
 
 def last_commenter(node: dict) -> str:
-    """Return whoever commented last on a pull request, whether in the conversation or against the diff.
-
-    Without the diff's half, the window could not say who commented, or tell the user's own comments from
-    anyone else's.
+    """Return whoever commented last on a pull request, in the conversation or against the diff.
 
     :param node: a pull request as GitHub returned it
     :return: a login, or an empty string when neither can be found
@@ -146,10 +114,7 @@ def last_commenter(node: dict) -> str:
 
 
 def last_comment_answers(node: dict) -> str:
-    """Return whose comment the newest comment answers, where it answers one at all.
-
-    Only a comment against the diff can be an answer; conversation comments stand alone. This is what lets a
-    comment on somebody else's pull request matter when it answers one of the user's own review comments.
+    """Return whose comment the newest comment answers (only a diff comment can; conversation ones stand alone).
 
     :param node: a pull request as GitHub returned it
     :return: the login answered, or an empty string where the newest comment answers nobody
@@ -191,10 +156,7 @@ def normalise(node: dict, side: str) -> dict:
 
 
 def owned_by(records: list[dict], owners: list[str]) -> list[dict]:
-    """Return the records whose repository belongs to one of some owners.
-
-    Applied to what came back, rather than asked of GitHub, because a login may be a person's or an
-    organisation's and GitHub has a different word for each. The results are few, so the filter is cheap.
+    """Return the records belonging to some owners (filtered here, since a login may be a person's or an org's).
 
     :param records: pull requests or mentions, each naming its repository
     :param owners: the logins whose repositories are wanted
@@ -204,11 +166,7 @@ def owned_by(records: list[dict], owners: list[str]) -> list[dict]:
 
 
 def drop_stale(pull_requests: list[dict], max_age_days: int, now: datetime) -> tuple[list[dict], int]:
-    """Remove pull requests nobody has touched for a long time.
-
-    Only the last-updated time is tested, never the creation date. A pull request is never updated before it is
-    created, so the update cutoff already excludes everything older. Testing creation too would discard old
-    branches that are still being worked on.
+    """Remove pull requests nobody has touched for a long time (last-updated only, to keep active old branches).
 
     :param pull_requests: the records to filter
     :param max_age_days: how old is too old, or zero to keep everything
@@ -276,9 +234,6 @@ def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list
         if notification.get("reason") in ("mention", "team_mention")
         and nested(notification, "repository", "owner", "login").casefold() not in left_out
     ]
-    # One request each to find who wrote them and whose thread it is, and only for the first few, sent together.
-    # Whose thread it is cannot come from the poll's own lists: a mention often lands on a pull request the user
-    # neither wrote nor reviews, or on one already closed.
     traced = [
         (notification.get("subject") or {}).get("latest_comment_url") or ""
         for notification in raised[:MENTION_LOOKUP_LIMIT]
@@ -297,7 +252,7 @@ def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list
         mentions.append(
             {
                 "repo": nested(notification, "repository", "full_name"),
-                # The number is the tail of the thread's address, which is the one place the feed carries it.
+                # The thread's address is the one place the feed carries the pull request number.
                 "number": address.rstrip("/").rsplit("/", 1)[-1]
                 if address.rstrip("/").rsplit("/", 1)[-1].isdigit()
                 else "",
@@ -342,8 +297,6 @@ def collect(config: dict) -> tuple[dict | None, str]:
         since,
     )
     try:
-        # These requests do not depend on one another, and each spends nearly all its time waiting on GitHub, so
-        # they go out together. The poll then takes about as long as its slowest request, not their sum.
         with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
             signed_in = pool.submit(viewer)
             own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
@@ -385,7 +338,6 @@ def collect(config: dict) -> tuple[dict | None, str]:
     return {
         "window": {"since": since, "until": started.strftime(TIMESTAMP_FORMAT)},
         "staleFilter": {"maxAgeDays": cutoff, "hiddenAuthored": hidden_authored, "hiddenReviewing": hidden_reviewing},
-        # Who is signed in, so that changes the user caused themselves can be told apart from ones done to them.
         "viewer": signed_in_as,
         "authored": authored,
         "reviewing": reviewing,

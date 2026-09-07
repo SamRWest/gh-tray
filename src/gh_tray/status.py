@@ -15,29 +15,19 @@ RED, AMBER, GREEN, GREY = "#d1242f", "#bf8700", "#1a7f37", "#6e7781"
 
 ICON_SIZE = 64
 
-# The application's own mark, kept in step with data/icon.svg: three coloured dots reading as three rows of a
-# list, each with the row it belongs to beside it. Drawn on a grid ICON_REFERENCE units square and scaled up.
 APP_ICON_SIZE = 256
-# The sizes desktops show the mark at, from a tray tile to a notification banner. The file holds the largest and is
-# scaled down from there, so the drawing is checked at each of these rather than written at each.
 APP_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 ICON_REFERENCE = 64
 ICON_CORNER = 16
-# The field the mark sits on, which fades down the square rather than sitting flat.
 ICON_TOP = "#2e343d"
 ICON_BOTTOM = "#1e232a"
-# Each row: how far down it sits, how long its bar is, and its colour, the same three colours the window uses for
-# what wants attention.
 ICON_ROWS = ((19, 22, "#ff7b72"), (32, 15, "#ffa657"), (45, 19, "#5ddb6f"))
 ICON_DOT_X = 18
 ICON_DOT_RADIUS = 5
 ICON_BAR_X = 28
 ICON_BAR_HEIGHT = 7
-# How strongly the bars are drawn against the field. They are texture rather than detail: at the smallest sizes
-# they melt into a soft block and the three dots carry the mark alone.
 ICON_BAR_STRENGTH = 0.34
-# Drawn this many times larger and then reduced. The drawing has no smoothing of its own, and a sixteen pixel icon
-# of hard-edged circles is a mess of steps.
+# Drawn this many times larger then reduced, since hard-edged circles at sixteen pixels would be a mess of steps.
 ICON_OVERSAMPLE = 4
 # Windows caps a tray tooltip near 128 characters of plain text, and offers no way to style it.
 TOOLTIP_LIMIT = 127
@@ -92,9 +82,6 @@ def summary_line(status: Status) -> str:
 def tooltip_text(status: Status, app_name: str = "gh-tray") -> str:
     """Render the hover summary.
 
-    The platform tooltip is plain text with a hard length cap, so the least useful line is dropped rather than the
-    text being truncated mid-word.
-
     :param status: the summary to render
     :param app_name: leading name, shown so the icon is identifiable among other tray icons
     """
@@ -124,11 +111,7 @@ def fading_field(size: int) -> Image.Image:
 
 
 def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
-    """Draw the application's own mark: three coloured dots as three rows of a list.
-
-    The same design as ``data/icon.svg``, the editable original. Desktops and the notification service want a
-    raster image, and drawing it here avoids bundling a vector-graphics renderer and its native libraries just to
-    produce one small picture.
+    """Draw the application's own mark, matching ``data/icon.svg`` but drawn here to skip a vector-graphics renderer.
 
     :param size: how many pixels square to draw it
     """
@@ -145,7 +128,6 @@ def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
         canvas.ellipse((centre[0] - radius, centre[1] - radius, centre[0] + radius, centre[1] + radius), fill=colour)
         half = ICON_BAR_HEIGHT * scale / 2
         bar = (ICON_BAR_X * scale, centre[1] - half, (ICON_BAR_X + bar_width) * scale, centre[1] + half)
-        # Mixed against the field at this row's own height, since the field is lighter at the top than the bottom.
         behind = blend(ICON_TOP, ICON_BOTTOM, 1.0 - middle / ICON_REFERENCE)
         canvas.rounded_rectangle(bar, radius=half, fill=blend(colour, behind, ICON_BAR_STRENGTH))
     return image.resize((size, size), Image.Resampling.LANCZOS)
@@ -154,8 +136,7 @@ def app_icon(size: int = APP_ICON_SIZE) -> Image.Image:
 def write_app_icon(path: Path) -> Path:
     """Write the application's mark where the desktop can pick it up.
 
-    A portable picture rather than a Windows icon file: the toolkit puts one in a title bar on every platform and
-    every notification service takes one, whereas the icon file is refused outside Windows.
+    A portable picture, not a Windows icon file, since every platform and notification service accepts one.
 
     :param path: the file to write
     :return: the same path
