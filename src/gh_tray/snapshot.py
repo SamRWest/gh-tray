@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from loguru import logger
 
-from .config import SNAPSHOT_PATH
-from .storage import read_json, write_json_atomic
+from gh_tray.config import SNAPSHOT_PATH
+from gh_tray.storage import read_json, write_json_atomic
 
 # Bumped when the stored shape changes, so an older snapshot is replaced rather than reported as all new.
 SNAPSHOT_VERSION = 4

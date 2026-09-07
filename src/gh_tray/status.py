@@ -8,8 +8,8 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
-from .events import BROKEN_CI, is_urgent
-from .theme import blend
+from gh_tray.events import BROKEN_CI, is_urgent
+from gh_tray.theme import blend
 
 RED, AMBER, GREEN, GREY = "#d1242f", "#bf8700", "#1a7f37", "#6e7781"
 

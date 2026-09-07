@@ -10,8 +10,8 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from .config import EVENTS_PATH, SEEN_PATH
-from .storage import read_json, write_json_atomic, write_text_atomic
+from gh_tray.config import EVENTS_PATH, SEEN_PATH
+from gh_tray.storage import read_json, write_json_atomic, write_text_atomic
 
 # Wording and red/amber colour per rule; red means someone is blocked or something the user owns is broken.
 RULE_LABELS: dict[str, tuple[str, bool]] = {

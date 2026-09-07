@@ -7,9 +7,9 @@ import copy
 from loguru import logger
 from platformdirs import user_data_path
 
-from . import APP_NAME
-from .storage import read_json, write_json_atomic
-from .theme import STYLES
+from gh_tray import APP_NAME
+from gh_tray.storage import read_json, write_json_atomic
+from gh_tray.theme import STYLES
 
 APP_DIR = user_data_path(APP_NAME, appauthor=False)
 CONFIG_PATH = APP_DIR / "config.json"

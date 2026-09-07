@@ -46,9 +46,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME
-from .config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
-from .popup import (
+from gh_tray import APP_NAME
+from gh_tray.config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
+from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
     FILTER_CHOICES,
@@ -68,9 +68,9 @@ from .popup import (
     rows_to_show,
     sorted_rows,
 )
-from .status import write_app_icon
-from .theme import Palette, blend, chosen_style, ink, palette, wash
-from .toolkit import Blur, blur_behind, compositing_available, layout_store, show_blur
+from gh_tray.status import write_app_icon
+from gh_tray.theme import Palette, blend, chosen_style, ink, palette, wash
+from gh_tray.toolkit import Blur, blur_behind, compositing_available, layout_store, show_blur
 
 EDGE_MARGIN = 12
 # Clears the pointer, and the taskbar for a tray-icon click.

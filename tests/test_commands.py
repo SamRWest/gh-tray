@@ -100,8 +100,9 @@ def deferred_imports() -> list[tuple[str, str, int]]:
     found = []
     for function in (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)):
         for node in ast.walk(function):
-            if isinstance(node, ast.ImportFrom) and node.level:
-                found += [(node.module or "", alias.name, node.lineno) for alias in node.names]
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("gh_tray."):
+                module = node.module.removeprefix("gh_tray.")
+                found += [(module, alias.name, node.lineno) for alias in node.names]
     return found
 
 

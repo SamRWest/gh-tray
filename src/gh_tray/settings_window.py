@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME
-from .config import (
+from gh_tray import APP_NAME
+from gh_tray.config import (
     APP_ICON_PATH,
     BLUR_KEY,
     HIDDEN_OWNERS_KEY,
@@ -42,12 +42,12 @@ from .config import (
     load_config,
     save_config,
 )
-from .environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
-from .events import RULE_LABELS
-from .github import GitHubError, organisations, viewer
-from .status import write_app_icon
-from .theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
-from .toolkit import FontZoom, application, compositing_available, follow_theme_setting, layout_store
+from gh_tray.environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
+from gh_tray.events import RULE_LABELS
+from gh_tray.github import GitHubError, organisations, viewer
+from gh_tray.status import write_app_icon
+from gh_tray.theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
+from gh_tray.toolkit import FontZoom, application, compositing_available, follow_theme_setting, layout_store
 
 # Ranges come from the settings module, so the window cannot accept a value the settings would clamp anyway.
 NUMBER_FIELDS = {

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from loguru import logger
 from platformdirs import user_data_path
 
-from . import APP_NAME
-from .storage import read_json
+from gh_tray import APP_NAME
+from gh_tray.storage import read_json
 
 CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 

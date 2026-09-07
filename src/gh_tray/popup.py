@@ -11,7 +11,7 @@ import zlib
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
-from .events import (
+from gh_tray.events import (
     BROKEN_CI,
     age_in_words,
     event_identity,
@@ -27,8 +27,8 @@ from .events import (
     row_identity,
     seen_marks,
 )
-from .snapshot import read_snapshot
-from .theme import Palette, blend, ink, wash
+from gh_tray.snapshot import read_snapshot
+from gh_tray.theme import Palette, blend, ink, wash
 
 # The inks a row can be drawn in: what blocks, what is worth a look, what is good news, and what needs no action.
 URGENT = "red"

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from .environment import github_cli, run_quietly
+from gh_tray.environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
 DISTRIBUTION_INSTALLS = (

@@ -13,18 +13,18 @@ from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from . import APP_NAME
-from .config import BLUR_KEY, LOG_PATH, OPACITY_KEY, load_config
-from .environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
-from .events import mark_seen
-from .notifier import Notifier
-from .popup import rows_to_show
-from .service import PollResult, poll
-from .settings_window import Account, AccountLookup, SettingsDialog
-from .snapshot import read_snapshot
-from .status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
-from .toolkit import FontZoom, application, follow_theme_setting, icon_from, layout_store
-from .window import ChangesWindow
+from gh_tray import APP_NAME
+from gh_tray.config import BLUR_KEY, LOG_PATH, OPACITY_KEY, load_config
+from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
+from gh_tray.events import mark_seen
+from gh_tray.notifier import Notifier
+from gh_tray.popup import rows_to_show
+from gh_tray.service import PollResult, poll
+from gh_tray.settings_window import Account, AccountLookup, SettingsDialog
+from gh_tray.snapshot import read_snapshot
+from gh_tray.status import GREEN, GREY, Status, build_image, summary_line, tooltip_text
+from gh_tray.toolkit import FontZoom, application, follow_theme_setting, icon_from, layout_store
+from gh_tray.window import ChangesWindow
 
 DEFAULT_DASHBOARD = "gh dash"
 MENU_ENTRY_LIMIT = 10

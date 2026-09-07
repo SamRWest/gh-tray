@@ -14,11 +14,11 @@ from desktop_notifier.backends.dummy import DummyNotificationCenter
 from desktop_notifier.main import get_backend_class
 from loguru import logger
 
-from . import APP_NAME
-from .config import APP_ICON_PATH
-from .environment import notify_by_script
-from .events import label_for
-from .status import write_app_icon
+from gh_tray import APP_NAME
+from gh_tray.config import APP_ICON_PATH
+from gh_tray.environment import notify_by_script
+from gh_tray.events import label_for
+from gh_tray.status import write_app_icon
 
 MAX_LINES_PER_NOTIFICATION = 4
 SEND_TIMEOUT_SECONDS = 30

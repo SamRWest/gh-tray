@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from .collector import collect
-from .events import (
+from gh_tray.collector import collect
+from gh_tray.events import (
     append_events,
     carry_forward,
     carry_known_values,
@@ -18,8 +18,8 @@ from .events import (
     snapshot_of,
     unread_events,
 )
-from .snapshot import read_snapshot, write_snapshot
-from .status import Status, status_from
+from gh_tray.snapshot import read_snapshot, write_snapshot
+from gh_tray.status import Status, status_from
 
 
 @dataclass(frozen=True)

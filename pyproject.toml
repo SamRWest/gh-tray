@@ -57,7 +57,7 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 # "S" is the flake8-bandit security rule set, which is what bandit itself implements, so bandit is not installed
 # separately. Add `# noqa: S###` to a line to ignore one finding on it.
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D", "S"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "D", "S", "TID252"]
 # D203 and D213 contradict the docstring style used here. S603 fires on every subprocess call given a list of
 # arguments, which is the form that cannot be shell-injected: the risky forms are S602 and S605 and stay on.
 ignore = ["D203", "D213", "S603"]
@@ -68,6 +68,11 @@ ignore = ["D203", "D213", "S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"
+
+# Imports name the package in full (gh_tray.theme, not .theme): an editor then resolves them without knowing the
+# source root, and a module reads the same wherever it is opened from. TID252 refuses every relative import.
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
 
 [tool.ty.environment]
 # Check against what the project actually installs, so a missing annotation in a dependency is not read as an error

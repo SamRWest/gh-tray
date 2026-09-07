@@ -8,7 +8,7 @@ import time
 
 from loguru import logger
 
-from .environment import github_cli, run_quietly
+from gh_tray.environment import github_cli, run_quietly
 
 # Retrying is normal, since GitHub errors on heavy searches; five pages is more than anyone has open at once.
 CALL_TIMEOUT_SECONDS = 60

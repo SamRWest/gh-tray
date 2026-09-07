@@ -18,7 +18,7 @@ from typing import TextIO
 
 from loguru import logger
 
-from . import APP_NAME
+from gh_tray import APP_NAME
 
 # What Windows calls UTF-8, which a console has to be put into by number.
 UTF8_CODE_PAGE = 65001

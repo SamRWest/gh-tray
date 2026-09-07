@@ -14,8 +14,8 @@ from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QtMsgType, Signal, qI
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QKeyEvent, QPalette, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QApplication, QWidget
 
-from .config import LAYOUT_PATH
-from .theme import ALWAYS_DARK, ALWAYS_LIGHT, DARK
+from gh_tray.config import LAYOUT_PATH
+from gh_tray.theme import ALWAYS_DARK, ALWAYS_LIGHT, DARK
 
 # Where the text zoom is remembered, and how far the text may be taken from the platform's own size, in points.
 ZOOM_KEY = "font/zoom"

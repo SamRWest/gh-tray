@@ -7,9 +7,16 @@ from datetime import UTC, datetime, timedelta
 
 from loguru import logger
 
-from .config import ERROR_LOG_PATH, HIDDEN_OWNERS_KEY, INVOLVED_KEY, STATE_PATH, WATCH_OTHERS_KEY, WATCHED_OWNERS_KEY
-from .github import GitHubError, api, search_pull_requests, viewer
-from .storage import read_json, write_json_atomic, write_text_atomic
+from gh_tray.config import (
+    ERROR_LOG_PATH,
+    HIDDEN_OWNERS_KEY,
+    INVOLVED_KEY,
+    STATE_PATH,
+    WATCH_OTHERS_KEY,
+    WATCHED_OWNERS_KEY,
+)
+from gh_tray.github import GitHubError, api, search_pull_requests, viewer
+from gh_tray.storage import read_json, write_json_atomic, write_text_atomic
 
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 FIRST_RUN_WINDOW = timedelta(days=1)

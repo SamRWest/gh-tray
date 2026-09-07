@@ -11,12 +11,12 @@ from types import TracebackType
 import cyclopts
 from loguru import logger
 
-from . import APP_NAME, __version__
-from .config import APP_DIR, LOCK_PATH, LOG_PATH, STDERR_PATH, load_config
-from .environment import SingleInstance, launch_command, start_detached
-from .events import label_for
-from .service import poll
-from .status import tooltip_text
+from gh_tray import APP_NAME, __version__
+from gh_tray.config import APP_DIR, LOCK_PATH, LOG_PATH, STDERR_PATH, load_config
+from gh_tray.environment import SingleInstance, launch_command, start_detached
+from gh_tray.events import label_for
+from gh_tray.service import poll
+from gh_tray.status import tooltip_text
 
 LOG_ROTATION = "1 MB"
 LOG_RETENTION = 3
@@ -128,7 +128,7 @@ def print_status() -> list:
 
     :return: the requirements that are not satisfied
     """
-    from .prerequisites import requirements
+    from gh_tray.prerequisites import requirements
 
     present_mark, installable_mark, manual_mark = lights()
     outstanding = []
@@ -151,7 +151,7 @@ def offer_to_install(assume_yes: bool = False) -> bool:
     :param assume_yes: install without asking, for a caller that has already decided
     :return: whether everything is now present
     """
-    from .prerequisites import install, missing
+    from gh_tray.prerequisites import install, missing
 
     outstanding = print_status()
     if not outstanding:
@@ -196,7 +196,7 @@ def run_tray(foreground: bool = False, verbose: bool = False) -> int:
     """
     # Written to the console only when someone can read it; a tray started standalone or by a login entry has none.
     start_logging(to_console=foreground and sys.stderr is not None and sys.stderr.isatty(), verbose=verbose)
-    from .prerequisites import missing
+    from gh_tray.prerequisites import missing
 
     if missing():
         # A terminal can be asked; a login entry cannot, so this reports the problem instead of showing a silent icon.
@@ -231,8 +231,8 @@ def run_here() -> None:
     # Imported here rather than at the top, so the commands that open no window never load the toolkit.
     from PySide6.QtCore import qVersion
 
-    from .toolkit import application, route_toolkit_messages
-    from .tray import Tray
+    from gh_tray.toolkit import application, route_toolkit_messages
+    from gh_tray.tray import Tray
 
     capture_stray_output()
     route_toolkit_messages()
@@ -296,7 +296,7 @@ def settings() -> int:
     :return: process exit code
     """
     start_logging(to_console=True)
-    from .settings_window import run_settings
+    from gh_tray.settings_window import run_settings
 
     run_settings()
     return 0
