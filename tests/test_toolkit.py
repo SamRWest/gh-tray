@@ -64,3 +64,11 @@ def test_compositing_is_taken_as_available_off_x11_and_asked_of_x11(qapp, monkey
     monkeypatch.setattr(toolkit.QGuiApplication, "platformName", staticmethod(lambda: "xcb"))
     monkeypatch.setattr(toolkit, "x11_compositor_running", lambda: False)
     assert not toolkit.compositing_available()
+
+
+def test_no_blur_is_asked_of_a_platform_that_is_not_the_desktop(qapp, qtbot):
+    from PySide6.QtWidgets import QWidget
+
+    widget = QWidget()
+    qtbot.addWidget(widget)
+    assert not toolkit.blur_behind(widget, 10)

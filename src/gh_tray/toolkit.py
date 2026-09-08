@@ -161,13 +161,16 @@ def blur_behind(window: QWidget, radius: int) -> Blur:
     :param radius: how round the window's corners are, for a desktop that clips the blur to them
     :return: which desktop did it, ``dwm``, ``cocoa`` or ``kde``, or nothing for none
     """
+    # The native handle means something only on the desktop's own platform plugin: on the offscreen one used by
+    # the tests it is not a window at all, and handing it to the desktop crashes the process.
+    platform = QGuiApplication.platformName()
     try:
-        if sys.platform == "win32":
+        if sys.platform == "win32" and platform == "windows":
             return Blur("dwm") if windows_acrylic(window, True) else Blur()
-        if sys.platform == "darwin":
+        if sys.platform == "darwin" and platform == "cocoa":
             effect = macos_vibrancy(window, radius)
             return Blur("cocoa", effect) if effect is not None else Blur()
-        if QGuiApplication.platformName() == "xcb":
+        if platform == "xcb":
             return Blur("kde") if kde_blur(window, True) else Blur()
     except Exception as error:  # any failure here is the desktop's, and the window must still open
         logger.debug("blur behind the window refused: {}", error)
