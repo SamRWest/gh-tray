@@ -117,10 +117,7 @@ COLUMN_KEY = "columns/{}/characters"
 # How strongly the clicked row is tinted towards the desktop's highlight colour.
 HIGHLIGHT_STRENGTH = 0.3
 
-HINT = (
-    "Double-click a row to open it, right-click to mark it seen. Click a heading to sort. "
-    "Drag the title to move, an edge to resize. Ctrl and the wheel size the text."
-)
+HINT = "Double-click: open PR, right-click: mark seen, ctrl+scroll: resize"
 
 
 def table_overlay_alpha(opacity: int, offset: int) -> int:

@@ -54,14 +54,6 @@ You are notified when a review is requested of you, your checks break, a reviewe
 you, or a pull request of yours becomes ready to merge. New comments and merge conflicts are listed but not announced
 unless you turn them on. Only changes are reported, never standing state, so an old backlog does not become a wall of
 notifications.
-
-## Settings
-
-Open **Settings...** from the menu to set how often to poll, how old a pull request may be before it is ignored, how
-many rows the window shows, which changes to be notified about, which repository owners to watch, whether to start at
-login, the dashboard command, and how see-through the window is. **Also list** adds the pull requests you only commented
-on or were assigned, which is what gh-dash's Involved section shows. Changes take effect on the next poll.
-
 ## If something goes wrong
 
 **Open log** in the menu shows the log. To watch the tray in a terminal instead, run `gh-tray --foreground`, or add
