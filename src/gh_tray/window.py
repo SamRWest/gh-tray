@@ -85,6 +85,8 @@ WIDTH_ALLOWANCE = 70
 WIDEST_SHARE_OF_SCREEN = 0.9
 FILLING_COLUMN = next(name for name, _heading, _width, fills in COLUMNS if fills)
 SHORTEST_COLUMN = 4
+# How many characters the search box is at least wide enough for.
+SEARCH_CHARACTERS = 14
 # Beyond this share of the screen height, rows scroll instead of the window growing further.
 TALLEST_SHARE_OF_SCREEN = 0.55
 ROW_PADDING = 10
@@ -324,7 +326,7 @@ class ChangesWindow(QWidget):
         self.search = QLineEdit(self)
         self.search.setPlaceholderText("Search (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(self.characters(14))
+        self.size_search()
         self.search.textChanged.connect(self.set_search)
         strip.addSpacing(12)
         strip.addWidget(self.search, 1)
@@ -410,10 +412,15 @@ class ChangesWindow(QWidget):
             self.fit_columns(shrink_all=False)
 
     def on_font_changed(self) -> None:
-        """Size the rows and columns for the text as it now is, and the window around them."""
+        """Size the rows, columns and search box for the text as it now is, and the window around them."""
         self.size_rows()
         self.size_columns()
+        self.size_search()
         self.refit(resize_width=True)
+
+    def size_search(self) -> None:
+        """Give the search box its least width in the font as it is now, so a zoom does not leave it stale."""
+        self.search.setMinimumWidth(self.characters(SEARCH_CHARACTERS))
 
     def heading_text(self) -> str:
         """Return the window's title, which counts the rows not yet marked seen."""
