@@ -349,11 +349,14 @@ def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(vie
 
 def test_the_table_sits_on_a_ground_a_few_points_more_solid_than_the_window(view, qapp):
     view.set_opacity(60)
+    view.resize(900, 500)
     view.show()
     qapp.processEvents()
     image = view.grab().toImage()
     margin = image.pixelColor(view.frame_margin() + 2, view.frame_margin() + 2).alpha()
-    table = image.pixelColor(view.table.viewport().mapTo(view, cell_centre(view, 0))).alpha()
+    # Sampled below the last row, where no text can land on the pixel whatever the platform's fonts do.
+    below = QPoint(10, view.table.viewport().height() - 2)
+    table = image.pixelColor(view.table.viewport().mapTo(view, below)).alpha()
     assert margin == round(255 * 60 / 100)
     assert abs(table - round(255 * (60 + window.TABLE_OPACITY_OFFSET) / 100)) <= 1
 
