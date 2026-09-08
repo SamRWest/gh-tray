@@ -1,26 +1,20 @@
-"""The record of what every pull request looked like at the last poll.
-
-Kept apart from the polling cycle because more than one part of the application reads it: the cycle compares against
-it to find what changed, and the windows read it to show what is true now.
-"""
+"""The record of what every pull request looked like at the last poll, read by both the polling cycle and windows."""
 
 from __future__ import annotations
 
 from loguru import logger
 
-from .config import SNAPSHOT_PATH
-from .storage import read_json, write_json_atomic
+from gh_tray.config import SNAPSHOT_PATH
+from gh_tray.storage import read_json, write_json_atomic
 
-# Bumped whenever the stored shape changes. A snapshot written by an older version cannot be compared against, so it
-# is replaced without reporting the whole of it as new.
+# Bumped when the stored shape changes, so an older snapshot is replaced rather than reported as all new.
 SNAPSHOT_VERSION = 4
 
 
 def read_snapshot() -> tuple[dict | None, bool]:
     """Return the snapshot written by the previous poll.
 
-    A missing snapshot and an unusable one are reported separately, because only the first is a genuine fresh start.
-    Treating a damaged file as a fresh start would mark every unread change as seen.
+    A missing snapshot and a damaged one are told apart, since damage read as fresh would mark changes as seen.
 
     :return: the stored entries, and whether a snapshot existed but could not be used
     """

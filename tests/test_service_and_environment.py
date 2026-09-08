@@ -104,7 +104,7 @@ def test_an_unreadable_snapshot_rebuilds_the_baseline_without_reporting_everythi
     stub_collector(monkeypatch, digest_with())
     result = service.poll({})
     assert result.events == []
-    # Not a first run: a damaged file is not proof the user has seen anything, so the unread count must survive.
+    # Not a first run: a damaged file does not prove the user saw anything, so the unread count must survive.
     assert result.first_run is False
     assert json.loads((workspace / "snapshot.json").read_text(encoding="utf-8"))["version"] == snapshot.SNAPSHOT_VERSION
 
@@ -144,8 +144,8 @@ def test_a_console_is_only_hidden_on_windows():
 
 
 def test_a_command_is_read_as_utf8_whatever_the_console_uses():
-    # Written as bytes, which is how the GitHub tool writes: it says UTF-8 whatever codepage the console is on, and
-    # reading that as the local one turns a tick into "a-hat" and mangles any title that is not plain English.
+    # Written as bytes, which is how the GitHub tool writes: it says UTF-8 whatever codepage the console is on.
+    # Reading that as the local codepage turns a tick into "a-hat" and mangles any non-English title.
     written = "import sys; sys.stdout.buffer.write('✓ café'.encode())"
     assert environment.run_quietly([sys.executable, "-c", written]).stdout == "✓ café"
 

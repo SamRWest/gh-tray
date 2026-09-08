@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QSystemTrayIcon
 
 from gh_tray import config, tray, window
 from gh_tray.service import PollResult
+from gh_tray.settings_window import Account
 from gh_tray.status import GREEN, GREY, RED, Status, summary_line
 from gh_tray.tray import Tray
 
@@ -24,6 +25,7 @@ def build_tray(qtbot, monkeypatch):
     monkeypatch.setattr(tray, "rows_to_show", lambda _count: [])
     monkeypatch.setattr(window, "rows_to_show", lambda _count: [])
     monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20})
+    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur())
     monkeypatch.setattr(tray, "read_snapshot", lambda: ({}, False))
     monkeypatch.setattr(tray, "autostart_enabled", lambda: False)
     monkeypatch.setattr(tray, "mark_seen", lambda: None)
@@ -59,8 +61,21 @@ def test_trigger_toggles_the_window_and_double_click_does_not(build_tray, qapp):
     assert subject.window.isVisible(), "a double click must leave the window exactly as the trigger left it"
 
 
+def test_the_account_found_ahead_of_time_fills_the_settings_window_at_once(build_tray, monkeypatch, qtbot):
+    from gh_tray import settings_window
+
+    monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
+    monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
+    subject = build_tray()
+    subject.on_account_found(Account(login="tester", organisations=("acme",), signed_in=True, sign_in_summary="ok"))
+    subject.open_settings()
+    qtbot.addWidget(subject.settings)
+    assert list(subject.settings.owner_switches_by_login) == ["tester", "acme"]
+    assert subject.settings.sign_in.text() == "ok"
+
+
 def test_on_quit_twice_stops_the_poller_and_notifier_once(build_tray):
-    # Quitting can be asked for twice at once: from the menu and from a Ctrl+C, or from an impatient second Ctrl+C.
+    # Quitting can be asked for twice at once: from the menu and a Ctrl+C, or from an impatient second Ctrl+C.
     subject = build_tray()
     subject.poller = Stoppable()
     subject.notifier = Stoppable()
@@ -155,3 +170,22 @@ def test_the_window_carries_the_same_menu(build_tray):
     subject = build_tray()
     assert subject.window.menu_button.menu() is subject.menu
     assert subject.window.menu_button.isVisibleTo(subject.window)
+
+
+def test_the_settings_slider_drives_the_window_live_and_closing_puts_the_saved_value_back(
+    build_tray, monkeypatch, qtbot
+):
+    from gh_tray import settings_window
+
+    monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
+    monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
+    subject = build_tray()
+    subject.on_account_found(Account())
+    subject.open_settings()
+    qtbot.addWidget(subject.settings)
+    subject.settings.opacity.setValue(55)
+    assert subject.window.opacity == 55
+    assert subject.window.isVisible() and subject.window.previewing
+    subject.settings.reject()
+    assert subject.window.opacity == config.PLAIN_OPACITY
+    assert not subject.window.isVisible()

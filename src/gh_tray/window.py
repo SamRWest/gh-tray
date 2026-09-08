@@ -1,15 +1,8 @@
-"""The changes window: a small tool window listing what wants the user's attention, shown by a click on the tray icon.
+"""The changes window: a small tool window listing what needs the user's attention.
 
-Each cell is coloured on its own: a row says what it is in one colour and how stale it is in another, and neither
-has to give way to the other. Clicking a row opens it on GitHub. Right-clicking marks it seen, and right-clicking
-again marks it unseen.
-
-The window is built once, when the tray starts, and hidden rather than closed, so showing it costs nothing.
-
-It has no frame, so the little a frame provides is supplied here: a strip at the top to drag it by, edges to resize
-it from, a close mark, and a button carrying the tray's menu, which some desktops offer no other way to reach. The
-dragging and resizing themselves are handed to the desktop, which does them as it does for any window. Escape, the
-close mark, a click on the tray icon, or a click anywhere else on screen put it away.
+The tray builds the window once and hides rather than closes it, so reopening is instant. It is frameless, so
+this module draws its own title strip, resize edges, close mark and menu button, with the desktop handling
+drags and resizes.
 """
 
 from __future__ import annotations
@@ -25,6 +18,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QGuiApplication,
+    QHideEvent,
     QIcon,
     QKeyEvent,
     QKeySequence,
@@ -38,6 +32,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -51,9 +46,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import APP_NAME
-from .config import APP_ICON_PATH, load_config
-from .popup import (
+from gh_tray import APP_NAME
+from gh_tray.config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
+from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
     FILTER_CHOICES,
@@ -73,58 +68,75 @@ from .popup import (
     rows_to_show,
     sorted_rows,
 )
-from .status import write_app_icon
-from .theme import Palette, blend, chosen_style, ink, palette
-from .toolkit import layout_store
+from gh_tray.status import write_app_icon
+from gh_tray.theme import Palette, blend, chosen_style, ink, palette, wash
+from gh_tray.toolkit import Blur, blur_behind, compositing_available, layout_store, show_blur
 
 EDGE_MARGIN = 12
-# The window is opened by a click, so it appears by the pointer. Nudging it up and left keeps it clear of the
-# pointer itself and, when the click was on a tray icon, clear of the taskbar.
+# Clears the pointer, and the taskbar for a tray-icon click.
 POINTER_OFFSET = 16
-# How far above the pointer the window sits, so a click near the bottom of the screen still leaves it clear.
+# Extra gap above the pointer, so a click near the screen bottom still clears it.
 POINTER_GAP = 24
 MINIMUM_WIDTH = 480
 MINIMUM_HEIGHT = 140
-# Room for the window's edges, the scrollbar and the table's own padding, so no column starts out cut off.
+# Extra width for the edges, scrollbar and table padding, so no column starts out cut off.
 WIDTH_ALLOWANCE = 70
-# A window wide enough for the longest repository name anyone owns, at the largest text, would be the whole screen,
-# so it is capped here. Columns that still do not fit give up width alike rather than scrolling sideways.
+# Caps width so a long repository name at large text cannot fill the screen; columns shrink instead.
 WIDEST_SHARE_OF_SCREEN = 0.9
-# The column that takes whatever width is left over, and gives it up first when there is too little: the one with
-# the most to say. The shortest any column is squeezed to, in characters.
 FILLING_COLUMN = next(name for name, _heading, _width, fills in COLUMNS if fills)
 SHORTEST_COLUMN = 4
-# The most of the screen the window may take up. Beyond that the rows scroll.
+# How many characters the search box is at least wide enough for.
+SEARCH_CHARACTERS = 14
+# Beyond this share of the screen height, rows scroll instead of the window growing further.
 TALLEST_SHARE_OF_SCREEN = 0.55
-# What a row has around its text, so rows read as rows rather than as lines.
 ROW_PADDING = 10
-# How wide the border is that the window can be resized from. It is also the margin around the contents, so that
-# a press anywhere in the margin takes an edge.
+# Width of the resize border and margin, so a press anywhere in the margin grabs an edge.
 GRIP = 8
-# How long the window takes to finish coming up and settle on the focus. Until then a loss of focus is part of it
-# arriving rather than the user clicking elsewhere, and dismissing on that would mean it never appeared at all.
+# The see-through margin around a rounded window that holds its shadow, and how round the corners are.
+SHADOW = 12
+CORNER = 10
+# How dark the shadow is at the window's edge; it fades to nothing across the margin.
+SHADOW_ALPHA = 90
+# How much more solid the table's ground is than the window's, in percentage points of opacity, so the rows sit on
+# a panel a shade darker (in the dark theme) than the strips around them however see-through the window is; and
+# how round that panel's corners are.
+TABLE_OPACITY_OFFSET = 15
+TABLE_CORNER = 6
+# A focus loss before this is the window arriving, not a click elsewhere; otherwise it hides on every showing.
 FOCUS_SETTLE_SECONDS = 0.3
-# How soon after the window loses the focus a click on the tray icon counts as the click that took it. That click
-# means put the window away, and answering it by showing the window again would leave it having done nothing.
+# How soon after losing focus a tray click counts as the dismissal, not a fresh request to reopen.
 TOGGLE_WITHIN_SECONDS = 0.5
 
-# The date and the status are each drawn on a scale of their own, and the four columns that hold a name are drawn in
-# the colour dealt to that name, so they need finding among the columns.
 DATE_COLUMN = "when"
 STATUS_COLUMN = "status"
 NAMED_COLUMNS = ("org", "repo", "author", "who")
 
-# Where the remembered widths are kept in the layout store: the window's, and each column's by its name. Named
-# rather than positional, so a column added or moved later cannot inherit the wrong width. Kept in characters of the
-# window's font rather than in pixels, so they come out the same on a display drawing at another size, and follow the
-# text when it is zoomed.
+# Layout-store keys for remembered widths, keyed by column name. Widths are stored in characters of the font,
+# not pixels, so they still match after a display-scale or zoom change.
 WIDTH_KEY = "window/characters"
 COLUMN_KEY = "columns/{}/characters"
 
-HINT = (
-    "Click a row to open it, right-click to mark it seen. Click a heading to sort. "
-    "Drag the title to move, an edge to resize. Ctrl and the wheel size the text."
-)
+# How strongly the clicked row is tinted towards the desktop's highlight colour.
+HIGHLIGHT_STRENGTH = 0.3
+
+HINT = "Double-click: open PR, right-click: mark seen, ctrl+scroll: resize"
+
+
+def table_overlay_alpha(opacity: int, offset: int) -> int:
+    """Return the alpha to lay the ground over the table at, so the table ends up *offset* points more solid.
+
+    Laying a colour at alpha ``b`` over the same colour at alpha ``a`` gives ``a + b * (1 - a)``, so reaching a
+    target of ``a + offset`` takes ``b = offset / (1 - a)``; a window that is already solid needs nothing.
+
+    :param opacity: how solid the window's own ground is, in percent
+    :param offset: how many points more solid the table should be
+    :return: the overlay's alpha, 0 to 255
+    """
+    window_share = min(opacity, 100) / 100
+    if window_share >= 1.0:
+        return 0
+    target_share = min(100, opacity + offset) / 100
+    return round(255 * (target_share - window_share) / (1 - window_share))
 
 
 def column_of(key: str) -> int:
@@ -155,11 +167,7 @@ def cells_of(entry: Row) -> list[str]:
 
 
 class ChangesWindow(QWidget):
-    """The window itself.
-
-    It says two things to the tray: that the user pressed Refresh, and that they pressed Open dashboard. The tray is
-    the only thing allowed to poll, and the dashboard is its to open.
-    """
+    """The window itself. Emits refresh_asked and dashboard_asked; only the tray polls or opens the dashboard."""
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
@@ -175,37 +183,47 @@ class ChangesWindow(QWidget):
         )
         # So the pointer changes shape over an edge before anything is pressed.
         self.setMouseTracking(True)
-        # Everything on offer, and the part of it the chosen filters let through, which is what the table shows.
-        # Marks are written to both, so switching filters does not forget them.
+        # all_entries holds everything; entries is the filtered subset shown, and marks go to both.
         self.all_entries = list(entries)
         self.entries: list[Row] = []
         self.role_filter = "all"
-        # Rows about closed pull requests start hidden: they are done, and the window is a list of what is not.
+        # Closed pull requests start hidden: they are done, and this window lists what is not.
         self.show_closed = False
         self.sort_column = DEFAULT_SORT
         self.newest_first = True
-        # What the search box holds, which every row shown has to contain somewhere.
         self.search_text = ""
         self.inks: Palette = palette(chosen_style())
         self.layout_store = layout if layout is not None else layout_store()
-        # The width this code last gave the window. A resize to anything else is the user's doing, and worth keeping.
         self.placed_width = 0
-        # Whether a fresh look has been asked for and not yet answered, which is when the hint says so.
         self.awaiting_poll = False
-        # Whether the columns are being sized by this code, whose sizes are not the user's and are not remembered.
         self.fitting = False
-        # When the window last came up, and when a click elsewhere last put it away. No sentinel number for the
-        # second: the reference point of a monotonic clock is undefined, so any number chosen to mean "never" could
-        # legitimately occur.
+        # None rather than a sentinel time: a monotonic clock has no fixed zero, so no number safely means "never".
         self.shown_at = 0.0
         self.dismissed_at: float | None = None
-        # Whether the desktop is moving or resizing the window on the application's behalf. Some desktops, GNOME
-        # among them, take the activation for the whole of such a drag, and losing it then is not a click elsewhere.
+        # The row last clicked, by URL so it survives sorting and refilling.
+        self.highlighted_url: str | None = None
+        # Shown beside the settings to preview a change, without the focus, and put away when they close.
+        self.previewing = False
+        # Some desktops, GNOME included, hold the window's activation for a whole drag, so losing it then is not
+        # a click elsewhere.
         self.desktop_dragging = False
+        # See-through and rounded only where the desktop composites; elsewhere the window stays square and solid.
+        self.translucent = compositing_available()
+        if self.translucent:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Where the desktop can blur behind the window it also shadows it, so the painted shadow is left out.
+        self.blur = blur_behind(self, CORNER) if self.translucent else Blur()
+        self.shadow = SHADOW if self.translucent and not self.blur else 0
+        self.blur_wanted = True
+        self.opacity = 0
+        self.wanted_opacity: int | None = None
+        settings = load_config()
+        self.set_blur(bool(settings.get(BLUR_KEY, True)))
+        self.set_opacity(settings.get(OPACITY_KEY))
         try:
             self.setWindowIcon(QIcon(str(write_app_icon(APP_ICON_PATH))))
         except OSError as error:
-            logger.debug("could not put the application's mark on the window: {}", error)
+            logger.debug("could not set the window icon: {}", error)
         self.build()
         self.apply_filter()
         self.refill()
@@ -214,13 +232,16 @@ class ChangesWindow(QWidget):
     def build(self) -> None:
         """Lay out the title strip, the table, the strip of controls under it, and the hint at the bottom."""
         column = QVBoxLayout(self)
-        column.setContentsMargins(GRIP, GRIP, GRIP, GRIP)
+        margin = self.frame_margin()
+        column.setContentsMargins(margin, margin, margin, margin)
         column.addWidget(self.title_strip())
         self.table = QTableWidget(0, len(COLUMNS), self)
         self.table.setHorizontalHeaderLabels([heading for _key, heading, _width, _stretches in COLUMNS])
         self.table.verticalHeader().hide()
-        # Nothing is ever selected: a click opens the row and puts the window away, so a selection could only be the
-        # last thing clicked, and the desktop's style draws one as a frame at the edge of every cell in the row.
+        if self.translucent:
+            self.see_through_table()
+        # Selection and focus stay off: the desktop style frames each selected or focused cell, showing as a bar
+        # in every cell. The clicked row is highlighted by painting it instead.
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -236,20 +257,20 @@ class ChangesWindow(QWidget):
         header.sectionClicked.connect(self.on_heading_clicked)
         header.sectionResized.connect(self.on_column_resized)
         self.table.cellClicked.connect(self.on_cell_clicked)
-        # Right clicks are seen before the table does anything with them, since the table has no say in marking.
+        self.table.cellDoubleClicked.connect(self.on_cell_double_clicked)
+        # Catches right clicks before the table acts on them; the table has no notion of marking rows seen.
         self.table.viewport().installEventFilter(self)
         self.size_rows()
         self.size_columns()
         column.addWidget(self.table, 1)
         column.addLayout(self.controls())
-        # A shortcut rather than a key handler, so it works whichever part of the window has the focus.
         self.find_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Find), self)
         self.find_shortcut.activated.connect(self.focus_search)
         self.hint = QLabel(HINT, self)
         column.addWidget(self.hint)
 
     def title_strip(self) -> QWidget:
-        """Lay out the strip at the top: it names the window, is what it is dragged by, and carries the close mark."""
+        """Lay out the top strip: the window's name, its drag handle, and the close mark."""
         self.strip = QWidget(self)
         self.strip.setCursor(Qt.CursorShape.SizeAllCursor)
         row = QHBoxLayout(self.strip)
@@ -260,8 +281,7 @@ class ChangesWindow(QWidget):
         self.name.setFont(bold)
         row.addWidget(self.name)
         row.addStretch(1)
-        # The tray's menu, hung off a button so it opens under it: anchored to this window, it lands where it should
-        # even on a desktop that will not place a window by a screen coordinate. Hidden until the tray hands it over.
+        # Anchored here so the tray's menu opens under this button, even on desktops that ignore screen coordinates.
         self.menu_button = QToolButton(self.strip)
         self.menu_button.setText("Menu")
         self.menu_button.setAutoRaise(True)
@@ -299,16 +319,14 @@ class ChangesWindow(QWidget):
             strip.addWidget(chip)
             self.chips[name] = chip
         strip.addSpacing(12)
-        # Set apart from the quick filters, since it works alongside them rather than instead of them.
         self.closed_chip = QPushButton("Show closed", self)
         self.closed_chip.setCheckable(True)
         self.closed_chip.toggled.connect(self.set_show_closed)
         strip.addWidget(self.closed_chip)
-        # The search takes whatever room the buttons leave, so the strip stays one line.
         self.search = QLineEdit(self)
         self.search.setPlaceholderText("Search (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(self.characters(14))
+        self.size_search()
         self.search.textChanged.connect(self.set_search)
         strip.addSpacing(12)
         strip.addWidget(self.search, 1)
@@ -362,13 +380,9 @@ class ChangesWindow(QWidget):
         self.fit_columns(shrink_all=True)
 
     def fit_columns(self, shrink_all: bool) -> None:
-        """Make the columns fill the table exactly, so nothing is left empty and nothing has to scroll sideways.
+        """Fit the columns exactly to the table: the filling column takes any leftover width, and shrinks first.
 
-        Whatever is left over goes to the filling column, which also gives way first when there is too little. When
-        even that at its shortest leaves the rest too wide, every other column gives up the same share, which suits
-        the text having been zoomed but not a column the user has just dragged wider on purpose.
-
-        :param shrink_all: whether the other columns may be squeezed as well
+        :param shrink_all: whether the other columns may also be squeezed
         """
         # A table not yet shown has no width worth fitting to; the showing brings a resize that fits it then.
         room = self.table.viewport().width()
@@ -390,11 +404,7 @@ class ChangesWindow(QWidget):
             self.fitting = False
 
     def on_column_resized(self, index: int, _was: int, width: int) -> None:
-        """Remember a column's width once the user has dragged it, and let the filling column take up the difference.
-
-        Widths set by this code, and any set while the window is hidden, which is when it is put together, are not
-        the user's and are left alone. A drag of the filling column itself stands as dragged.
-        """
+        """Remember a column's width after the user drags it, ignoring widths this code sets or sets while hidden."""
         if self.fitting or index >= len(COLUMNS) or not self.isVisible():
             return
         self.remember(COLUMN_KEY.format(COLUMNS[index][0]), width)
@@ -402,10 +412,15 @@ class ChangesWindow(QWidget):
             self.fit_columns(shrink_all=False)
 
     def on_font_changed(self) -> None:
-        """Size the rows and columns for the text as it now is, and the window around them."""
+        """Size the rows, columns and search box for the text as it now is, and the window around them."""
         self.size_rows()
         self.size_columns()
+        self.size_search()
         self.refit(resize_width=True)
+
+    def size_search(self) -> None:
+        """Give the search box its least width in the font as it is now, so a zoom does not leave it stale."""
+        self.search.setMinimumWidth(self.characters(SEARCH_CHARACTERS))
 
     def heading_text(self) -> str:
         """Return the window's title, which counts the rows not yet marked seen."""
@@ -427,6 +442,18 @@ class ChangesWindow(QWidget):
         ]
         self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
 
+    def see_through_table(self) -> None:
+        """Let the window's see-through background show through the whole table, headings and edge included.
+
+        The rows' viewport and the heading strip each fill themselves with a solid colour unless told not to, the
+        desktop style paints a solid ground under every heading, and the table draws a solid frame around it all.
+        """
+        self.table.viewport().setAutoFillBackground(False)
+        header = self.table.horizontalHeader()
+        header.viewport().setAutoFillBackground(False)
+        header.setStyleSheet("QHeaderView::section { background: transparent; }")
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
+
     def refill(self) -> None:
         """Put the rows into the table in their current order, colour them, and count the unread ones in the title."""
         self.table.setRowCount(len(self.entries))
@@ -438,21 +465,9 @@ class ChangesWindow(QWidget):
         self.name.setText(self.heading_text())
 
     def paint(self) -> None:
-        """Colour every cell.
-
-        A row is drawn in the ink of what it is, at full strength while it wants attention and dimmed once seen.
-        That is the only thing that dims it: how old something is has a scale of its own in the date column, which
-        runs from just-happened to long-forgotten and reads as a gradient down the window. Dimming for age as well
-        left two rows of the same sort looking different for a reason nobody could name.
-
-        A name has an ink of its own too, dealt to it and kept, so the same person, organisation or repository
-        reads as the same colour in every row and rows about the same one group by eye. It dims with the rest of the
-        row once seen, unlike the date, whose scale is the point of it.
-
-        Dimming and washes are mixed towards the colour the toolkit actually painted the table, so they sit right in
-        whichever theme the desktop is drawing.
-        """
-        ground = self.table.palette().base().color().name()
+        """Colour every cell; a seen row dims except its date, which keeps its own age scale."""
+        ground = self.ground().name()
+        highlight = wash(self.table.palette().highlight().color().name(), HIGHLIGHT_STRENGTH)
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
             owner, _name = org_and_name(entry.repo)
@@ -463,7 +478,9 @@ class ChangesWindow(QWidget):
                 **{column_of(key): ink(self.inks, name_colour(named[key])) for key in NAMED_COLUMNS},
             }
             # A finished pull request's row sits on a wash of its status colour, so it reads as done at a glance.
-            wash = row_background(entry, self.inks, ground)
+            background = row_background(entry, self.inks)
+            if entry.url == self.highlighted_url:
+                background = highlight
             for column in range(len(COLUMNS)):
                 colour = inks.get(column) or ink(self.inks, entry.colour)
                 if entry.seen and column != date_column:
@@ -472,20 +489,26 @@ class ChangesWindow(QWidget):
                 if item is None:
                     continue
                 item.setForeground(QBrush(QColor(colour)))
-                item.setBackground(QBrush(QColor(wash)) if wash else QBrush())
+                item.setBackground(QBrush(QColor(background)) if background else QBrush())
 
     def on_cell_clicked(self, row: int, _column: int) -> None:
-        """Open the row that was left-clicked on GitHub, and put the window away.
+        """Highlight the row that was clicked.
 
         :param row: which row was clicked
+        """
+        self.highlighted_url = self.entries[row].url if 0 <= row < len(self.entries) else None
+        self.paint()
+
+    def on_cell_double_clicked(self, row: int, _column: int) -> None:
+        """Open the row that was double-clicked on GitHub, and put the window away.
+
+        :param row: which row was double-clicked
         """
         if 0 <= row < len(self.entries) and self.entries[row].url:
             self.open(self.entries[row].url)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Mark a row seen when it is right-clicked, and fit the columns when the table changes size.
-
-        Every other event is the table's own.
+        """Mark a row seen when right-clicked and fit the columns on resize; every other event is the table's own.
 
         :param watched: whatever the event was sent to
         :param event: the event
@@ -583,7 +606,7 @@ class ChangesWindow(QWidget):
         self.awaiting_poll = True
         self.refresh_button.setEnabled(False)
         self.refresh_button.setText("Refreshing")
-        self.hint.setText("Asked for a fresh look. This will update when it arrives.")
+        self.hint.setText("Refreshing. The window updates once GitHub answers.")
         self.refresh_asked.emit()
 
     def on_polled(self, succeeded: bool) -> None:
@@ -597,9 +620,7 @@ class ChangesWindow(QWidget):
         self.awaiting_poll = False
         self.refresh_button.setEnabled(True)
         self.refresh_button.setText("Refresh")
-        self.hint.setText(
-            "Up to date." if succeeded else "GitHub could not be reached, so this is what was last found."
-        )
+        self.hint.setText("Up to date." if succeeded else "Could not reach GitHub. Showing the last known data.")
 
     def reload(self) -> None:
         """Read the stored data again and redraw the table in the order and filter currently chosen."""
@@ -624,20 +645,17 @@ class ChangesWindow(QWidget):
         :param usable: how much of the screen a window may use
         """
         wanted = sum(self.characters(width) for _key, _heading, width, _stretches in COLUMNS) + WIDTH_ALLOWANCE
+        wanted += 2 * (self.frame_margin() - GRIP)
         return min(wanted, int(usable.width() * WIDEST_SHARE_OF_SCREEN))
 
     def wanted_width(self, usable: QRect) -> int:
-        """Return how wide the window should come up.
-
-        The width the user dragged it to, where they have, kept on the screen since it may have been dragged out on
-        a larger display than this one.
+        """Return how wide the window should open: the width last dragged to, clamped to this screen.
 
         :param usable: how much of the screen a window may use
         """
         dragged = self.remembered(WIDTH_KEY)
         wanted = self.characters(dragged) if dragged else self.preferred_width(usable)
-        # The controls along the bottom set a floor of their own, which the toolkit would enforce anyway, and a width
-        # it enforced would otherwise read as the user's doing.
+        # The bottom controls set their own minimum width; computed here so it is not mistaken for a user resize.
         least = max(MINIMUM_WIDTH, self.minimumSizeHint().width())
         return max(min(wanted, usable.width() - 2 * EDGE_MARGIN), least)
 
@@ -654,16 +672,11 @@ class ChangesWindow(QWidget):
         """
         around = self.sizeHint().height() - self.table.sizeHint().height()
         tallest = int(usable.height() * TALLEST_SHARE_OF_SCREEN)
-        # The controls set a floor of their own, as they do for the width, and it differs from desktop to desktop.
         least = max(MINIMUM_HEIGHT, self.minimumSizeHint().height())
         return max(min(around + self.table_height(), tallest), least)
 
     def settle_layout(self) -> None:
-        """Have the layout work out its sizes now, rather than on the next pass through the event loop.
-
-        The smallest the window may be follows the text, and the toolkit only takes that up when the layout next
-        runs. A window placed before then is held to the old floor, and its size would then read as the user's.
-        """
+        """Force layout to compute sizes now; the minimum size is stale until this runs, else that reads as a resize."""
         layout = self.layout()
         if layout is not None:
             layout.activate()
@@ -677,11 +690,7 @@ class ChangesWindow(QWidget):
         self.setGeometry(geometry)
 
     def show_by(self, spot: QPoint) -> None:
-        """Bring the window up beside a click, sized to its rows, with whatever is currently waiting.
-
-        The height follows how many rows there actually are, so a quiet day gets a small window rather than a tall
-        one mostly full of nothing. The window sits above and to the left of the click, and never below what the
-        desktop says is usable, so a click low on the screen does not put it behind the taskbar.
+        """Show the window beside a click, sized to its current rows so a quiet day gets a small window.
 
         :param spot: where on screen the click was
         """
@@ -696,13 +705,7 @@ class ChangesWindow(QWidget):
         top = max(
             usable.top() + EDGE_MARGIN, min(spot.y() - height - POINTER_GAP, usable.bottom() - height - EDGE_MARGIN)
         )
-        self.place(QRect(left, top, width, height))
-        self.shown_at = time.monotonic()
-        self.dismissed_at = None
-        self.desktop_dragging = False
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        self.bring_up(QRect(left, top, width, height))
         logger.debug(
             "showing {} rows in the {} theme at {}",
             len(self.entries),
@@ -711,13 +714,10 @@ class ChangesWindow(QWidget):
         )
 
     def refit(self, resize_width: bool = False) -> None:
-        """Re-fit the window's height to the rows now shown, growing and shrinking from its top edge.
+        """Re-fit the window's height to its current rows, growing or shrinking from the top edge.
 
-        The bottom edge stays where it is: the window opens above the click, usually just clear of the taskbar, so
-        growing downward would take the new rows straight off the bottom of the screen. Growing upward keeps every
-        row on it, and the top only gives way when the screen has no more room above.
-
-        :param resize_width: whether to re-fit the width as well, which the text being zoomed calls for
+        The bottom edge stays fixed, since growing downward would push rows off the screen.
+        :param resize_width: whether to also re-fit the width, needed when the text has been zoomed
         """
         if not self.isVisible():
             return
@@ -732,20 +732,50 @@ class ChangesWindow(QWidget):
         )
         self.place(QRect(left, top, width, height))
 
+    def show_below(self, other: QRect) -> None:
+        """Show the window under another one without taking the focus, so a settings change is seen at once.
+
+        :param other: where the other window is, on screen
+        """
+        self.reload()
+        self.settle_layout()
+        usable = self.usable_screen(other.center())
+        width, height = self.wanted_width(usable), self.wanted_height(usable)
+        left = max(usable.left() + EDGE_MARGIN, min(other.left(), usable.right() - width - EDGE_MARGIN))
+        top = other.bottom() + EDGE_MARGIN
+        if top + height > usable.bottom() - EDGE_MARGIN:
+            top = max(usable.top() + EDGE_MARGIN, other.top() - height - EDGE_MARGIN)
+        self.previewing = True
+        self.bring_up(QRect(left, top, width, height), activate=False)
+
+    def bring_up(self, geometry: QRect, activate: bool = True) -> None:
+        """Place the window and show it, fresh for the dismissal timing.
+
+        :param geometry: where the window goes
+        :param activate: whether it takes the focus, which a preview beside another window must not
+        """
+        self.place(geometry)
+        self.shown_at = time.monotonic()
+        self.dismissed_at = None
+        self.desktop_dragging = False
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not activate)
+        self.show()
+        self.raise_()
+        if activate:
+            self.activateWindow()
+
     def toggle(self, spot: QPoint) -> None:
-        """Show the window by a click, or put it away if it is already up.
+        """Show the window at a click, or hide it if already shown.
 
-        Clicking the tray icon while the window is up takes the focus from it, which puts it away before the click
-        is heard here. Answering that click by showing the window again would leave it having done nothing at all,
-        so a click this soon after a dismissal is taken as the one that did the dismissing.
-
+        A tray click while open hides the window, via focus loss, before this method sees the click, so a click
+        soon after dismissal counts as that click's cause rather than a fresh request to reopen.
         :param spot: where on screen the click was
         """
         if self.isVisible():
             self.hide()
             return
         if self.dismissed_at is not None and time.monotonic() - self.dismissed_at < TOGGLE_WITHIN_SECONDS:
-            logger.debug("the click that asked for the window is the one that just put it away")
+            logger.debug("this click just dismissed the window; ignoring it")
             self.dismissed_at = None
             return
         self.show_by(spot)
@@ -769,14 +799,13 @@ class ChangesWindow(QWidget):
         self.paint()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Remember the width the user dragged the window to. Widths this code set are not worth keeping.
+        """Remember the width the user dragged to; widths this code set are not worth keeping.
 
         :param event: the resize
         """
         super().resizeEvent(event)
         width = event.size().width()
-        # A width equal to the smallest the window may be was the toolkit's doing, holding the window to its floor as
-        # the text grew, and not the user's.
+        # A width equal to the window's minimum was the toolkit enforcing its floor as text grew, not a resize.
         forced = width == self.minimumSize().width()
         if self.isVisible() and width != self.placed_width and not forced:
             self.placed_width = width
@@ -788,15 +817,47 @@ class ChangesWindow(QWidget):
         :param spot: a point in the window's own coordinates
         """
         edges = Qt.Edge(0)
-        if spot.x() < GRIP:
+        grip = self.frame_margin()
+        if spot.x() < grip:
             edges |= Qt.Edge.LeftEdge
-        if spot.x() >= self.width() - GRIP:
+        if spot.x() >= self.width() - grip:
             edges |= Qt.Edge.RightEdge
-        if spot.y() < GRIP:
+        if spot.y() < grip:
             edges |= Qt.Edge.TopEdge
-        if spot.y() >= self.height() - GRIP:
+        if spot.y() >= self.height() - grip:
             edges |= Qt.Edge.BottomEdge
         return edges
+
+    def frame_margin(self) -> int:
+        """Return the margin around the contents: the grip, plus the shadow where one is painted."""
+        return GRIP + self.shadow
+
+    def ground(self) -> QColor:
+        """Return the colour the rows sit on, which is the window's own where the viewport paints none."""
+        return self.palette().window().color() if self.translucent else self.table.palette().base().color()
+
+    def set_opacity(self, percent: int | None) -> None:
+        """Make the background this solid, where the desktop can draw a see-through window at all.
+
+        :param percent: how solid the background is, up to 100, or None for the default given the blur
+        """
+        self.wanted_opacity = int(percent) if percent is not None else None
+        self.opacity = self.wanted_opacity if self.wanted_opacity is not None else default_opacity(self.blurred())
+        self.update()
+
+    def blurred(self) -> bool:
+        """Return whether the desktop is blurring behind the window right now."""
+        return bool(self.blur) and self.blur_wanted
+
+    def set_blur(self, wanted: bool) -> None:
+        """Switch the desktop's blur behind the window off or on, where there is one, keeping the default opacity apt.
+
+        :param wanted: whether the blur should be drawn
+        """
+        self.blur_wanted = wanted
+        if self.blur:
+            show_blur(self, self.blur, wanted)
+        self.set_opacity(self.wanted_opacity)
 
     def start_system_move(self) -> None:
         """Hand the desktop a drag of the whole window, which it carries on until the button is released."""
@@ -804,7 +865,7 @@ class ChangesWindow(QWidget):
         if handle is not None and handle.startSystemMove():
             self.desktop_dragging = True
         else:
-            logger.debug("this desktop does not move a window on the application's behalf")
+            logger.debug("this desktop will not move the window for the application")
 
     def start_system_resize(self, edges: Qt.Edge) -> None:
         """Hand the desktop a resize of the window by some of its edges.
@@ -815,7 +876,7 @@ class ChangesWindow(QWidget):
         if handle is not None and handle.startSystemResize(edges):
             self.desktop_dragging = True
         else:
-            logger.debug("this desktop does not resize a window on the application's behalf")
+            logger.debug("this desktop will not resize the window for the application")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """Start a move from the title strip or a resize from an edge. Presses anywhere else are the contents' own.
@@ -865,36 +926,65 @@ class ChangesWindow(QWidget):
         self.unsetCursor()
         super().leaveEvent(event)
 
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Drop the row highlight as the window goes away, so it does not come back with a stale one.
+
+        :param event: the hiding
+        """
+        self.highlighted_url = None
+        self.previewing = False
+        super().hideEvent(event)
+
     def paintEvent(self, event: QPaintEvent) -> None:
-        """Draw a line around the window, since without a frame nothing else says where it ends.
+        """Draw the background: rounded, see-through and shadowed where the desktop composites, else a border.
 
         :param event: what needs painting
         """
         super().paintEvent(event)
         painter = QPainter(self)
-        painter.setPen(self.palette().mid().color())
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        if not self.translucent:
+            painter.setPen(self.palette().mid().color())
+            painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+            painter.end()
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inner = self.rect().adjusted(self.shadow, self.shadow, -self.shadow - 1, -self.shadow - 1)
+        shade = QColor(0, 0, 0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for step in range(self.shadow, 0, -1):
+            shade.setAlpha(int(SHADOW_ALPHA * (1 - step / SHADOW) ** 2))
+            painter.setPen(shade)
+            painter.drawRoundedRect(inner.adjusted(-step, -step, step, step), CORNER + step, CORNER + step)
+        ground = self.ground()
+        ground.setAlpha(round(255 * self.opacity / 100))
+        painter.setBrush(ground)
+        if self.blur.kind == "dwm":
+            # Windows rounds and borders the window itself, and clips the tint to its corners.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRect(self.rect())
+        else:
+            painter.setPen(self.palette().mid().color())
+            painter.drawRoundedRect(inner, CORNER, CORNER)
+        ground.setAlpha(table_overlay_alpha(self.opacity, TABLE_OPACITY_OFFSET))
+        painter.setBrush(ground)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self.table.geometry(), TABLE_CORNER, TABLE_CORNER)
         painter.end()
 
     def event(self, event: QEvent) -> bool:
-        """Put the window away when something else takes the focus, once it has settled after coming up.
+        """Hide the window when focus moves elsewhere, once it has settled after appearing.
 
-        A window with no frame has no other way of being clicked away: clicking anything else on screen is what
-        takes the focus. A loss of focus in the window's first moments is part of its arriving, not a dismissal,
-        and nor is one during a move or resize the desktop is doing on the window's behalf, which on some
-        desktops takes the activation for the whole drag.
-
-        :param event: any event the window is sent
+        A frameless window has no other way to detect a click elsewhere, since any click takes focus. A loss in
+        the first moments, or during a desktop-driven drag (some desktops hold activation throughout), is ignored.
+        :param event: any event the window receives
         """
         if event.type() == QEvent.Type.WindowActivate:
-            # The activation comes back with the first click on the window after such a drag, and losing it after
-            # that is the user's doing again.
             self.desktop_dragging = False
-        # Visibility is asked first: events arrive while the window is still being built, before it has a show time.
+        # isVisible() first: events arrive while the window is still being built, before it has a show time.
         deactivated = event.type() == QEvent.Type.WindowDeactivate and self.isVisible()
         # A menu of this application's own, popped up from the window, is not somebody clicking elsewhere.
         if deactivated and self.settled() and not self.desktop_dragging and QApplication.activePopupWidget() is None:
-            logger.debug("the focus went elsewhere, putting the window away")
+            logger.debug("focus moved elsewhere; hiding the window")
             self.hide()
             self.dismissed_at = time.monotonic()
         return super().event(event)

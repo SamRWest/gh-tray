@@ -1,10 +1,6 @@
-"""Desktop notifications for detected changes.
+"""Desktop notifications for detected changes; clicking one opens its pull request in the default browser.
 
-Clicking a notification opens the pull request it is about in the default browser.
-
-Notifications are raised from a long-lived event loop on its own thread. The platform backend calls back into the
-sending loop when a notification is clicked or dismissed, which can happen long after the send returns, so a loop
-that is closed straight after sending would raise on that callback and no click could ever be handled.
+The loop stays open on its own thread; late clicks or dismissals call back into it, so closing early would raise.
 """
 
 from __future__ import annotations
@@ -18,21 +14,18 @@ from desktop_notifier.backends.dummy import DummyNotificationCenter
 from desktop_notifier.main import get_backend_class
 from loguru import logger
 
-from . import APP_NAME
-from .config import APP_ICON_PATH
-from .environment import notify_by_script
-from .events import label_for
-from .status import write_app_icon
+from gh_tray import APP_NAME
+from gh_tray.config import APP_ICON_PATH
+from gh_tray.environment import notify_by_script
+from gh_tray.events import label_for
+from gh_tray.status import write_app_icon
 
 MAX_LINES_PER_NOTIFICATION = 4
 SEND_TIMEOUT_SECONDS = 30
 
 
 def own_icon() -> Icon | None:
-    """Return the application's own mark for a notification to carry, or nothing if it cannot be drawn.
-
-    Without one the notification service falls back to the icon of whatever program raised it, which for a Python
-    application is the Python logo: nothing to do with this application and no help in telling it apart.
+    """Return the application's own mark, or None if drawing it failed, so notifications skip the Python logo.
 
     :return: the icon, or None where drawing it failed
     """
@@ -46,9 +39,7 @@ def own_icon() -> Icon | None:
 def notification_center_available() -> bool:
     """Return whether the desktop's notification service will take notifications from this process.
 
-    macOS hands Notification Center only to an app bundle, and a Python interpreter installed by a package manager
-    is not one, so the notification library quietly substitutes a backend that does nothing. Which backend it chose
-    is asked of it rather than worked out again here.
+    macOS grants Notification Center only to app bundles, so a plain script gets a no-op backend here instead.
     """
     return get_backend_class() is not DummyNotificationCenter
 
@@ -67,13 +58,7 @@ class Notifier:
     def _ready(self) -> tuple[asyncio.AbstractEventLoop | None, DesktopNotifier | None]:
         """Return the running loop and backend, starting them on first use.
 
-        Nothing slow or unpredictable happens while the lock is held: the icon is drawn first, and everything this
-        needs is imported when the module is. Doing either inside the lock, on the thread that also holds the poll
-        lock, is what wedged the whole application once.
-
-        Both values are read inside the lock and returned as locals, so a concurrent stop cannot leave the caller
-        holding a half-torn-down pair. Once stopped, nothing is started again: a notification after shutdown would
-        otherwise raise a fresh loop and thread that nobody would ever stop.
+        Nothing slow happens under the lock, since this thread also holds the poll lock; locals avoid a half-torn pair.
 
         :return: the event loop and the desktop notifier bound to it, or a pair of None once stopped
         """
@@ -110,9 +95,6 @@ class Notifier:
     def target_url(self, events: list[dict]) -> str:
         """Return the page a click on the notification should open.
 
-        The notification lists changes in the order they were detected, so the first one carrying a page is the one
-        the reader sees at the top and the one a click most plausibly means.
-
         :param events: the changes the notification describes
         :return: the address to open, empty when none of them carries one
         """
@@ -132,13 +114,10 @@ class Notifier:
         url = self.target_url(chosen)
 
         def clicked() -> None:
-            """Open the pull request the notification is about, in the default browser."""
             if url:
                 webbrowser.open(url)
 
         if not notification_center_available():
-            # Spoken rather than raised: the desktop will not take a notification from this process, so the
-            # scripting bridge carries the words alone, with no icon and nothing to click.
             notify_by_script(title, body)
             logger.info(
                 "notified about {} change(s) by script, as this desktop offers this process no notification service",
@@ -155,7 +134,7 @@ class Notifier:
                 backend.send(title=title, message=body, on_clicked=clicked),
                 loop,
             ).result(timeout=SEND_TIMEOUT_SECONDS)
-        except Exception as error:  # a notification failing must never stop the poll loop
+        except Exception as error:
             logger.error("could not raise a notification: {}", error)
             return False
         logger.info("notified about {} change(s)", len(chosen))

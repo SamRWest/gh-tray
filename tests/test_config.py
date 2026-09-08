@@ -123,3 +123,14 @@ def test_the_involved_and_catch_all_switches_are_read_as_switches(settings_file)
     assert loaded["involved"] is True
     assert loaded["watch_others"] is False
     assert loaded["watched_owners"] == ["acme", "me"]
+
+
+def test_opacity_is_unset_by_default_and_held_between_its_floor_and_solid_when_set(settings_file):
+    assert config.load_config()["opacity"] is None
+    settings_file.write_text(json.dumps({"opacity": 5}), encoding="utf-8")
+    assert config.load_config()["opacity"] == config.OPACITY_RANGE[0]
+    settings_file.write_text(json.dumps({"opacity": 250}), encoding="utf-8")
+    assert config.load_config()["opacity"] == config.OPACITY_RANGE[1]
+    settings_file.write_text(json.dumps({"opacity": "solid"}), encoding="utf-8")
+    assert config.load_config()["opacity"] is None
+    assert (config.default_opacity(False), config.default_opacity(True)) == (95, 80)

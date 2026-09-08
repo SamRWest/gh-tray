@@ -1,14 +1,6 @@
-"""Detecting, recording and reading changes between polls.
+"""Detects, records and reads changes between polls.
 
-Only transitions produce events. A pull request that was already failing when the previous poll ran is not reported
-again, which is what stops a large backlog of red pull requests becoming a wall of notifications.
-
-Polling and looking are tracked separately: the collector advances its baseline every run, but the unread count is
-measured against what the user has actually looked at, so nothing is lost between a change landing and being read.
-
-What counts as looked at comes from two places. Clicking a row in the window marks that one row, either way, and
-those marks are kept per row. Marking everything seen sets a single timestamp, and anything older than it counts as
-seen without needing a mark of its own.
+Only transitions produce events; unread counts track what has been looked at, marked per row or all at once.
 """
 
 from __future__ import annotations
@@ -18,11 +10,10 @@ from datetime import UTC, datetime
 
 from loguru import logger
 
-from .config import EVENTS_PATH, SEEN_PATH
-from .storage import read_json, write_json_atomic, write_text_atomic
+from gh_tray.config import EVENTS_PATH, SEEN_PATH
+from gh_tray.storage import read_json, write_json_atomic, write_text_atomic
 
-# Each rule names the change it detects, the wording used in menus and notifications, and whether it should turn the
-# icon red rather than amber. Red means someone is blocked, or something the user owns is broken.
+# Wording and red/amber colour per rule; red means someone is blocked or something the user owns is broken.
 RULE_LABELS: dict[str, tuple[str, bool]] = {
     "review_requested": ("Review requested", True),
     "ci_broken": ("Checks broke", True),
@@ -35,15 +26,12 @@ RULE_LABELS: dict[str, tuple[str, bool]] = {
 
 BROKEN_CI = frozenset({"FAILURE", "ERROR"})
 
-# Changes that are not worth telling the user about when the user is the one who made them. A comment they wrote
-# themselves is not news; their own commit breaking the checks still is, so only these two are dropped.
+# Own comment is not news, but own commit breaking checks still is, so only these two kinds are self-caused.
 SELF_CAUSED_KINDS = frozenset({"new_comment", "mention"})
 
-# Field values that mean "not worked out yet" rather than a real state, and so must never be compared against.
+# Values meaning "not worked out yet" rather than a real state; never compared against.
 UNINFORMATIVE_VALUES: dict[str, frozenset[str]] = {"mergeable": frozenset({"UNKNOWN"})}
 
-# What each snapshot field falls back to when the collector reports it as absent. A field left as None would make
-# every later comparison against it meaningless, so the fallbacks stand in for "nothing known yet".
 SNAPSHOT_DEFAULTS: dict = {
     "repo": "",
     "number": 0,
@@ -63,10 +51,7 @@ SNAPSHOT_DEFAULTS: dict = {
     "lastCommentAnswers": "",
 }
 
-# Whose name to show against each kind of change. The collector reports the last person to act in each of these
-# ways, so the rule that fired decides which of them is the one worth naming. A conflict names the pull request's
-# author, whose branch has to take the rebase: it is a consequence of somebody else's merge into the base branch,
-# and GitHub does not record whose, so the one name that means something is the one on the door.
+# Actor field named per rule; conflict names the author, since GitHub does not record who caused it.
 ACTOR_FIELDS: dict[str, str] = {
     "review_requested": "author",
     "ci_broken": "lastCommitBy",
@@ -77,21 +62,16 @@ ACTOR_FIELDS: dict[str, str] = {
 }
 SNAPSHOT_FIELDS = tuple(SNAPSHOT_DEFAULTS)
 
-# Microsecond precision, so a change detected in the same second as a manual refresh still sorts after it.
+# Microsecond precision, so a change in the same second as a manual refresh still sorts after it.
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 
-# How many polls a pull request may be missing from the collector's results before it is treated as gone. The
-# collector's GitHub queries fail and truncate intermittently, and without this a pull request that blinks out of
-# one result would be reported as newly arrived when it came back.
+# Polls missing before a pull request is treated as gone; GitHub's queries truncate, so a returning one is common.
 ABSENCE_GRACE_POLLS = 3
 
-# The event log is trimmed to the tail whenever the user marks everything seen, and capped regardless so that never
-# looking cannot grow the file without limit.
+# Trimmed to the tail on mark-seen, and capped regardless, so never looking cannot grow the file without limit.
 EVENT_TAIL_KEPT = 200
 EVENT_HARD_LIMIT = 2000
 
-# What the record of looking holds: when the user last marked everything seen, and the rows they have since marked
-# one at a time. The second is capped, since a row marked long ago has usually dropped out of the window entirely.
 LAST_SEEN_KEY = "lastSeenAt"
 SEEN_ROWS_KEY = "rows"
 SEEN_ROWS_KEPT = 200
@@ -108,19 +88,12 @@ def is_urgent(kind: str) -> bool:
 
 
 def utc_now() -> str:
-    """Return the current time as a sortable UTC timestamp.
-
-    Sub-second precision matters: unread changes are those stamped later than the moment the user last looked, so at
-    whole-second resolution a change detected in the same second as a manual refresh would never be counted.
-    """
+    """Return the current time as a sortable UTC timestamp."""
     return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
 
 def moment(stamp: str) -> datetime:
-    """Parse a stored timestamp into a comparable moment.
-
-    Timestamps are compared as moments rather than as text because text comparison is only sound while every stamp
-    shares one format, and a stamp written by an older version would otherwise sort the wrong way round.
+    """Parse a stored timestamp into a comparable moment; text comparison breaks once stamp formats differ.
 
     :param stamp: a timestamp as written into the event log or the seen marker
     :return: the moment it names, or the earliest representable moment when it cannot be read
@@ -159,10 +132,7 @@ def role_of(side: object) -> str:
 
 
 def snapshot_key(side: str, key: str) -> str:
-    """Return the snapshot key for one pull request on one side of the digest.
-
-    The side is part of the key because the same pull request can appear both as the user's own and as one awaiting
-    their review, and collapsing the two would discard whichever arrived first along with its change history.
+    """Return the snapshot key for one pull request on one side (collapsing sides would lose one's history).
 
     :param side: ``authored``, ``reviewing``, ``involved`` or ``closed``
     :param key: the collector's own key, being repository and number
@@ -190,11 +160,7 @@ def snapshot_of(digest: dict) -> dict:
 
 
 def carry_known_values(previous: dict, current: dict) -> dict:
-    """Replace values meaning "not worked out yet" with the last value that meant something.
-
-    GitHub works out whether a pull request can be merged only when asked, so it commonly reads as unknown on one
-    poll and returns to its real value on the next. Comparing against the unknown would report that return as a
-    fresh change, over and over, for a pull request whose state never actually moved.
+    """Replace "not worked out yet" values with the last known one (mergeability may read unknown briefly).
 
     :param previous: the snapshot stored by the last poll
     :param current: the snapshot just built from a fresh result
@@ -216,9 +182,6 @@ def carry_known_values(previous: dict, current: dict) -> dict:
 
 def carry_forward(previous: dict, current: dict, grace: int = ABSENCE_GRACE_POLLS) -> dict:
     """Return the snapshot to store, keeping recently vanished pull requests for a few polls.
-
-    A pull request missing from one collector result is usually a transient GitHub failure rather than a merge, so
-    its record is held briefly. Without this it would be reported as newly arrived the moment it came back.
 
     :param previous: the snapshot stored by the last poll
     :param current: the snapshot just built from a fresh result
@@ -258,17 +221,12 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "detail": detail,
         "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
         "author": pull_request.get("author", ""),
-        # Which of the user's hats the change lands on: their own pull request, one they review, or one they are
-        # merely involved in.
         "role": role_of(pull_request.get("side")),
     }
 
 
 def comment_concerns_user(pull_request: dict, login: str) -> bool:
-    """Return whether a new comment on a pull request is one the user would want to hear about.
-
-    On their own, every comment is. On one they merely review, only an answer to one of their own review comments
-    is: the rest is a conversation between the author and the other reviewers.
+    """Return whether a comment is worth telling the user about (own: always; reviewed: only a reply to them).
 
     :param pull_request: the pull request as the snapshot records it
     :param login: the signed-in account, or empty when it is not known
@@ -311,8 +269,7 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
                 events.append(_event("changes_requested", pull_request, "a reviewer asked for changes", at))
             if mergeable_now(pull_request) and not mergeable_now(was):
                 events.append(_event("ready_to_merge", pull_request, "approved, green and conflict free", at))
-            # Only on the user's own: a conflict is for whoever has to rebase, and on a pull request they are
-            # merely reviewing that is somebody else.
+            # Own pull request only: on one they merely review, it is someone else who has to rebase.
             if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
                 events.append(_event("conflict", pull_request, "needs a rebase", at))
         if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(
@@ -325,9 +282,7 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
 
 
 def detect_mention_events(digest: dict, seen_urls: set[str], at: str) -> list[dict]:
-    """Return one event per mention not already recorded.
-
-    A mention stays unread on GitHub until it is opened there, so the same one can arrive on several polls.
+    """Return one event per mention not already recorded (unread ones can arrive again on later polls).
 
     :param digest: a full collector result
     :param seen_urls: mention addresses already in the event history
@@ -375,9 +330,6 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
 def caused_by(event: dict, login: str) -> bool:
     """Return whether a change is one the user brought about themselves.
 
-    Their own comment is not news to them. Their own commit breaking the checks is, so only the kinds where the
-    doing and the knowing are the same act are dropped.
-
     :param event: the change to judge
     :param login: the signed-in account, or empty when it is not known
     """
@@ -386,9 +338,6 @@ def caused_by(event: dict, login: str) -> bool:
 
 def read_events(limit: int | None = None) -> list[dict]:
     """Return events from the log, oldest first.
-
-    The whole log is read by default, because the unread count must cover everything the user has not seen and the
-    log is kept small by trimming rather than by reading only part of it.
 
     :param limit: when given, read only this many trailing entries
     """
@@ -454,10 +403,7 @@ def seen_marks() -> dict[str, dict]:
 
 
 def row_identity(url: str, repo: str = "", number: str | int = "") -> str:
-    """Return what a row is remembered by once the user has marked it.
-
-    The address is used where there is one, since it names the thing itself rather than where it happens to sit in
-    a list. Where there is none, the repository and number stand in.
+    """Return what a row is remembered by: its URL where there is one, else its repository and number.
 
     :param url: the page the row leads to
     :param repo: the repository the row is about
@@ -475,10 +421,7 @@ def event_identity(event: dict) -> str:
 
 
 def mark_still_applies(mark: dict, at: str) -> bool:
-    """Return whether a mark made by hand still describes a row.
-
-    A mark is made against the row as it stood, so anything that happens afterwards undoes it: a pull request
-    marked seen and then commented on is something to look at again.
+    """Return whether a mark still describes a row (a later change to the row, e.g. a new comment, undoes it).
 
     :param mark: what was recorded when the user marked the row
     :param at: when the row being drawn last changed
@@ -487,10 +430,7 @@ def mark_still_applies(mark: dict, at: str) -> bool:
 
 
 def has_been_seen(identity: str, at: str, marks: dict[str, dict], since: datetime | None) -> bool:
-    """Return whether the user has already looked at something.
-
-    A mark made on the row itself wins, being the more deliberate statement of the two. Failing that, anything
-    older than the last time the user marked everything seen counts as seen.
+    """Return whether the user has seen something (a row's own mark wins; else before mark-everything-seen counts).
 
     :param identity: what the row is remembered by
     :param at: when the thing being judged last changed
@@ -504,10 +444,7 @@ def has_been_seen(identity: str, at: str, marks: dict[str, dict], since: datetim
 
 
 def mark_seen() -> None:
-    """Record that the user has looked at everything, and shorten the log now that nothing in it is unread.
-
-    Marks made on single rows are dropped, since the one timestamp now says everything they said.
-    """
+    """Record that the user has looked at everything, and shorten the log now nothing in it is unread."""
     write_json_atomic(SEEN_PATH, {LAST_SEEN_KEY: utc_now()})
     trim_events(EVENT_TAIL_KEPT)
 
@@ -525,10 +462,7 @@ def newest_marks(marks: dict[str, dict], keep: int = SEEN_ROWS_KEPT) -> dict[str
 
 
 def remember_seen(identity: str, at: str, seen: bool) -> None:
-    """Record that the user has marked one row seen or unseen.
-
-    Both answers are stored, because marking a row unseen has to outlast the moment everything was last marked
-    seen, which would otherwise put the row straight back to seen.
+    """Record that the user has marked one row seen or unseen (an unseen mark must outlast mark-everything-seen).
 
     :param identity: what the row is remembered by
     :param at: when the row last changed, so a later change undoes the mark

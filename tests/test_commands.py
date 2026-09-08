@@ -1,9 +1,9 @@
 """Every command can reach what it imports.
 
-The commands that open a window import it inside the function, so the cost of a window toolkit is not paid by a
-command that never opens one. The price of that is a rename which moves the target going unnoticed: nothing fails
-until somebody runs the command, and the window opens as its own process with no console, so the failure is
-silent. These cases resolve each of those imports without running anything.
+The commands that open a window import it inside the function. This way, a command that never opens a window
+does not pay the cost of loading the toolkit. The price is that a rename moving an import's target can go
+unnoticed: nothing fails until someone runs the command. The window then opens as its own process with no
+console, so the failure is silent. These cases resolve every such import without running anything.
 """
 
 from __future__ import annotations
@@ -81,14 +81,14 @@ def test_linked_prints_the_whole_path_where_nobody_draws_links(tmp_path):
     assert __main__.linked(target) == str(target)
 
 
-def test_linked_wraps_the_name_in_a_terminal_hyperlink(tmp_path, monkeypatch):
+def test_linked_wraps_the_whole_path_in_a_terminal_hyperlink(tmp_path, monkeypatch):
     class Terminal(io.StringIO):
         def isatty(self) -> bool:
             return True
 
     monkeypatch.setattr(sys, "stdout", Terminal())
     target = tmp_path / "gh-tray.log"
-    assert __main__.linked(target) == f"\x1b]8;;{target.as_uri()}\x1b\\gh-tray.log\x1b]8;;\x1b\\"
+    assert __main__.linked(target) == f"\x1b]8;;{target.as_uri()}\x1b\\{target}\x1b]8;;\x1b\\"
 
 
 def deferred_imports() -> list[tuple[str, str, int]]:
@@ -100,8 +100,9 @@ def deferred_imports() -> list[tuple[str, str, int]]:
     found = []
     for function in (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)):
         for node in ast.walk(function):
-            if isinstance(node, ast.ImportFrom) and node.level:
-                found += [(node.module or "", alias.name, node.lineno) for alias in node.names]
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("gh_tray."):
+                module = node.module.removeprefix("gh_tray.")
+                found += [(module, alias.name, node.lineno) for alias in node.names]
     return found
 
 

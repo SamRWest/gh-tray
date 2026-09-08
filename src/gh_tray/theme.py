@@ -1,12 +1,6 @@
-"""The inks the windows draw with, in a dark and a light set, following whichever theme the desktop is set to.
+"""The inks windows draw with, in a dark and a light set, following the desktop's theme.
 
-The toolkit paints the windows themselves in the desktop's own colours. What is kept here is the colour a row is
-given for what it is: the reds and ambers of the Change column, the hue a name is dealt, the scale a date is drawn
-on, and the wash a finished pull request sits on. Each comes in a dark and a light form, since a red that reads on
-a near-black ground is lost on white.
-
-Colours are named for what they mean rather than for what they look like, so the same name can be a pale red on a
-white background and a bright one on a dark background without any caller having to know which it got.
+Inks are named for meaning, not appearance, so one name gives a pale red on white and a bright red on dark.
 """
 
 from __future__ import annotations
@@ -16,8 +10,8 @@ from dataclasses import dataclass
 from loguru import logger
 from platformdirs import user_data_path
 
-from . import APP_NAME
-from .storage import read_json
+from gh_tray import APP_NAME
+from gh_tray.storage import read_json
 
 CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 
@@ -26,19 +20,16 @@ CONFIG_PATH = user_data_path(APP_NAME, appauthor=False) / "config.json"
 class Palette:
     """The inks for one theme, and the grounds they are checked against.
 
-    The grounds are what a desktop typically paints a window in that theme. Every ink here reads at 4.5 to 1 or
-    better on both, which a test holds it to, so nothing depends on a well-adjusted monitor. The windows blend
-    towards the colour the toolkit actually painted them, so the grounds are a standard rather than something drawn.
+    The grounds are a fixed reference: a test holds every ink to 4.5:1 contrast or better against both, though a
+    window actually blends towards whichever ground the toolkit paints, so the palette is only a reference.
     """
 
     dark: bool
     background: str
     surface: str
-    # The quiet ink, for a status nobody need act on and a name nobody has. Tinted towards its ground rather than
-    # plain grey, which would read as switched off rather than merely quiet.
+    # The quiet ink, for no-action status; tinted towards its ground, not plain grey, which would read as switched off.
     muted: str
-    # One hue per sort of thing, so a glance down the window tells them apart without reading a word. They are
-    # bright enough to stay themselves when dimmed for a row already seen, which a muted colour does not.
+    # One hue per sort of thing, readable at a glance; bright enough to stay itself when dimmed for a seen row.
     red: str
     orange: str
     amber: str
@@ -46,14 +37,11 @@ class Palette:
     blue: str
     violet: str
     pink: str
-    # The two ends of the scale a date is drawn on: blue for something that just happened, through to red for
-    # something long forgotten, so age reads at a glance rather than as two shades of the same thing.
+    # The two ends of the date scale: blue for recent, red for long forgotten, so age reads at a glance.
     fresh: str
     stale: str
 
 
-# Neutral near-black grounds in the manner of an IDE's high-contrast dark scheme, with the accents kept muted rather
-# than neon.
 DARK = Palette(
     dark=True,
     background="#1e1f22",
@@ -70,7 +58,6 @@ DARK = Palette(
     stale="#f86270",
 )
 
-# The same hues taken dark enough to read on white, held to the same contrast floor.
 LIGHT = Palette(
     dark=False,
     background="#ffffff",
@@ -88,7 +75,6 @@ LIGHT = Palette(
 )
 
 
-# What the theme setting may be set to, and what each means.
 FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT = "auto", "dark", "light"
 STYLES = (FOLLOW_DESKTOP, ALWAYS_DARK, ALWAYS_LIGHT)
 
@@ -107,11 +93,21 @@ def blend(colour: str, towards: str, weight: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in mixed)
 
 
+def wash(colour: str, strength: float) -> str:
+    """Give a colour an alpha, for a background laid over whatever the window shows through.
+
+    A blend into the ground paints a solid colour, which hides a see-through window's background. A colour that
+    carries its own alpha composes over it instead, and over a solid ground it comes out the same as the blend.
+
+    :param colour: the colour to wash with, as ``#rrggbb``
+    :param strength: how much of the colour shows, where one is solid and zero is nothing
+    :return: the colour as ``#aarrggbb``, which the toolkit reads alpha first
+    """
+    return f"#{round(255 * strength):02x}{colour[1:]}"
+
+
 def ink(inks: Palette, name: str) -> str:
     """Return the colour a named ink is in a palette.
-
-    Rows carry the names of their inks rather than the colours, so a window can follow the desktop from dark to
-    light without the rows having to be built again.
 
     :param inks: the palette of the theme being drawn in
     :param name: the ink's name, which is one of the palette's fields
@@ -122,8 +118,7 @@ def ink(inks: Palette, name: str) -> str:
 def is_dark() -> bool:
     """Return whether the desktop is set to a dark theme, defaulting to dark when it cannot be told.
 
-    Asked of the toolkit, which reads the desktop's setting on every platform and needs the application to exist
-    first. It is imported here rather than at the top, so a command that opens no window never loads it.
+    Imported here rather than at the top, so a windowless command asking for the toolkit is not forced to load it.
     """
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication
@@ -150,8 +145,7 @@ def palette(style: str = FOLLOW_DESKTOP) -> Palette:
 def chosen_style() -> str:
     """Return the theme the settings ask for, read from the settings file directly.
 
-    The settings module cannot be imported here, since it needs this one. The file is small and read as a window
-    comes up or the desktop changes, so reading it again costs nothing.
+    The settings module cannot be imported here, since it needs this one; re-reading the small file costs nothing.
     """
     stored, _damaged = read_json(CONFIG_PATH)
     asked = stored.get("theme") if isinstance(stored, dict) else None

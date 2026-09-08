@@ -1,9 +1,4 @@
-"""Checking for the outside tools this application needs, and installing the ones that can be installed safely.
-
-Only installs that manage their own elevation are ever run: a package manager that prompts for administrator rights
-itself, or a GitHub extension that lands in the user's own directory. Anything needing a root shell is printed for
-the user to run, because a desktop application quietly acquiring root is not a thing anyone should have to trust.
-"""
+"""Detects needed tools and installs what it safely can; anything needing root is printed for the user instead."""
 
 from __future__ import annotations
 
@@ -15,19 +10,15 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-from .environment import github_cli, run_quietly
+from gh_tray.environment import github_cli, run_quietly
 
 INSTALL_TIMEOUT_SECONDS = 600
-# The distributions' own package managers, each with the command that installs the tool. Printed for the user to
-# run with root, never run here.
 DISTRIBUTION_INSTALLS = (
     ("apt-get", "sudo apt install gh"),
     ("dnf", "sudo dnf install gh"),
     ("pacman", "sudo pacman -S github-cli"),
     ("zypper", "sudo zypper install gh"),
 )
-# The one library of the desktop's that the toolkit needs to draw on an X display and a bare Linux most often lacks,
-# by the package that provides it under each package manager.
 XCB_CURSOR_INSTALLS = (
     ("apt-get", "sudo apt install libxcb-cursor0"),
     ("dnf", "sudo dnf install xcb-util-cursor"),
@@ -52,10 +43,7 @@ class Requirement:
 
 
 def package_manager() -> tuple[str, list[str]] | None:
-    """Return the platform's package manager and the arguments that install with it.
-
-    Only managers that prompt for elevation themselves, or need none, are offered. A manager needing ``sudo`` is
-    deliberately not run, so on most Linux systems the distribution's own command is printed instead.
+    """Return the platform's package manager, skipping ones that need sudo, and its install arguments.
 
     :return: the manager's name and the leading arguments of an install command, or None when there is none to use
     """
@@ -137,8 +125,7 @@ def requirements() -> list[tuple[Requirement, bool]]:
                 "GitHub sign-in",
                 "without it every call is refused",
                 [],
-                # The protocol it asks about is for git itself and makes no difference here; HTTPS just asks less.
-                manual="run: gh auth login (answer HTTPS to the protocol question: SSH only adds key questions)",
+                manual="run: gh auth login (choose HTTPS; SSH only adds extra key questions)",
             ),
             signed_in(),
         ),
@@ -151,8 +138,7 @@ def requirements() -> list[tuple[Requirement, bool]]:
             ),
             gh_dash_installed(),
         ),
-        # Last, and only where there is anything to check: without it the toolkit stops the tray with a page of its
-        # own complaints, which this says in one line instead.
+        # Checked last, Linux only: without this the toolkit crashes with a wall of Qt errors instead of one line.
         *(
             [
                 (

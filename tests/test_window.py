@@ -10,10 +10,11 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
+from PySide6.QtWidgets import QFrame
 from pytestqt.qtbot import QtBot
 
-from gh_tray import popup, theme, window
+from gh_tray import config, popup, theme, window
 
 
 def row(
@@ -62,6 +63,7 @@ class WindowBuilder:
         self.opened: list[str] = []
         self.seen_marks: list[tuple[popup.Row, bool]] = []
         monkeypatch.setattr(window.webbrowser, "open", self.opened.append)
+        monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur())
         monkeypatch.setattr(window, "remember_row_seen", lambda entry, seen: self.seen_marks.append((entry, seen)))
 
     def __call__(self, rows: list[popup.Row] | None = None) -> window.ChangesWindow:
@@ -142,19 +144,33 @@ def test_close_hides_rather_than_destroys(view):
     assert view.isVisible()
 
 
-def test_a_left_click_on_a_row_opens_its_url_and_hides(view, qtbot, build_window):
+def test_a_double_click_on_a_row_opens_its_url_and_hides(view, qtbot, build_window):
     view.show()
     url = view.entries[0].url
+    # The table opens a row only on a double click that follows a press on the same row, as a real one does.
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
+    qtbot.mouseDClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
     assert build_window.opened == [url]
     assert not view.isVisible()
 
 
-def test_a_click_below_the_last_row_opens_nothing(view, qtbot, build_window):
+def test_a_single_click_highlights_the_row_and_opens_nothing_and_hiding_drops_the_highlight(view, qtbot, build_window):
+    view.show()
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 0))
+    assert build_window.opened == []
+    assert view.isVisible()
+    assert view.highlighted_url == view.entries[0].url
+    assert view.table.item(0, 0).background().color() != view.table.item(1, 0).background().color()
+    view.hide()
+    assert view.highlighted_url is None
+
+
+def test_a_double_click_below_the_last_row_opens_nothing(view, qtbot, build_window):
     view.resize(900, 500)
     view.show()
     below = QPoint(10, view.table.viewport().height() - 2)
     qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=below)
+    qtbot.mouseDClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=below)
     assert build_window.opened == []
     assert view.isVisible()
 
@@ -314,3 +330,82 @@ def test_rows_from_the_same_organisation_or_repository_share_a_colour(build_wind
     owner = first.repo.split("/")[0]
     assert view.table.item(0, org).foreground().color().name() == theme.ink(view.inks, popup.name_colour(owner))
     assert view.table.item(0, repo).foreground().color().name() == theme.ink(view.inks, popup.name_colour(first.repo))
+
+
+def test_a_composited_desktop_gets_a_see_through_window_with_a_shadow_margin(view):
+    assert view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    # The table shows the same background: nothing solid under the rows or the headings, and no frame around them.
+    assert not view.table.viewport().autoFillBackground()
+    assert not view.table.horizontalHeader().viewport().autoFillBackground()
+    assert view.table.frameShape() == QFrame.Shape.NoFrame
+    assert view.frame_margin() == window.GRIP + window.SHADOW
+    assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge.LeftEdge
+    assert view.opacity == config.PLAIN_OPACITY
+    view.set_opacity(70)
+    assert view.opacity == 70
+    view.set_opacity(None)
+    assert view.opacity == config.PLAIN_OPACITY
+
+
+def test_the_table_sits_on_a_ground_a_few_points_more_solid_than_the_window(view, qapp):
+    view.set_opacity(60)
+    view.resize(900, 500)
+    view.show()
+    qapp.processEvents()
+    image = view.grab().toImage()
+    margin = image.pixelColor(view.frame_margin() + 2, view.frame_margin() + 2).alpha()
+    # Sampled below the last row, where no text can land on the pixel whatever the platform's fonts do.
+    below = QPoint(10, view.table.viewport().height() - 2)
+    table = image.pixelColor(view.table.viewport().mapTo(view, below)).alpha()
+    assert margin == round(255 * 60 / 100)
+    assert abs(table - round(255 * (60 + window.TABLE_OPACITY_OFFSET) / 100)) <= 1
+
+
+def test_the_table_overlay_reaches_the_offset_and_stops_at_solid():
+    assert window.table_overlay_alpha(0, 15) == round(255 * 0.15)
+    assert window.table_overlay_alpha(80, 15) == round(255 * 0.75)
+    assert window.table_overlay_alpha(90, 15) == 255
+    assert window.table_overlay_alpha(100, 15) == 0
+
+
+def test_a_finished_row_and_the_clicked_row_are_washed_not_painted_solid(build_window, qtbot):
+    view = build_window([row("#9", status="merged"), row("#7")])
+    view.closed_chip.setChecked(True)
+    finished = view.table.item(0, 0).background().color()
+    assert finished.name() == theme.ink(view.inks, popup.STATUS_COLOURS["merged"])
+    assert 0 < finished.alpha() < 255
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.LeftButton, pos=cell_centre(view, 1))
+    clicked = view.table.item(1, 0).background().color()
+    assert clicked.name() == view.table.palette().highlight().color().name()
+    assert 0 < clicked.alpha() < 255
+
+
+def test_show_below_puts_the_window_under_another_without_the_focus_and_hiding_ends_the_preview(view):
+    view.show_below(QRect(100, 100, 300, 200))
+    assert view.isVisible() and view.previewing
+    assert view.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    assert view.geometry().top() >= 300
+    view.hide()
+    assert not view.previewing
+
+
+def test_a_desktop_that_blurs_behind_the_window_supplies_the_shadow_and_gets_a_lower_default(build_window, monkeypatch):
+    monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur("cocoa"))
+    switched: list[bool] = []
+    monkeypatch.setattr(window, "show_blur", lambda _window, _blur, shown: switched.append(shown))
+    view = build_window()
+    assert view.blur.kind == "cocoa" and view.blurred()
+    assert view.shadow == 0
+    assert view.frame_margin() == window.GRIP
+    assert view.opacity == config.BLURRED_OPACITY
+    view.set_blur(False)
+    assert switched == [True, False]
+    assert not view.blurred() and view.opacity == config.PLAIN_OPACITY
+
+
+def test_a_desktop_without_compositing_keeps_the_square_solid_window(build_window, monkeypatch):
+    monkeypatch.setattr(window, "compositing_available", lambda: False)
+    view = build_window()
+    assert not view.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert view.frame_margin() == window.GRIP
+    assert view.edges_at(QPoint(window.GRIP + 2, 100)) == Qt.Edge(0)

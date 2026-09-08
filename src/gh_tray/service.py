@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from .collector import collect
-from .events import (
+from gh_tray.collector import collect
+from gh_tray.events import (
     append_events,
     carry_forward,
     carry_known_values,
@@ -18,8 +18,8 @@ from .events import (
     snapshot_of,
     unread_events,
 )
-from .snapshot import read_snapshot, write_snapshot
-from .status import Status, status_from
+from gh_tray.snapshot import read_snapshot, write_snapshot
+from gh_tray.status import Status, status_from
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class PollResult:
 def poll(config: dict) -> PollResult:
     """Run one collection, record any changes, and summarise the result.
 
-    The first poll has nothing to compare against, so it establishes the baseline rather than inventing changes.
+    The first poll has nothing to compare against, so it sets the baseline rather than inventing changes.
 
     :param config: current settings
     :return: the status, the changes detected this cycle, and any error
@@ -54,7 +54,7 @@ def poll(config: dict) -> PollResult:
     append_events(events)
     write_snapshot(carry_forward(previous or {}, current))
     if baseline_only and not damaged:
-        # A genuine first run has no history, so there is nothing the user could already have missed.
+        # A first run has no history, so nothing could already have been missed.
         mark_seen()
         logger.info("baseline established from {} pull request(s)", len(current))
     elif baseline_only:

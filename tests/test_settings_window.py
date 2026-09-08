@@ -1,4 +1,4 @@
-"""The settings window: what it shows from the stored settings, and what it writes back on save."""
+"""The settings window: what it shows from the stored settings and the account, and what it writes back on save."""
 
 from __future__ import annotations
 
@@ -8,11 +8,15 @@ import pytest
 from pytestqt.qtbot import QtBot
 
 from gh_tray import config, settings_window, theme
-from gh_tray.settings_window import SettingsDialog
+from gh_tray.settings_window import Account, SettingsDialog
+
+TESTER = Account(
+    login="tester", organisations=("acme", "widgets"), signed_in=True, sign_in_summary="Signed in as tester"
+)
 
 
 class DialogBuilder:
-    """Builds real SettingsDialog instances with `gh` and the settings file stubbed out, recording what each writes."""
+    """Builds real SettingsDialog instances with the settings file stubbed out, recording what each writes."""
 
     def __init__(self, qtbot: QtBot, monkeypatch: pytest.MonkeyPatch) -> None:
         """:param qtbot: registers each built dialog for teardown."""
@@ -21,23 +25,24 @@ class DialogBuilder:
         self.saved: list[dict] = []
         self.autostart_calls: list[bool] = []
         self.theme_calls: list[str] = []
-        monkeypatch.setattr(settings_window, "github_auth_summary", lambda: "Signed in as tester")
-        monkeypatch.setattr(settings_window, "signed_in", lambda: True)
         monkeypatch.setattr(settings_window, "save_config", self.saved.append)
         monkeypatch.setattr(settings_window, "set_autostart", self.autostart_calls.append)
         monkeypatch.setattr(settings_window, "follow_theme_setting", self.theme_calls.append)
-        monkeypatch.setattr(settings_window, "organisations", lambda: ["acme", "widgets"])
-        monkeypatch.setattr(settings_window, "viewer", lambda: "tester")
 
-    def __call__(self, stored: dict, autostart: bool = False) -> SettingsDialog:
+    def __call__(
+        self, stored: dict, autostart: bool = False, account: Account | None = TESTER, blurrable: bool = False
+    ) -> SettingsDialog:
         """Build one dialog showing the given stored settings.
 
         :param stored: the settings the dialog should load
         :param autostart: whether login start should read as already on
+        :param account: what the dialog is told about the account, or None to leave it waiting
         """
         self._monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(stored))
         self._monkeypatch.setattr(settings_window, "autostart_enabled", lambda: autostart)
-        dialog = SettingsDialog()
+        if account is None:
+            self._monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
+        dialog = SettingsDialog(account=account, blurrable=blurrable)
         self._qtbot.addWidget(dialog)
         return dialog
 
@@ -62,6 +67,7 @@ def test_the_dialog_shows_the_stored_numbers_command_switches_theme_and_autostar
     assert dialog.toggles["mention"].isChecked() is True
     assert dialog.style_buttons[theme.ALWAYS_DARK].isChecked() is True
     assert dialog.autostart.isChecked() is True
+    assert dialog.sign_in.text() == "Signed in as tester"
 
 
 def test_save_and_close_writes_the_settings_through_save_config_and_toggles_autostart(build_dialog):
@@ -93,6 +99,7 @@ def test_the_account_and_every_organisation_are_listed_and_on_unless_turned_off(
     assert list(dialog.owner_switches_by_login) == ["tester", "acme", "widgets", "former"]
     assert [switch.isChecked() for switch in dialog.owner_switches_by_login.values()] == [True, True, False, False]
     assert dialog.owner_switches_by_login["tester"].text() == "tester (your own repositories)"
+    assert dialog.owner_note.isHidden()
 
 
 def test_turning_an_owner_off_is_what_is_saved(build_dialog):
@@ -103,18 +110,34 @@ def test_turning_an_owner_off_is_what_is_saved(build_dialog):
     assert build_dialog.saved[-1]["hidden_owners"] == ["tester", "acme"]
 
 
-def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog, monkeypatch):
-    def refuse():
-        raise settings_window.GitHubError("GitHub did not answer")
-
-    monkeypatch.setattr(settings_window, "organisations", refuse)
-    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets"]})
+def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog):
+    refused = Account(signed_in=False, sign_in_summary="Not signed in to GitHub", trouble="GitHub did not answer")
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets"]}, account=refused)
     assert list(dialog.owner_switches_by_login) == ["widgets"]
+    assert dialog.owner_note.text() == "Could not list your organisations: GitHub did not answer"
+
+
+def test_the_dialog_comes_up_waiting_and_fills_in_when_the_account_arrives(build_dialog):
+    dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), account=None)
+    assert dialog.owner_note.text() == settings_window.LOOKING_UP_OWNERS
+    assert dialog.sign_in.text() == settings_window.CHECKING_SIGN_IN
+    assert dialog.owner_switches_by_login == {}
+    dialog.take_account(TESTER)
+    assert list(dialog.owner_switches_by_login) == ["tester", "acme", "widgets"]
+    assert dialog.sign_in.text() == "Signed in as tester"
+
+
+def test_look_up_account_gathers_the_sign_in_state_login_and_organisations(monkeypatch):
+    monkeypatch.setattr(settings_window, "github_auth_state", lambda: (True, "Logged in as tester"))
+    monkeypatch.setattr(settings_window, "viewer", lambda: "tester")
+    monkeypatch.setattr(settings_window, "organisations", lambda: ["acme"])
+    assert settings_window.look_up_account() == Account("tester", ("acme",), True, "Logged in as tester", "")
 
 
 def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog):
     dialog = build_dialog({**config.DEFAULT_CONFIG, "involved": True, "watch_others": False})
     assert dialog.involved.isChecked() and not dialog.others.isChecked()
+    assert dialog.involved.parentWidget().title() == "Notify me about"
     dialog.involved.setChecked(False)
     dialog.others.setChecked(True)
     dialog.owner_switches_by_login["widgets"].setChecked(False)
@@ -124,3 +147,27 @@ def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog)
     assert saved["watch_others"] is True
     assert saved["watched_owners"] == ["tester", "acme"]
     assert saved["hidden_owners"] == ["widgets"]
+
+
+def test_the_opacity_slider_starts_at_the_default_for_the_desktop_when_nothing_is_stored(build_dialog, qtbot):
+    assert build_dialog(copy.deepcopy(config.DEFAULT_CONFIG)).opacity.value() == config.PLAIN_OPACITY
+    dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), blurrable=True)
+    assert dialog.opacity.value() == config.BLURRED_OPACITY
+    with qtbot.waitSignal(dialog.blur_changed) as switched:
+        dialog.blur.setChecked(False)
+    assert switched.args == [False]
+    assert dialog.opacity.value() == config.PLAIN_OPACITY
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["blur"] is False
+
+
+def test_the_opacity_slider_shows_the_stored_value_reports_moves_live_and_is_saved(build_dialog, qtbot):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, "opacity": 80})
+    assert dialog.opacity.value() == 80
+    assert dialog.opacity_value.text() == "80%"
+    with qtbot.waitSignal(dialog.opacity_changed) as moved:
+        dialog.opacity.setValue(65)
+    assert moved.args == [65]
+    assert dialog.opacity_value.text() == "65%"
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["opacity"] == 65

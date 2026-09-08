@@ -1,7 +1,6 @@
-"""Everything platform-specific: locating tools, opening terminals, starting at login and guarding single instance.
+"""Platform-specific code: locating tools, opening terminals, starting at login and guarding single instance.
 
-Isolating these here keeps the rest of the application free of operating system branching, and gives one place to
-look when behaviour differs between Windows, macOS and Linux.
+Isolated here so platform branching does not spread through the rest of the app.
 """
 
 from __future__ import annotations
@@ -19,14 +18,12 @@ from typing import TextIO
 
 from loguru import logger
 
-from . import APP_NAME
+from gh_tray import APP_NAME
 
 # What Windows calls UTF-8, which a console has to be put into by number.
 UTF8_CODE_PAGE = 65001
 
-# Terminals tried in order on Linux: the name to look for, the flag that opens it maximised where it has one, and
-# the arguments it takes before a command. The first one present wins, except that a request to maximise prefers a
-# terminal that can. Maximised, not full screen: the window keeps its title bar and the desktop keeps its panels.
+# Tried in order; first present wins. A maximised window still keeps its title bar, unlike full screen.
 LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
     ("x-terminal-emulator", None, ("-e", "sh", "-c")),
     ("gnome-terminal", "--maximize", ("--", "sh", "-c")),
@@ -49,13 +46,7 @@ def no_console_flag() -> int:
 def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
     """Run a command without a console window and return what it printed.
 
-    The encoding is named rather than left to the system. The GitHub tool writes UTF-8 whatever the machine's
-    locale says, so on a Windows console reading it as the local codepage turns a tick into ``a-hat`` and would
-    mangle any non-English pull request title on its way through.
-
-    A command that fails is returned rather than raised on: every caller here reads the exit code itself, since a
-    tool that is missing, signed out or rate limited says so on the way out.
-
+    Encoding is fixed at UTF-8, matching the GitHub tool's output, so the system codepage cannot mangle a tick or title.
     :param command: the program and its arguments
     :param timeout: how long to wait, or None to wait as long as it takes
     :return: the finished command, with its output as text
@@ -72,20 +63,15 @@ def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.
     )
 
 
-# The console handler has to stay referenced for as long as it is registered: Windows calls straight into it, and
-# one that has been garbage collected crashes the process instead of stopping it.
+# Must stay referenced while registered: a garbage-collected handler crashes the process instead of stopping it.
 _CONSOLE_HANDLERS: list[object] = []
 
 
 def on_console_interrupt(stop: Callable[[], None]) -> None:
     """Arrange for something to run when the console asks the process to stop, such as Ctrl+C.
 
-    A plain signal handler is not enough for a tray application. It can only run between Python instructions on
-    the main thread, and the tray's main thread spends its life blocked inside the desktop's message loop, so
-    Ctrl+C would sit undelivered until the next stray mouse movement. Windows offers a console handler instead,
-    called on a thread of its own, which works however busy or idle the main thread is. The signal handler is
-    still installed as well, for platforms where blocking calls are interrupted and it does fire.
-
+    A signal handler alone cannot work: it only fires between instructions on the main thread, which the desktop's
+    message loop blocks. Windows instead gets a console handler on its own thread; the signal handler stays too.
     :param stop: what to run; it must be safe to call from any thread
     """
     signal.signal(signal.SIGINT, lambda _number, _frame: stop())
@@ -112,15 +98,11 @@ def on_console_interrupt(stop: Callable[[], None]) -> None:
 def hide_from_dock() -> None:
     """Keep this process out of the macOS Dock and the application switcher.
 
-    A process that draws a window or a menu bar item is given a Dock icon unless it says otherwise, and the tray,
-    the hidden changes window and the settings window would each show one reading "Python". Elsewhere there is
-    nothing to do.
+    Without this, the tray and its hidden windows would each show a Dock icon labelled "Python". No-op elsewhere.
     """
     if sys.platform != "darwin":
         return
     try:
-        # Imported by name, so a type check aimed at another platform does not go looking for a library that only
-        # exists on this one.
         appkit = import_module("AppKit")
     except ImportError as error:
         logger.debug("could not keep this process out of the Dock: {}", error)
@@ -133,16 +115,18 @@ def github_cli() -> str | None:
     return shutil.which("gh")
 
 
-def github_auth_summary() -> str:
-    """Return a one-line description of the GitHub sign-in state, for the settings window."""
+def github_auth_state() -> tuple[bool, str]:
+    """Return whether the GitHub command line tool is signed in, and one line saying as whom."""
     github = github_cli()
     if not github:
-        return "GitHub CLI (gh) not found on PATH"
+        return False, "GitHub CLI (gh) not found on PATH"
     done = run_quietly([github, "auth", "status"])
     lines = (done.stdout + done.stderr).splitlines()
     summary = next((line.strip() for line in lines if "Logged in" in line), "")
+    if not summary:
+        return False, "Not signed in to GitHub"
     # The tool prefixes the line with a tick, which says nothing the words do not.
-    return summary.lstrip("✓✔* ").strip() if summary else "Not signed in to GitHub"
+    return done.returncode == 0, summary.lstrip("✓✔* ").strip()
 
 
 def applescript_string(text: str) -> str:
@@ -158,7 +142,6 @@ def notify_by_script(title: str, body: str) -> None:
     """Raise a plain notification through the macOS scripting bridge, which any process may use.
 
     Nothing can be attached to it: no icon, and no action when it is clicked.
-
     :param title: the notification's heading
     :param body: the text under it
     """
@@ -169,9 +152,7 @@ def notify_by_script(title: str, body: str) -> None:
 def in_utf8(command: str) -> str:
     """Return a Windows command that puts the console into UTF-8 before running.
 
-    A console starts on whatever code page the machine's region asks for, while a program that draws itself out of
-    box characters and icons writes UTF-8 regardless. The two then disagree and the drawing arrives as rubbish.
-
+    A console starts on the machine's code page, but box-drawn output is UTF-8, so mismatched it renders as rubbish.
     :param command: the shell command to run
     """
     return f"chcp {UTF8_CODE_PAGE} >nul && {command}"
@@ -180,9 +161,7 @@ def in_utf8(command: str) -> str:
 def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
     """Build the argument vector that runs a command in a new terminal window.
 
-    Maximising is best effort. Where the available terminal has no way to do it, the window simply opens at its
-    usual size rather than the command failing to run at all.
-
+    Maximising is best effort: a terminal without support just opens at its usual size instead of failing.
     :param command: the shell command to run in the new window
     :param title: window title, honoured only where the terminal supports one
     :param maximised: whether the window should open filling the desktop, keeping its title bar
@@ -209,7 +188,6 @@ def terminal_command(command: str, title: str, maximised: bool) -> list[str]:
             "-e",
             f'tell application "Terminal"\ndo script {applescript_string(command)}\nactivate{zoom}\nend tell',
         ]
-    # A stable sort, so the usual preference order is kept among terminals that are equally able to maximise.
     candidates = sorted(LINUX_TERMINALS, key=lambda entry: entry[1] is None) if maximised else LINUX_TERMINALS
     for name, flag, launch in candidates:
         found = shutil.which(name)
@@ -231,10 +209,7 @@ def open_in_terminal(command: str, title: str, maximised: bool = False) -> None:
 
 
 def launch_command() -> list[str]:
-    """Return the command that runs the tray in the process started, preferring an interpreter with no console.
-
-    This is what a login entry runs, and what the ordinary start runs as a process of its own.
-    """
+    """Return the command that runs the tray in the process started, preferring an interpreter with no console."""
     interpreter = Path(sys.executable)
     if sys.platform == "win32":
         windowless = interpreter.with_name("pythonw.exe")
@@ -246,9 +221,7 @@ def launch_command() -> list[str]:
 def start_detached(command: list[str], errors: Path) -> int:
     """Start a command that outlives this process and the terminal it came from, and return its process id.
 
-    On Windows the child would otherwise share this console and go with it; elsewhere a session of its own keeps the
-    hang-up that closing a terminal sends from reaching it. Its error stream goes to a file, since nobody is watching.
-
+    Without this the child would share this console on Windows or get the hang-up a closed terminal sends elsewhere.
     :param command: the program and its arguments
     :param errors: where to keep whatever the command writes to its error stream
     """
@@ -257,8 +230,7 @@ def start_detached(command: list[str], errors: Path) -> int:
     quiet = subprocess.DEVNULL
     with errors.open("w", encoding="utf-8") as kept:
         if sys.platform == "win32":
-            # A hidden console of its own, which the interpreter behind a venv's launcher inherits. Given no console
-            # at all, that interpreter, a console program, opens a visible one of its own.
+            # Gives the child a hidden console; a venv's own interpreter inherits it, else it opens a visible one.
             flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 command, stdin=quiet, stdout=quiet, stderr=kept, creationflags=flags, close_fds=True
@@ -273,8 +245,7 @@ def start_detached(command: list[str], errors: Path) -> int:
 def autostart_path() -> Path:
     """Return the file that makes the tray start at login on this platform.
 
-    The roaming and configuration directories are asked of the environment first, since either can be moved away
-    from its usual place under the home directory, and a file written to the usual place would then never be read.
+    Checks the environment for the roaming or config directory first, since either can move from its default place.
     """
     home = Path.home()
     if sys.platform == "win32":
@@ -295,7 +266,6 @@ def desktop_entry_exec(command: list[str]) -> str:
     """Quote an argument vector for the ``Exec`` line of a desktop entry.
 
     An unquoted path containing a space is read as two arguments, which makes the entry fail silently at login.
-
     :param command: the argument vector that starts the tray
     :return: the value for ``Exec=``
     """
@@ -317,14 +287,12 @@ def autostart_body(command: list[str]) -> str:
     :param command: the argument vector that starts the tray
     """
     if sys.platform == "win32":
-        # A script is used rather than a shortcut because it can run the command with its window hidden. Doubling
-        # each quote is the VBScript escape, so a path containing spaces survives into the command line quoted.
+        # Not a shortcut: a script can run with a hidden window. Doubling each quote is the VBScript escape for spaces.
         quoted = " ".join(f'""{part}""' if " " in part else part for part in command)
         return f'CreateObject("WScript.Shell").Run "{quoted}", 0, False\n'
     if sys.platform == "darwin":
-        # Built by the standard library rather than by hand, so a path containing an ampersand cannot produce XML
-        # that launchd silently refuses to load. The search path is recorded too: launchd starts things with a bare
-        # one, on which a GitHub tool installed by Homebrew is nowhere to be found.
+        # plistlib avoids XML-escaping bugs from a stray ampersand; PATH is added since launchd's own PATH misses
+        # a Homebrew-installed GitHub tool.
         plist: dict[str, object] = {"Label": f"com.{APP_NAME}", "ProgramArguments": list(command), "RunAtLoad": True}
         if os.environ.get("PATH"):
             plist["EnvironmentVariables"] = {"PATH": os.environ["PATH"]}
@@ -343,8 +311,7 @@ def autostart_body(command: list[str]) -> str:
 def autostart_encoding() -> str:
     """Return the encoding the login-start file must use on this platform.
 
-    Windows Script Host reads a script as the system codepage unless it finds a byte order mark, so a path holding
-    any non-ASCII character would otherwise be mangled and the entry would fail at login.
+    Windows Script Host reads by system codepage unless it finds a byte order mark, so a non-ASCII path would mangle.
     """
     return "utf-16" if sys.platform == "win32" else "utf-8"
 
@@ -367,8 +334,7 @@ def set_autostart(enabled: bool) -> None:
 class SingleInstance:
     """An exclusive lock on a file, held for the life of the process so a second tray cannot start.
 
-    File locking is used rather than a stored process id because a stale id can be reused by an unrelated process,
-    whereas a lock is released by the operating system as soon as the holder exits, however it exits.
+    A lock beats a stored process id, since a stale id can be reused; the OS releases it however the holder exits.
     """
 
     def __init__(self, path: Path) -> None:

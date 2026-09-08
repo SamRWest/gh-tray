@@ -1,8 +1,4 @@
-"""Settings storage, defaults and the application's data locations.
-
-Every path is either discovered at runtime or held in the settings file, so nothing about one machine or one account
-is written into the code.
-"""
+"""Settings storage, defaults and data locations; paths are discovered at runtime, not hardcoded to one machine."""
 
 from __future__ import annotations
 
@@ -11,9 +7,9 @@ import copy
 from loguru import logger
 from platformdirs import user_data_path
 
-from . import APP_NAME
-from .storage import read_json, write_json_atomic
-from .theme import STYLES
+from gh_tray import APP_NAME
+from gh_tray.storage import read_json, write_json_atomic
+from gh_tray.theme import STYLES
 
 APP_DIR = user_data_path(APP_NAME, appauthor=False)
 CONFIG_PATH = APP_DIR / "config.json"
@@ -22,18 +18,12 @@ SNAPSHOT_PATH = APP_DIR / "snapshot.json"
 EVENTS_PATH = APP_DIR / "events.jsonl"
 SEEN_PATH = APP_DIR / "seen.json"
 LOG_PATH = APP_DIR / "gh-tray.log"
-# Whatever the tray writes to its error stream once it has left the terminal behind, since nobody is watching it.
 STDERR_PATH = APP_DIR / "gh-tray.stderr.log"
 LOCK_PATH = APP_DIR / "gh-tray.lock"
 ERROR_LOG_PATH = APP_DIR / "last_error.log"
-# Drawn once and kept, since the desktop wants a file on disk rather than a picture in memory.
 APP_ICON_PATH = APP_DIR / "gh-tray.png"
-# The width the user last dragged the changes window to, and its column widths, so both survive a restart. Kept by
-# the toolkit's own settings store in its plain text form, alongside everything else rather than wherever the
-# platform would put it.
 LAYOUT_PATH = APP_DIR / "layout.ini"
 
-# A blank dashboard command means "work it out at runtime", using whichever terminal this platform provides.
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
     "poll_minutes": 10,
@@ -44,6 +34,8 @@ DEFAULT_CONFIG: dict = {
     "watched_owners": [],
     "involved": False,
     "theme": "auto",
+    "opacity": None,
+    "blur": True,
     "toasts": {
         "review_requested": True,
         "ci_broken": True,
@@ -56,21 +48,21 @@ DEFAULT_CONFIG: dict = {
 }
 
 TEXT_KEYS = ("dashboard_command",)
-# The owners, the account itself or an organisation, whose repositories the searches leave out. Everything else the
-# account has a hand in is watched, so an organisation joined later needs no setting, and a repository the account
-# merely contributes to from outside is never lost.
 HIDDEN_OWNERS_KEY = "hidden_owners"
-# Whether owners not listed in the settings are watched at all. Off, only the listed owners left on are, which the
-# settings write down, since the collector cannot see the list without asking GitHub.
+# Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
-# Whether pull requests the account is involved in some other way are listed too, as the dashboard lists them.
 INVOLVED_KEY = "involved"
-# The theme the windows are drawn in: follow the desktop, or insist on one.
 THEME_KEY = "theme"
+# How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
+# what lies behind the window: a blurred background can be more see-through and still read.
+OPACITY_KEY = "opacity"
+# Whether to ask the desktop to blur behind the window, where it can.
+BLUR_KEY = "blur"
+OPACITY_RANGE = (40, 100)
+PLAIN_OPACITY = 95
+BLURRED_OPACITY = 80
 
-# Each numeric setting and the range it must fall in. A popup taller than this stops being a popup, and a poll
-# interval below a minute would hammer the GitHub API for no benefit.
 NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
     "poll_minutes": (1, None),
     "max_age_days": (0, None),
@@ -81,10 +73,7 @@ NUMBER_RANGES: dict[str, tuple[int, int | None]] = {
 def login_list(value: object) -> list[str]:
     """Return a list of GitHub logins from a setting, however it was written.
 
-    A hand-edited file may hold one string with commas or spaces between the names rather than a list, and either
-    may repeat a name or carry the @ people write before one.
-
-    :param value: the setting as read
+    :param value: the setting as read, possibly a comma- or space-separated string with duplicates or a leading @
     """
     parts = value if isinstance(value, list) else str(value or "").replace(",", " ").split()
     logins: list[str] = []
@@ -110,10 +99,17 @@ def normalise(config: dict) -> dict:
         config[key] = min(value, maximum) if maximum is not None else value
     for key in TEXT_KEYS:
         config[key] = str(config.get(key) or "").strip()
+    if config.get(OPACITY_KEY) is not None:
+        try:
+            config[OPACITY_KEY] = min(max(OPACITY_RANGE[0], int(config[OPACITY_KEY])), OPACITY_RANGE[1])
+        except (TypeError, ValueError):
+            logger.warning("setting {} is not a whole number, leaving it unset", OPACITY_KEY)
+            config[OPACITY_KEY] = None
     config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
     config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
+    config[BLUR_KEY] = bool(config.get(BLUR_KEY, DEFAULT_CONFIG[BLUR_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()
     }
@@ -125,9 +121,7 @@ def normalise(config: dict) -> dict:
 def merge_stored(config: dict, stored: object) -> dict:
     """Fold a settings document read from disk into the defaults, ignoring anything of the wrong shape.
 
-    A settings file is hand-editable, so it can hold valid JSON that is nonetheless the wrong type. Every such value
-    is dropped with a warning rather than raised, because the settings window is the way to repair the file and a
-    settings error that stops the application starting also stops that window opening.
+    Bad values are dropped with a warning, not raised, since crashing here would also block the settings window.
 
     :param config: the defaults, modified in place
     :param stored: whatever was parsed out of the settings file
@@ -146,6 +140,14 @@ def merge_stored(config: dict, stored: object) -> dict:
     elif toasts is not None:
         logger.warning("the notification settings are not a set of switches, falling back to defaults")
     return config
+
+
+def default_opacity(blurred: bool) -> int:
+    """Return how solid the changes window is when the settings do not say.
+
+    :param blurred: whether the desktop blurs what lies behind the window
+    """
+    return BLURRED_OPACITY if blurred else PLAIN_OPACITY
 
 
 def load_config() -> dict:

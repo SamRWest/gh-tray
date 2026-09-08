@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="gh-tray">
   <title>gh-tray</title>
   <defs>
-    <!-- The field fades down the square rather than sitting flat. Kept in step with status.app_icon. -->
+    <!-- The field fades down the square rather than sitting flat. status.app_icon renders this file, so it is
+         the only drawing of the mark. -->
     <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#2e343d"/>
       <stop offset="1" stop-color="#1e232a"/>

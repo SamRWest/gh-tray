@@ -1,12 +1,4 @@
-"""Talking to GitHub through the signed-in command line tool.
-
-The tool is used rather than the web interface directly so that this application never handles a token: it borrows
-whatever the user has already signed in with, and stops working the moment they sign out, which is what anyone
-would expect.
-
-Every call goes out and comes back as JSON. Failures are raised as one exception type carrying a description short
-enough to put in front of a user, since the caller turns them into a line of hover text.
-"""
+"""Talks to GitHub via the signed-in CLI; no token handling, and failures raise one error type sized for hover text."""
 
 from __future__ import annotations
 
@@ -16,13 +8,12 @@ import time
 
 from loguru import logger
 
-from .environment import github_cli, run_quietly
+from gh_tray.environment import github_cli, run_quietly
 
+# Retrying is normal, since GitHub errors on heavy searches; five pages is more than anyone has open at once.
 CALL_TIMEOUT_SECONDS = 60
-# GitHub answers a heavy search with an error often enough that retrying is normal rather than exceptional.
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 3
-# A larger page provokes errors, and five pages is far more than a person can have open.
 PAGE_SIZE = 40
 MAX_PAGES = 5
 
@@ -87,11 +78,7 @@ def parse(payload: str, what: str) -> object:
 
 
 def looks_permanent(description: str) -> bool:
-    """Return whether a failure is one a retry cannot fix.
-
-    GitHub names the status it answered with. Anything in the client-error range means the request itself is the
-    problem - the thing is deleted, private, or never existed - and asking again gets the same answer. The one
-    exception is the too-many-requests status, which is exactly what retrying with a pause is for.
+    """Return whether a failure is one a retry cannot fix (a pause fixes too-many-requests, not other 4xx).
 
     :param description: the failure as :func:`first_error_line` reported it
     """
@@ -99,11 +86,7 @@ def looks_permanent(description: str) -> bool:
 
 
 def api(path: str) -> object:
-    """Fetch one REST path, retrying while GitHub is unhappy.
-
-    Retried for the same reason the query path is: GitHub fails transiently often enough that one failure says
-    nothing, and a lookup that silently comes back empty loses a name for good. A failure naming a client error is
-    raised at once instead, since a deleted comment stays deleted however many times it is asked for.
+    """Fetch one REST path, retrying while GitHub is unhappy (a client error, e.g. deleted, is raised at once).
 
     :param path: the path to fetch, such as ``notifications?all=false``
     :raises GitHubError: when every attempt fails, or the failure is one retrying cannot fix
@@ -123,9 +106,7 @@ def api(path: str) -> object:
 
 
 def viewer() -> str:
-    """Return the login of the signed-in account.
-
-    Asked afresh each poll rather than remembered, since somebody can sign in as a different account at any time.
+    """Return the login of the signed-in account, asked afresh each poll since it can change at any time.
 
     :return: the login, or an empty string when it cannot be read
     """
@@ -134,10 +115,7 @@ def viewer() -> str:
 
 
 def graphql(query: str, variables: dict[str, str]) -> dict:
-    """Run one GraphQL query, retrying while GitHub is unhappy.
-
-    An error from GitHub arrives as well-formed JSON carrying no data, so a reply counts as usable only once it
-    actually holds results. Accepting one that does not would abandon the whole collection rather than retry it.
+    """Run one GraphQL query, retrying while GitHub is unhappy (an error arrives as JSON with no data).
 
     :param query: the query text
     :param variables: values for the query's variables
@@ -188,9 +166,9 @@ def search_pull_requests(query: str, search: str) -> list[dict]:
 
 
 def organisations() -> list[str]:
-    """Return the logins of the organisations the signed-in account belongs to, in alphabetical order.
+    """Return the signed-in account's organisations, alphabetically.
 
-    Membership is all this can see. An account can have a hand in pull requests elsewhere, as an outside
+    Membership is all this API can see. An account can have a hand in pull requests elsewhere, as an outside
     collaborator, which is why the settings turn organisations off rather than on.
 
     :return: the logins, or an empty list when the account belongs to none

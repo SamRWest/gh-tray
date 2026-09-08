@@ -1,7 +1,7 @@
 """What the click-through window decides to show, and how it marks what is still unread.
 
-The window itself is not built here: drawing it needs a display, and the parts worth protecting are the choice of
-rows and their marking, both of which are ordinary functions.
+The window itself is not built here: drawing it needs a display. What is worth testing is the choice of rows and
+their marking, both of which are ordinary functions.
 """
 
 from __future__ import annotations
@@ -538,12 +538,10 @@ def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
     finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
     open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
     unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
-    ground = theme.DARK.background
-    assert popup.row_background(finished, theme.DARK, ground) == theme.blend(
-        theme.ink(theme.DARK, popup.STATUS_COLOURS["merged"]), ground, popup.CLOSED_TINT
-    )
-    assert popup.row_background(open_row, theme.DARK, ground) is None
-    assert popup.row_background(unknown, theme.DARK, ground) is None
+    status_ink = theme.ink(theme.DARK, popup.STATUS_COLOURS["merged"])
+    assert popup.row_background(finished, theme.DARK) == theme.wash(status_ink, popup.CLOSED_TINT)
+    assert popup.row_background(open_row, theme.DARK) is None
+    assert popup.row_background(unknown, theme.DARK) is None
 
 
 def test_every_status_word_has_a_colour():
