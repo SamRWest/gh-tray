@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 from PySide6.QtCore import Qt, qInstallMessageHandler, qWarning
 
@@ -72,3 +76,20 @@ def test_no_blur_is_asked_of_a_platform_that_is_not_the_desktop(qapp, qtbot):
     widget = QWidget()
     qtbot.addWidget(widget)
     assert not toolkit.blur_behind(widget, 10)
+
+
+def test_the_macos_effect_view_goes_beneath_the_content_view_rather_than_inside_it(qapp, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QWidget
+
+    # Faked AppKit: what matters is where the effect view is added, since a subview of the content view would be
+    # drawn over everything the toolkit paints.
+    frame, content = MagicMock(name="frame view"), MagicMock(name="content view")
+    content.superview.return_value = frame
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setitem(sys.modules, "objc", SimpleNamespace(objc_object=lambda c_void_p: content))
+    monkeypatch.setitem(sys.modules, "AppKit", MagicMock(name="AppKit"))
+    widget = QWidget()
+    qtbot.addWidget(widget)
+    effect = toolkit.macos_vibrancy(widget, 10)
+    frame.addSubview_positioned_relativeTo_.assert_called_once_with(effect, toolkit.NS_WINDOW_BELOW, content)
+    content.addSubview_positioned_relativeTo_.assert_not_called()
