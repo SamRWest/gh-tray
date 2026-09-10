@@ -258,7 +258,11 @@ def windows_transparency_effects() -> bool:
 
 
 def macos_vibrancy(window: QWidget, radius: int) -> Hideable | None:
-    """Put a visual effect view behind a window's content, which macOS blurs what lies behind the window into.
+    """Put a visual effect view beneath a window's content, which macOS blurs what lies behind the window into.
+
+    The effect view sits beside the toolkit's content view, under it, in the view that frames the window. A view
+    is always drawn over its own superview's content, so an effect view put inside the content view would cover
+    everything the toolkit paints and leave only the blur showing.
 
     :param window: the window, whose native view is created here if it was not yet
     :param radius: how round the effect's corners are, matching the window's own
@@ -268,11 +272,12 @@ def macos_vibrancy(window: QWidget, radius: int) -> Hideable | None:
         return None
     objc = import_module("objc")
     appkit = import_module("AppKit")
-    view = objc.objc_object(c_void_p=int(window.winId()))
-    native = view.window()
-    if native is None:
+    content = objc.objc_object(c_void_p=int(window.winId()))
+    native = content.window()
+    frame = content.superview()
+    if native is None or frame is None:
         return None
-    effect = appkit.NSVisualEffectView.alloc().initWithFrame_(view.bounds())
+    effect = appkit.NSVisualEffectView.alloc().initWithFrame_(content.frame())
     effect.setAutoresizingMask_(NS_VIEW_WIDTH_SIZABLE | NS_VIEW_HEIGHT_SIZABLE)
     effect.setBlendingMode_(NS_BLENDING_BEHIND_WINDOW)
     effect.setMaterial_(NS_MATERIAL_POPOVER)
@@ -280,7 +285,7 @@ def macos_vibrancy(window: QWidget, radius: int) -> Hideable | None:
     effect.setWantsLayer_(True)
     effect.layer().setCornerRadius_(radius)
     effect.layer().setMasksToBounds_(True)
-    view.addSubview_positioned_relativeTo_(effect, NS_WINDOW_BELOW, None)
+    frame.addSubview_positioned_relativeTo_(effect, NS_WINDOW_BELOW, content)
     native.setOpaque_(False)
     native.setBackgroundColor_(appkit.NSColor.clearColor())
     return effect
