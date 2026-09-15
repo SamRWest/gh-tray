@@ -54,8 +54,8 @@ ROWS = [
 
 @pytest.fixture
 def view(qtbot, monkeypatch, tmp_path: Path) -> window.ChangesWindow:
-    monkeypatch.setattr(window, "rows_to_show", lambda _count: list(ROWS))
-    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20})
+    monkeypatch.setattr(window, "rows_to_show", lambda *_args: list(ROWS))
+    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20, "max_age_days": 0})
     monkeypatch.setattr(window, "remember_row_seen", lambda *_arguments: None)
     built = window.ChangesWindow(list(ROWS), QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat))
     qtbot.addWidget(built)

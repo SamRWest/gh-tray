@@ -130,6 +130,11 @@ def test_snapshot_keeps_the_fields_the_rules_read():
         assert field in snapshot["authored:acme/widget#7"]
 
 
+def test_snapshot_keeps_whether_the_user_has_reviewed():
+    digest = {"involved": [{"key": "acme/widget#7", "repo": "acme/widget", "number": 7, "reviewedByMe": True}]}
+    assert events.snapshot_of(digest)["involved:acme/widget#7"]["reviewedByMe"] is True
+
+
 def test_a_pull_request_without_checks_is_recorded_as_having_none():
     digest = {"authored": [{"key": "acme/widget#7", "repo": "acme/widget", "number": 7}]}
     assert events.snapshot_of(digest)["authored:acme/widget#7"]["ci"] == "NO_CHECKS"
@@ -376,10 +381,11 @@ def test_an_involved_pull_request_is_snapshotted_but_raises_nothing_on_arrival()
     assert events.detect_pull_request_events({}, current, "2026-01-01T00:00:00Z") == []
 
 
-def test_each_side_lands_on_one_of_the_users_hats():
-    assert [events.role_of(side) for side in ("authored", "reviewing", "involved", "closed")] == [
+def test_each_side_lands_on_one_of_the_users_hats_and_a_review_given_makes_a_reviewer():
+    assert [events.role_of({"side": side}) for side in ("authored", "reviewing", "involved", "closed")] == [
         "author",
         "reviewer",
         "involved",
         "reviewer",
     ]
+    assert events.role_of({"side": "involved", "reviewedByMe": True}) == "reviewer"

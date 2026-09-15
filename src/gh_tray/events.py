@@ -49,6 +49,7 @@ SNAPSHOT_DEFAULTS: dict = {
     "lastReviewBy": "",
     "lastCommentBy": "",
     "lastCommentAnswers": "",
+    "reviewedByMe": False,
 }
 
 # Actor field named per rule; conflict names the author, since GitHub does not record who caused it.
@@ -123,12 +124,17 @@ def age_in_words(stamp: str, now: datetime | None = None) -> str:
     return f"{int(seconds // 604800)}w ago"
 
 
-def role_of(side: object) -> str:
-    """Return which of the user's hats a pull request on one side of the digest lands on.
+def role_of(pull_request: dict) -> str:
+    """Return which of the user's hats a pull request lands on: its side, except a reviewed one makes them reviewer.
 
-    :param side: ``authored``, ``reviewing`` or ``involved``, as the digest names them
+    :param pull_request: the record, naming its ``side`` and whether it was ``reviewedByMe``
     """
-    return {"authored": "author", "involved": "involved"}.get(str(side), "reviewer")
+    side = str(pull_request.get("side"))
+    if side == "authored":
+        return "author"
+    if side == "involved" and not pull_request.get("reviewedByMe"):
+        return "involved"
+    return "reviewer"
 
 
 def snapshot_key(side: str, key: str) -> str:
@@ -221,7 +227,7 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "detail": detail,
         "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
         "author": pull_request.get("author", ""),
-        "role": role_of(pull_request.get("side")),
+        "role": role_of(pull_request),
     }
 
 
@@ -487,6 +493,6 @@ def unread_events() -> list[dict]:
     ]
 
 
-def recent_events(count: int = 10) -> list[dict]:
-    """Return the newest events regardless of whether they have been seen."""
+def recent_events(count: int | None = 10) -> list[dict]:
+    """Return the newest events regardless of whether they have been seen, or every event when count is None."""
     return list(reversed(read_events(limit=count)))

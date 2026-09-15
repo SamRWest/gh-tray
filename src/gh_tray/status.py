@@ -80,9 +80,8 @@ def tooltip_text(status: Status, app_name: str = "gh-tray") -> str:
     """
     if status.error:
         return f"{app_name} - poll failed\n{status.error}"[:TOOLTIP_LIMIT]
-    headline = f"{status.unread} unread change{'s' if status.unread != 1 else ''}" if status.unread else "no changes"
     lines = [
-        f"{app_name} - {headline}",
+        app_name,
         f"{status.reviewing} awaiting your review",
         f"{status.authored} open, {status.red} red, {status.pending} pending",
         f"polled {status.polled_at}",

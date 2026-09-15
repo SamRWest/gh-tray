@@ -64,6 +64,7 @@ query($q: String!, $cursor: String) {
         author { login }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } author { user { login } } } } }
         latestReviews(last: 1) { nodes { author { login } } }
+        viewerLatestReview { state }
         comments(last: 1) { nodes { author { login } createdAt } }
         reviews(last: 1) {
           nodes { author { login } comments(last: 1) { nodes { createdAt replyTo { author { login } } } } }
@@ -157,6 +158,8 @@ def normalise(node: dict, side: str) -> dict:
         "ci": nested(node, "commits", "nodes", "commit", "statusCheckRollup", "state") or "NO_CHECKS",
         "lastCommitBy": nested(node, "commits", "nodes", "commit", "author", "user", "login"),
         "lastReviewBy": nested(node, "latestReviews", "nodes", "author", "login"),
+        # A review request is withdrawn once answered, so this is what still says the user is a reviewer.
+        "reviewedByMe": node.get("viewerLatestReview") is not None,
         "lastCommentBy": last_commenter(node),
         "lastCommentAnswers": last_comment_answers(node),
     }

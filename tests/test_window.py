@@ -66,14 +66,17 @@ class WindowBuilder:
         monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur())
         monkeypatch.setattr(window, "remember_row_seen", lambda entry, seen: self.seen_marks.append((entry, seen)))
 
-    def __call__(self, rows: list[popup.Row] | None = None) -> window.ChangesWindow:
+    def __call__(self, rows: list[popup.Row] | None = None, rows_in_view: int | None = None) -> window.ChangesWindow:
         """Build one window, showing the given rows or the default two.
 
         :param rows: the rows to show, defaulting to :data:`ROWS`
+        :param rows_in_view: how many rows the window is sized around, defaulting to all of them
         """
         chosen = list(rows if rows is not None else ROWS)
-        self._monkeypatch.setattr(window, "rows_to_show", lambda _count: list(chosen))
-        self._monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": len(chosen)})
+        self._monkeypatch.setattr(window, "rows_to_show", lambda *_args: list(chosen))
+        self._monkeypatch.setattr(
+            window, "load_config", lambda: {"popup_rows": rows_in_view or len(chosen), "max_age_days": 0}
+        )
         settings = QSettings(str(self._layout_path), QSettings.Format.IniFormat)
         view = window.ChangesWindow(chosen, layout=settings)
         self._qtbot.addWidget(view)
@@ -218,6 +221,13 @@ def test_show_closed_toggles_finished_rows(build_window):
     assert "#9" in [entry.number for entry in view.entries]
     view.closed_chip.setChecked(False)
     assert [entry.number for entry in view.entries] == ["#7", "#8"]
+
+
+def test_rows_beyond_the_setting_stay_in_the_table_and_scroll_rather_than_grow_the_window(build_window):
+    many = [row(f"#{n}", at=f"2026-01-{n + 1:02d}T00:00:00.000000Z") for n in range(6)]
+    view = build_window(many, rows_in_view=2)
+    assert len(view.entries) == 6
+    assert view.table_height() == build_window(many[:2]).table_height()
 
 
 def test_a_dragged_column_width_is_remembered_and_used_by_a_fresh_window(build_window):
