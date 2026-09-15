@@ -69,8 +69,8 @@ def ctrl_zero(qapp, target: QWidget) -> None:
 
 
 def changes_window(monkeypatch, store: QSettings, qtbot) -> window.ChangesWindow:
-    monkeypatch.setattr(window, "rows_to_show", lambda _count: list(ROWS))
-    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20})
+    monkeypatch.setattr(window, "rows_to_show", lambda *_args: list(ROWS))
+    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20, "max_age_days": 0})
     monkeypatch.setattr(window, "remember_row_seen", lambda *_arguments: None)
     view = window.ChangesWindow(list(ROWS), store)
     qtbot.addWidget(view)

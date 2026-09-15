@@ -218,6 +218,8 @@ class ChangesWindow(QWidget):
         self.opacity = 0
         self.wanted_opacity: int | None = None
         settings = load_config()
+        # How many rows the window is sized around; any beyond those scroll.
+        self.rows_in_view: int = settings["popup_rows"]
         self.set_blur(bool(settings.get(BLUR_KEY, True)))
         self.set_opacity(settings.get(OPACITY_KEY))
         try:
@@ -624,7 +626,9 @@ class ChangesWindow(QWidget):
 
     def reload(self) -> None:
         """Read the stored data again and redraw the table in the order and filter currently chosen."""
-        self.all_entries = rows_to_show(load_config()["popup_rows"])
+        settings = load_config()
+        self.rows_in_view = settings["popup_rows"]
+        self.all_entries = rows_to_show(settings["max_age_days"])
         self.apply_filter()
         self.refill()
 
@@ -660,9 +664,9 @@ class ChangesWindow(QWidget):
         return max(min(wanted, usable.width() - 2 * EDGE_MARGIN), least)
 
     def table_height(self) -> int:
-        """Return how tall the table needs to be to show every row it has, without leaving empty space below."""
+        """Return how tall the table needs to be to show its first rows_in_view rows, without empty space below."""
         headings = self.table.horizontalHeader().sizeHint().height()
-        rows = sum(self.table.rowHeight(row) for row in range(self.table.rowCount()))
+        rows = sum(self.table.rowHeight(row) for row in range(min(self.table.rowCount(), self.rows_in_view)))
         return headings + rows + 2 * self.table.frameWidth()
 
     def wanted_height(self, usable: QRect) -> int:

@@ -420,3 +420,8 @@ def test_an_involved_pull_request_already_on_another_side_is_not_listed_twice(mo
 def test_switching_off_everything_else_keeps_only_the_owners_ticked():
     records = [{"repo": "acme/widget"}, {"repo": "Other/thing"}, {"repo": "me/mine"}]
     assert collector.owned_by(records, ["acme", "ME"]) == [{"repo": "acme/widget"}, {"repo": "me/mine"}]
+
+
+def test_a_review_by_the_signed_in_user_is_recorded_even_once_the_request_for_it_is_withdrawn():
+    assert collector.normalise(node(viewerLatestReview={"state": "COMMENTED"}), "involved")["reviewedByMe"] is True
+    assert collector.normalise(node(viewerLatestReview=None), "involved")["reviewedByMe"] is False

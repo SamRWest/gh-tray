@@ -53,7 +53,7 @@ from gh_tray.toolkit import FontZoom, application, compositing_available, follow
 NUMBER_FIELDS = {
     "poll_minutes": "Poll every (minutes)",
     "max_age_days": "Hide pull requests older than (days, 0 = keep all)",
-    "popup_rows": "Changes shown when you click the tray icon",
+    "popup_rows": "PRs shown",
 }
 # A spin box needs a ceiling; a setting with none gets one nobody will reach.
 UNBOUNDED = 100_000

@@ -67,41 +67,41 @@ def store(tmp_path, *entries: dict) -> None:
 def test_the_newest_changes_come_first(event_log):
     for number in range(5):
         events.append_events([change(key=f"acme/widget#{number}")])
-    assert [row.number for row in popup.rows_to_show(5)] == [f"#{number}" for number in reversed(range(5))]
+    assert [row.number for row in popup.rows_to_show()] == [f"#{number}" for number in reversed(range(5))]
 
 
-def test_only_as_many_rows_as_asked_for_are_shown(event_log):
+def test_every_recorded_change_comes_back_since_the_window_scrolls(event_log):
     events.append_events([change(key=f"acme/widget#{number}") for number in range(20)])
-    assert len(popup.rows_to_show(3)) == 3
+    assert len(popup.rows_to_show()) == 20
 
 
-def test_asking_for_more_rows_than_exist_shows_what_there_is(event_log):
-    events.append_events([change()])
-    assert len(popup.rows_to_show(10)) == 1
+def test_changes_older_than_the_age_limit_are_left_out(event_log):
+    events.append_events([change(key="acme/widget#1", at="2020-01-01T00:00:00.000000Z"), change(key="acme/widget#2")])
+    assert [row.number for row in popup.rows_to_show(max_age_days=30)] == ["#2"]
 
 
 def test_nothing_recorded_and_nothing_waiting_shows_nothing(event_log):
-    assert popup.rows_to_show(8) == []
+    assert popup.rows_to_show() == []
 
 
 def test_changes_since_the_user_looked_are_marked_and_older_ones_are_not(event_log):
     events.append_events([change(key="acme/widget#1")])
     events.mark_seen()
     events.append_events([change(key="acme/widget#2")])
-    marked = {row.number: row.seen for row in popup.rows_to_show(10)}
+    marked = {row.number: row.seen for row in popup.rows_to_show()}
     assert marked["#2"] is False
     assert marked["#1"] is True
 
 
 def test_everything_is_unread_before_the_user_has_ever_looked(event_log):
     events.append_events([change(), change(key="acme/widget#8")])
-    assert all(not row.seen for row in popup.rows_to_show(10))
+    assert all(not row.seen for row in popup.rows_to_show())
 
 
 def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
     # The window used to say "nothing" while the hover text said three reviews were waiting.
     store(event_log, waiting())
-    rows = popup.rows_to_show(10)
+    rows = popup.rows_to_show()
     assert [row.label for row in rows] == ["Awaiting your review"]
     assert rows[0].who == "someone"
     assert rows[0].colour == "orange"
@@ -110,14 +110,14 @@ def test_a_review_waiting_is_listed_even_when_nothing_has_changed(event_log):
 def test_what_changed_is_listed_before_what_is_merely_waiting(event_log):
     events.append_events([change(key="acme/widget#1")])
     store(event_log, waiting())
-    assert [row.repo for row in popup.rows_to_show(10)] == ["acme/widget", "acme/gadget"]
+    assert [row.repo for row in popup.rows_to_show()] == ["acme/widget", "acme/gadget"]
 
 
 def test_a_pull_request_is_not_listed_twice_when_it_both_changed_and_waits(event_log):
     entry = waiting()
     events.append_events([change(key="acme/gadget#7") | {"url": entry["url"]}])
     store(event_log, entry)
-    assert len(popup.rows_to_show(10)) == 1
+    assert len(popup.rows_to_show()) == 1
 
 
 def test_the_states_worth_acting_on_are_recognised(event_log):
@@ -128,7 +128,7 @@ def test_the_states_worth_acting_on_are_recognised(event_log):
         waiting(3, side="authored", ci="FAILURE", lastCommitBy="committer"),
         waiting(4, side="authored", reviewDecision="APPROVED", lastReviewBy="approver"),
     )
-    assert {row.label for row in popup.rows_to_show(10)} == {
+    assert {row.label for row in popup.rows_to_show()} == {
         "Awaiting your review",
         "Changes requested",
         "Checks failing",
@@ -138,12 +138,12 @@ def test_the_states_worth_acting_on_are_recognised(event_log):
 
 def test_a_pull_request_wanting_nothing_is_left_out(event_log):
     store(event_log, waiting(1, side="authored", reviewDecision="REVIEW_REQUIRED", ci="SUCCESS"))
-    assert popup.rows_to_show(10) == []
+    assert popup.rows_to_show() == []
 
 
 def test_a_draft_is_not_offered_as_ready_to_merge(event_log):
     store(event_log, waiting(1, side="authored", reviewDecision="APPROVED", isDraft=True))
-    assert popup.rows_to_show(10) == []
+    assert popup.rows_to_show() == []
 
 
 def test_blocking_items_are_listed_before_routine_ones(event_log):
@@ -152,7 +152,7 @@ def test_blocking_items_are_listed_before_routine_ones(event_log):
         waiting(1, side="authored", reviewDecision="APPROVED", lastReviewBy="approver"),
         waiting(2, side="authored", ci="FAILURE", lastCommitBy="committer"),
     )
-    assert [row.label for row in popup.rows_to_show(10)] == ["Checks failing", "Ready to merge"]
+    assert [row.label for row in popup.rows_to_show()] == ["Checks failing", "Ready to merge"]
 
 
 def test_the_most_recently_touched_comes_first_among_equals(event_log):
@@ -161,7 +161,7 @@ def test_the_most_recently_touched_comes_first_among_equals(event_log):
         waiting(1, updatedAt="2026-06-01T00:00:00Z"),
         waiting(2, updatedAt="2026-06-09T00:00:00Z"),
     )
-    assert [row.number for row in popup.rows_to_show(10)] == ["#2", "#1"]
+    assert [row.number for row in popup.rows_to_show()] == ["#2", "#1"]
 
 
 def test_each_sort_of_change_has_its_own_colour():
@@ -280,7 +280,7 @@ def test_a_mention_nobody_could_be_found_for_still_appears():
 
 def test_something_ready_to_merge_is_good_news_rather_than_a_warning(event_log):
     store(event_log, waiting(1, side="authored", reviewDecision="APPROVED", lastReviewBy="approver"))
-    assert popup.rows_to_show(10)[0].colour == popup.GOOD
+    assert popup.rows_to_show()[0].colour == popup.GOOD
 
 
 def test_a_ready_to_merge_change_is_green_too():
@@ -291,13 +291,13 @@ def test_the_newest_row_is_at_the_top_whatever_it_came_from(event_log):
     old = waiting(1, updatedAt="2020-01-01T00:00:00Z")
     store(event_log, old)
     events.append_events([change(key="acme/widget#1")])
-    assert popup.rows_to_show(10)[0].repo == "acme/widget"
+    assert popup.rows_to_show()[0].repo == "acme/widget"
 
 
 def test_a_change_older_than_what_is_waiting_sinks_below_it(event_log):
     store(event_log, waiting(1, updatedAt=events.utc_now().replace(".", "")[:19] + "Z"))
     events.append_events([change(key="acme/widget#1", at="2020-01-01T00:00:00.000000Z")])
-    assert popup.rows_to_show(10)[0].repo == "acme/gadget"
+    assert popup.rows_to_show()[0].repo == "acme/gadget"
 
 
 def test_a_column_of_numbers_sorts_by_size_not_by_spelling():
@@ -356,18 +356,18 @@ def test_several_comments_on_one_pull_request_are_one_row(event_log):
     # The list is what wants attention, not a history: three comments on one pull request are one thing to look at.
     for _ in range(3):
         events.append_events([change("new_comment", key="acme/widget#7")])
-    assert len(popup.rows_to_show(10)) == 1
+    assert len(popup.rows_to_show()) == 1
 
 
 def test_the_most_recent_of_several_rows_for_one_pull_request_is_the_one_kept(event_log):
     events.append_events([change("new_comment", key="acme/widget#7", at="2020-01-01T00:00:00.000000Z")])
     events.append_events([change("ci_broken", key="acme/widget#7", at="2026-01-01T00:00:00.000000Z")])
-    assert [row.label for row in popup.rows_to_show(10)] == ["Checks broke"]
+    assert [row.label for row in popup.rows_to_show()] == ["Checks broke"]
 
 
 def test_different_pull_requests_are_not_folded_together(event_log):
     events.append_events([change("new_comment", key="acme/widget#7"), change("new_comment", key="acme/widget#8")])
-    assert len(popup.rows_to_show(10)) == 2
+    assert len(popup.rows_to_show()) == 2
 
 
 def test_rows_with_no_address_are_told_apart_by_repository_and_number():
@@ -381,36 +381,36 @@ def test_rows_with_no_address_are_told_apart_by_repository_and_number():
 
 def test_clicking_a_row_marks_it_seen(event_log):
     events.append_events([change(key="acme/widget#1")])
-    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
-    assert popup.rows_to_show(10)[0].seen is True
+    popup.remember_row_seen(popup.rows_to_show()[0], True)
+    assert popup.rows_to_show()[0].seen is True
 
 
 def test_clicking_a_seen_row_again_marks_it_unseen(event_log):
     events.append_events([change(key="acme/widget#1")])
     events.mark_seen()
-    popup.remember_row_seen(popup.rows_to_show(10)[0], False)
-    assert popup.rows_to_show(10)[0].seen is False
+    popup.remember_row_seen(popup.rows_to_show()[0], False)
+    assert popup.rows_to_show()[0].seen is False
 
 
 def test_a_row_marked_seen_comes_back_when_something_happens_to_it(event_log):
     # Marking says "I have read this", not "stop telling me about this pull request".
     events.append_events([change(key="acme/widget#1", at="2026-01-01T00:00:00.000000Z")])
-    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
+    popup.remember_row_seen(popup.rows_to_show()[0], True)
     events.append_events([change(kind="new_comment", key="acme/widget#1", at="2026-02-01T00:00:00.000000Z")])
-    assert popup.rows_to_show(10)[0].seen is False
+    assert popup.rows_to_show()[0].seen is False
 
 
 def test_a_review_waiting_is_not_dimmed_by_marking_everything_seen(event_log):
     # A review is still waiting however long ago the user last cleared the list, so it stays at full strength.
     store(event_log, waiting())
     events.mark_seen()
-    assert popup.rows_to_show(10)[0].seen is False
+    assert popup.rows_to_show()[0].seen is False
 
 
 def test_a_review_waiting_can_still_be_marked_seen_by_clicking_it(event_log):
     store(event_log, waiting())
-    popup.remember_row_seen(popup.rows_to_show(10)[0], True)
-    assert popup.rows_to_show(10)[0].seen is True
+    popup.remember_row_seen(popup.rows_to_show()[0], True)
+    assert popup.rows_to_show()[0].seen is True
 
 
 def test_the_same_name_is_always_dealt_the_same_colour():
@@ -442,7 +442,7 @@ def test_a_change_row_carries_both_names_and_the_hat_it_lands_on(event_log):
             events.utc_now(),
         )
     )
-    found = popup.rows_to_show(10)[0]
+    found = popup.rows_to_show()[0]
     assert (found.author, found.who, found.role) == ("emily", "dlg", "author")
 
 
@@ -464,7 +464,7 @@ def test_a_mention_row_recorded_without_an_author_is_filled_from_the_last_poll(e
             }
         ]
     )
-    found = next(row for row in popup.rows_to_show(10) if row.label == "Mentioned")
+    found = next(row for row in popup.rows_to_show() if row.label == "Mentioned")
     assert found.author == "emily"
     assert found.number == "#9", "the number is the tail of the page the row leads to"
 
@@ -517,12 +517,12 @@ def test_rows_learn_their_status_from_the_last_poll(event_log):
     entry = waiting(state="MERGED", side="closed")
     events.append_events([change(key="acme/gadget#7") | {"url": entry["url"]}])
     store(event_log, entry)
-    assert [row.status for row in popup.rows_to_show(10)] == ["merged"]
+    assert [row.status for row in popup.rows_to_show()] == ["merged"]
 
 
 def test_a_row_about_something_no_longer_polled_has_no_status(event_log):
     events.append_events([change()])
-    assert [row.status for row in popup.rows_to_show(10)] == [""]
+    assert [row.status for row in popup.rows_to_show()] == [""]
 
 
 def test_the_closed_filter_hides_finished_rows_until_asked():
@@ -571,3 +571,10 @@ def test_an_involved_pull_request_stands_as_a_quiet_row_under_its_own_filter():
     assert (row.label, row.role, row.colour, row.who) == ("Involved", "involved", "blue", "bob")
     assert popup.role_matches(row, "involved") and not popup.role_matches(row, "reviewer")
     assert ("involved", "Involved") in popup.FILTER_CHOICES
+
+
+def test_an_involved_pull_request_the_user_has_reviewed_stands_as_theirs_to_review():
+    entry = {"side": "involved", "reviewedByMe": True, "repo": "acme/widget", "number": 9, "author": "bob"}
+    (row,) = popup.rows_from_snapshot({"involved:acme/widget#9": entry}, set())
+    assert (row.label, row.role, row.who) == ("Reviewer", "reviewer", "bob")
+    assert popup.role_matches(row, "reviewer") and not popup.role_matches(row, "involved")

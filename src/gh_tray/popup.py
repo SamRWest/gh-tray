@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import zlib
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from gh_tray.events import (
     BROKEN_CI,
@@ -79,8 +79,6 @@ SORT_KEYS = {
 
 
 TITLE_LIMIT = 90
-# How many log entries to read per row shown, since several entries about one pull request collapse into one row.
-ROWS_READ_DEEPLY = 5
 # The age at which a date is drawn at the far end of its colour scale.
 AGE_RAMP_DAYS = 365
 
@@ -141,7 +139,8 @@ STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("changes_requested", "Changes requested", "lastReviewBy", True, "amber"),
     ("checks_failing", "Checks failing", "lastCommitBy", True, "red"),
     ("ready_to_merge", "Ready to merge", "lastReviewBy", False, "green"),
-    # Listed for as long as it is open, matching the dashboard; never blocking, since involvement asks nothing.
+    # Listed for as long as it is open, matching the dashboard; never blocking, since a review given asks nothing more.
+    ("reviewed", "Reviewer", "author", False, "blue"),
     ("involved", "Involved", "author", False, "blue"),
 )
 
@@ -254,7 +253,8 @@ def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
             "changes_requested": entry.get("side") == "authored" and entry.get("reviewDecision") == "CHANGES_REQUESTED",
             "checks_failing": entry.get("side") == "authored" and entry.get("ci") in BROKEN_CI,
             "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
-            "involved": entry.get("side") == "involved",
+            "reviewed": entry.get("side") == "involved" and bool(entry.get("reviewedByMe")),
+            "involved": entry.get("side") == "involved" and not entry.get("reviewedByMe"),
         }[state]
         if matches:
             return label, str(entry.get(who_field, "")), urgent, colour
@@ -296,7 +296,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str,
                     at=touched,
                     seen=has_been_seen(identity, touched, marks or {}, None),
                     author=str(entry.get("author", "")),
-                    role=role_of(entry.get("side")),
+                    role=role_of(entry),
                 ),
             )
         )
@@ -330,23 +330,26 @@ def one_per_pull_request(rows: list[Row]) -> list[Row]:
     return kept
 
 
-def rows_to_show(count: int) -> list[Row]:
+def rows_to_show(max_age_days: int = 0) -> list[Row]:
     """Return the lines to list: what changed since the user last looked, plus what is waiting on them.
 
-    Standing state is included, so a quiet day still shows something, matching the tray's hover summary.
-    :param count: how many rows to return at most
+    Standing state is included, so a quiet day still shows something. Nothing is cut to a count: the window sizes
+    itself around its first rows and the rest scroll.
+    :param max_age_days: changes older than this are left out, or zero to keep every change recorded
     """
     marker = last_seen()
     since = moment(marker) if marker else None
     marks = seen_marks()
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days) if max_age_days else None
     changes = [
         row_from_event(event, has_been_seen(event_identity(event), event["at"], marks, since))
-        for event in recent_events(count * ROWS_READ_DEEPLY)
+        for event in recent_events(None)
+        if cutoff is None or moment(event["at"]) >= cutoff
     ]
     entries, _damaged = read_snapshot()
     changes = [filled_in(row, entries or {}) for row in changes]
     listed = {row.url for row in changes if row.url}
-    rows = one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))[:count]
+    rows = one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))
     return with_status(rows, states_by_page(entries or {}))
 
 

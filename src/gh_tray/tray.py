@@ -135,7 +135,7 @@ class Tray(QObject):
         self.icon.activated.connect(self.on_activated)
         self.layout = layout_store()
         self.zoom = FontZoom(self.layout)
-        self.window = ChangesWindow(rows_to_show(self.config["popup_rows"]), self.layout)
+        self.window = ChangesWindow(rows_to_show(self.config["max_age_days"]), self.layout)
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
         self.window.attach_menu(self.menu)

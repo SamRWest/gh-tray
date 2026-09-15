@@ -22,9 +22,9 @@ from gh_tray.tray import Tray
 def build_tray(qtbot, monkeypatch):
     """Return a function that builds a real Tray with every outside file access stubbed."""
     monkeypatch.setattr(tray, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
-    monkeypatch.setattr(tray, "rows_to_show", lambda _count: [])
-    monkeypatch.setattr(window, "rows_to_show", lambda _count: [])
-    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20})
+    monkeypatch.setattr(tray, "rows_to_show", lambda *_args: [])
+    monkeypatch.setattr(window, "rows_to_show", lambda *_args: [])
+    monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20, "max_age_days": 0})
     monkeypatch.setattr(window, "blur_behind", lambda _window, _radius: window.Blur())
     monkeypatch.setattr(tray, "read_snapshot", lambda: ({}, False))
     monkeypatch.setattr(tray, "autostart_enabled", lambda: False)

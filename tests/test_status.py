@@ -64,17 +64,10 @@ def test_hover_text_for_a_long_error_fits_the_platform_limit():
     assert len(status.tooltip_text(result)) <= status.TOOLTIP_LIMIT
 
 
-def test_hover_text_names_the_app_and_the_unread_count():
-    text = status.tooltip_text(Status(unread=3, polled_at="09:00"), app_name="gh-tray")
-    assert text.startswith("gh-tray - 3 unread changes")
-
-
-def test_hover_text_says_when_there_is_nothing_to_look_at():
-    assert "no changes" in status.tooltip_text(Status(unread=0, polled_at="09:00"))
-
-
-def test_one_unread_change_reads_in_the_singular():
-    assert "1 unread change\n" in status.tooltip_text(Status(unread=1, polled_at="09:00"))
+def test_hover_text_names_the_app_and_leaves_out_the_unread_count():
+    text = status.tooltip_text(Status(unread=3, reviewing=2, polled_at="09:00"), app_name="gh-tray")
+    assert text.splitlines()[0] == "gh-tray"
+    assert "unread" not in text
 
 
 def test_the_menu_header_reports_a_failed_poll():
