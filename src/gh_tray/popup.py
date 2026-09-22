@@ -35,6 +35,8 @@ URGENT = "red"
 ROUTINE = "amber"
 GOOD = "green"
 QUIET = "muted"
+# The ink of a pull request the user has reviewed: its Reviewer label, and the wash under its row.
+REVIEWED_COLOUR = "blue"
 
 # How strongly a seen row is dimmed; age keeps its own colour scale in the date column, so it is not dimmed too.
 SEEN_STRENGTH = 0.58
@@ -103,6 +105,8 @@ class Row:
     role: str = ""
     # Current standing per :func:`pull_request_status`, empty when unknown; drives the Status column and closed filter.
     status: str = ""
+    # Whether the user has reviewed it and nothing more is asked of them, per :func:`reviewed_by_user`.
+    reviewed: bool = False
 
 
 # A name's ink, from a stable digest of its spelling, so it is the same colour every time; an identity tag only.
@@ -140,7 +144,7 @@ STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("checks_failing", "Checks failing", "lastCommitBy", True, "red"),
     ("ready_to_merge", "Ready to merge", "lastReviewBy", False, "green"),
     # Listed for as long as it is open, matching the dashboard; never blocking, since a review given asks nothing more.
-    ("reviewed", "Reviewer", "author", False, "blue"),
+    ("reviewed", "Reviewer", "author", False, REVIEWED_COLOUR),
     ("involved", "Involved", "author", False, "blue"),
 )
 
@@ -253,8 +257,8 @@ def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
             "changes_requested": entry.get("side") == "authored" and entry.get("reviewDecision") == "CHANGES_REQUESTED",
             "checks_failing": entry.get("side") == "authored" and entry.get("ci") in BROKEN_CI,
             "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
-            "reviewed": entry.get("side") == "involved" and bool(entry.get("reviewedByMe")),
-            "involved": entry.get("side") == "involved" and not entry.get("reviewedByMe"),
+            "reviewed": reviewed_by_user(entry),
+            "involved": entry.get("side") == "involved" and not reviewed_by_user(entry),
         }[state]
         if matches:
             return label, str(entry.get(who_field, "")), urgent, colour
@@ -350,7 +354,7 @@ def rows_to_show(max_age_days: int = 0) -> list[Row]:
     changes = [filled_in(row, entries or {}) for row in changes]
     listed = {row.url for row in changes if row.url}
     rows = one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))
-    return with_status(rows, states_by_page(entries or {}))
+    return with_current_state(rows, states_by_page(entries or {}))
 
 
 def filled_in(row: Row, entries: dict) -> Row:
@@ -383,8 +387,8 @@ STATUS_COLOURS: dict[str, str] = {
 # The statuses meaning a pull request is finished, which the window hides until asked to show them.
 CLOSED_STATUSES = frozenset({"merged", "closed"})
 
-# How much status colour washes a finished row's background, so it reads as done without drowning the text atop.
-CLOSED_TINT = 0.14
+# How much colour washes a done row's background, closed or reviewed, so it reads as done without drowning the text.
+DONE_TINT = 0.14
 
 
 def pull_request_status(entry: dict | None) -> str:
@@ -408,6 +412,16 @@ def pull_request_status(entry: dict | None) -> str:
     return "open"
 
 
+def reviewed_by_user(entry: dict | None) -> bool:
+    """Return whether the user has given their review of an open pull request and nothing more is asked of them.
+
+    A review asked again after one was given puts the pull request back on the reviewing side, so it counts as
+    unreviewed until answered; the user's own pull requests never count, whatever review they left on them.
+    :param entry: the pull request as the last poll recorded it, or None when it is no longer polled
+    """
+    return entry is not None and entry.get("side") == "involved" and bool(entry.get("reviewedByMe"))
+
+
 def states_by_page(entries: dict) -> dict[str, dict]:
     """Index the last poll's records by the page each leads to, so a row can look its pull request up.
 
@@ -425,14 +439,20 @@ def states_by_page(entries: dict) -> dict[str, dict]:
     return indexed
 
 
-def with_status(rows: list[Row], indexed: dict[str, dict]) -> list[Row]:
-    """Return rows with the Status column filled in from the last poll's records.
+def with_current_state(rows: list[Row], indexed: dict[str, dict]) -> list[Row]:
+    """Return rows with what the last poll knows of their pull request: the Status column, and whether it is reviewed.
 
-    A row about something no longer polled keeps an empty status, which reads as nothing rather than as a guess.
+    A row about something no longer polled keeps an empty status and counts as unreviewed, which reads as nothing
+    rather than as a guess.
     :param rows: the rows to fill in
     :param indexed: the records by page, as :func:`states_by_page` returns them
     """
-    return [replace(row, status=pull_request_status(indexed.get(row.url))) if row.url else row for row in rows]
+
+    def known(row: Row) -> Row:
+        entry = indexed.get(row.url)
+        return replace(row, status=pull_request_status(entry), reviewed=reviewed_by_user(entry))
+
+    return [known(row) if row.url else row for row in rows]
 
 
 def closed_matches(row: Row, show_closed: bool) -> bool:
@@ -445,16 +465,29 @@ def closed_matches(row: Row, show_closed: bool) -> bool:
     return show_closed or row.status not in CLOSED_STATUSES
 
 
-def row_background(row: Row, inks: Palette) -> str | None:
-    """Return the wash a row is drawn on, or None for the table's own; only a finished pull request gets one.
+def reviewed_matches(row: Row, show_reviewed: bool) -> bool:
+    """Return whether a row passes the reviewed filter, which hides pull requests the user has reviewed until asked.
 
     :param row: the row to judge
-    :param inks: the palette of the theme being drawn in
-    :return: the status colour at :data:`CLOSED_TINT` strength, as ``#aarrggbb``
+    :param show_reviewed: whether rows about pull requests the user has already reviewed are wanted
     """
-    if row.status not in CLOSED_STATUSES:
-        return None
-    return wash(ink(inks, STATUS_COLOURS[row.status]), CLOSED_TINT)
+    return show_reviewed or not row.reviewed
+
+
+def row_background(row: Row, inks: Palette) -> str | None:
+    """Return the wash a row is drawn on, or None for the table's own; only a done row gets one.
+
+    A finished pull request takes its status colour and a reviewed one the Reviewer ink, so each reads as done at
+    a glance and the two tell apart.
+    :param row: the row to judge
+    :param inks: the palette of the theme being drawn in
+    :return: the colour at :data:`DONE_TINT` strength, as ``#aarrggbb``
+    """
+    if row.status in CLOSED_STATUSES:
+        return wash(ink(inks, STATUS_COLOURS[row.status]), DONE_TINT)
+    if row.reviewed:
+        return wash(ink(inks, REVIEWED_COLOUR), DONE_TINT)
+    return None
 
 
 # The quick filters along the bottom of the window: what each is called, and which of the user's hats it keeps.

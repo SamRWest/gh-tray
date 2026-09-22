@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import webbrowser
+from collections.abc import Callable
 from dataclasses import replace
 
 from loguru import logger
@@ -63,6 +64,7 @@ from gh_tray.popup import (
     name_colour,
     org_and_name,
     remember_row_seen,
+    reviewed_matches,
     role_matches,
     row_background,
     rows_to_show,
@@ -187,14 +189,19 @@ class ChangesWindow(QWidget):
         self.all_entries = list(entries)
         self.entries: list[Row] = []
         self.role_filter = "all"
-        # Closed pull requests start hidden: they are done, and this window lists what is not.
+        # Closed pull requests, and ones the user has reviewed, start hidden: they are done, and this window lists
+        # what is not.
         self.show_closed = False
+        self.show_reviewed = False
         self.sort_column = DEFAULT_SORT
         self.newest_first = True
         self.search_text = ""
         self.inks: Palette = palette(chosen_style())
         self.layout_store = layout if layout is not None else layout_store()
         self.placed_width = 0
+        self.placed_height = 0
+        # Whether the user has dragged an edge since the window came up; a hand-sized window is not re-fitted.
+        self.hand_sized = False
         self.awaiting_poll = False
         self.fitting = False
         # None rather than a sentinel time: a monotonic clock has no fixed zero, so no number safely means "never".
@@ -308,7 +315,7 @@ class ChangesWindow(QWidget):
         self.menu_button.show()
 
     def controls(self) -> QHBoxLayout:
-        """Lay out the quick filters, the closed toggle, the search box, and the dashboard and refresh buttons."""
+        """Lay out the quick filters, the done toggles, the search box, and the dashboard and refresh buttons."""
         strip = QHBoxLayout()
         self.filters = QButtonGroup(self)
         self.chips: dict[str, QPushButton] = {}
@@ -321,10 +328,8 @@ class ChangesWindow(QWidget):
             strip.addWidget(chip)
             self.chips[name] = chip
         strip.addSpacing(12)
-        self.closed_chip = QPushButton("Show closed", self)
-        self.closed_chip.setCheckable(True)
-        self.closed_chip.toggled.connect(self.set_show_closed)
-        strip.addWidget(self.closed_chip)
+        self.closed_chip = self.done_toggle("Show closed", self.set_show_closed, strip)
+        self.reviewed_chip = self.done_toggle("Show reviewed", self.set_show_reviewed, strip)
         self.search = QLineEdit(self)
         self.search.setPlaceholderText("Search (Ctrl+F)")
         self.search.setClearButtonEnabled(True)
@@ -339,6 +344,19 @@ class ChangesWindow(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         strip.addWidget(self.refresh_button)
         return strip
+
+    def done_toggle(self, label: str, on_toggle: Callable[[bool], None], strip: QHBoxLayout) -> QPushButton:
+        """Add one of the switches that bring back a kind of done row, off to begin with.
+
+        :param label: what the switch says
+        :param on_toggle: what to call with the switch's new state
+        :param strip: the strip of controls to add it to
+        """
+        chip = QPushButton(label, self)
+        chip.setCheckable(True)
+        chip.toggled.connect(on_toggle)
+        strip.addWidget(chip)
+        return chip
 
     def advance(self) -> int:
         """Return how wide one character is in this window's font, which is the unit every width is kept in."""
@@ -440,6 +458,7 @@ class ChangesWindow(QWidget):
             for entry in self.all_entries
             if role_matches(entry, self.role_filter)
             and closed_matches(entry, self.show_closed)
+            and reviewed_matches(entry, self.show_reviewed)
             and matches_search(entry, self.search_text)
         ]
         self.entries = sorted_rows(kept, self.sort_column, self.newest_first)
@@ -584,6 +603,14 @@ class ChangesWindow(QWidget):
         self.show_closed = wanted
         self.redraw_filtered()
 
+    def set_show_reviewed(self, wanted: bool) -> None:
+        """Show or hide the rows about pull requests the user has reviewed, and redraw around whatever that leaves.
+
+        :param wanted: whether pull requests already reviewed are wanted in the list
+        """
+        self.show_reviewed = wanted
+        self.redraw_filtered()
+
     def set_search(self, text: str) -> None:
         """Keep only the rows holding some text, as it is typed.
 
@@ -686,11 +713,11 @@ class ChangesWindow(QWidget):
             layout.activate()
 
     def place(self, geometry: QRect) -> None:
-        """Size and position the window, remembering the width as this code's own rather than the user's.
+        """Size and position the window, remembering the size as this code's own rather than the user's.
 
         :param geometry: where the window's contents should sit
         """
-        self.placed_width = geometry.width()
+        self.placed_width, self.placed_height = geometry.width(), geometry.height()
         self.setGeometry(geometry)
 
     def show_by(self, spot: QPoint) -> None:
@@ -720,10 +747,11 @@ class ChangesWindow(QWidget):
     def refit(self, resize_width: bool = False) -> None:
         """Re-fit the window's height to its current rows, growing or shrinking from the top edge.
 
-        The bottom edge stays fixed, since growing downward would push rows off the screen.
+        The bottom edge stays fixed, since growing downward would push rows off the screen. A window the user has
+        dragged keeps its size until it is next shown, and its rows scroll instead.
         :param resize_width: whether to also re-fit the width, needed when the text has been zoomed
         """
-        if not self.isVisible():
+        if not self.isVisible() or self.hand_sized:
             return
         self.settle_layout()
         now = self.geometry()
@@ -762,6 +790,7 @@ class ChangesWindow(QWidget):
         self.shown_at = time.monotonic()
         self.dismissed_at = None
         self.desktop_dragging = False
+        self.hand_sized = False
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, not activate)
         self.show()
         self.raise_()
@@ -803,17 +832,23 @@ class ChangesWindow(QWidget):
         self.paint()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Remember the width the user dragged to; widths this code set are not worth keeping.
+        """Note a resize by the user: the width is remembered, and the window keeps its size while it stays up.
 
+        Sizes this code set are not worth keeping, and a side equal to the window's minimum was the toolkit
+        enforcing its floor as text grew, not a resize.
         :param event: the resize
         """
         super().resizeEvent(event)
-        width = event.size().width()
-        # A width equal to the window's minimum was the toolkit enforcing its floor as text grew, not a resize.
-        forced = width == self.minimumSize().width()
-        if self.isVisible() and width != self.placed_width and not forced:
-            self.placed_width = width
+        if not self.isVisible():
+            return
+        width, height = event.size().width(), event.size().height()
+        wider = width != self.placed_width and width != self.minimumSize().width()
+        taller = height != self.placed_height and height != self.minimumSize().height()
+        if wider:
             self.remember(WIDTH_KEY, width)
+        if wider or taller:
+            self.placed_width, self.placed_height = width, height
+            self.hand_sized = True
 
     def edges_at(self, spot: QPoint) -> Qt.Edge:
         """Return which edges of the window a point is within the grip of, which is none for most of it.

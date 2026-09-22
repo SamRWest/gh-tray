@@ -6,6 +6,7 @@ their marking, both of which are ordinary functions.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -522,7 +523,40 @@ def test_rows_learn_their_status_from_the_last_poll(event_log):
 
 def test_a_row_about_something_no_longer_polled_has_no_status(event_log):
     events.append_events([change()])
-    assert [row.status for row in popup.rows_to_show()] == [""]
+    assert [(row.status, row.reviewed) for row in popup.rows_to_show()] == [("", False)]
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        (None, False),
+        (waiting(side="involved", reviewedByMe=True), True),
+        (waiting(side="involved"), False),
+        # Asked again after reviewing, so it is back to awaiting the user.
+        (waiting(side="reviewing", reviewedByMe=True), False),
+        (waiting(side="authored", reviewedByMe=True), False),
+    ],
+)
+def test_reviewed_means_the_users_review_is_given_and_no_fresh_one_asked(entry, expected):
+    assert popup.reviewed_by_user(entry) is expected
+
+
+def test_rows_learn_they_are_reviewed_from_the_last_poll(event_log):
+    entry = waiting(side="involved", reviewedByMe=True)
+    events.append_events([change(kind="review_requested", key="acme/gadget#7") | {"url": entry["url"]}])
+    store(event_log, entry)
+    assert [row.reviewed for row in popup.rows_to_show()] == [True]
+
+
+def test_a_reviewed_pull_request_that_has_since_closed_reads_as_closed_not_reviewed(event_log):
+    # Both records linger briefly after a merge; the closed one wins, so the row hides and washes as closed.
+    still_open = waiting(side="involved", reviewedByMe=True)
+    merged = waiting(side="closed", state="MERGED", reviewedByMe=True)
+    store(event_log, still_open, merged)
+    (row,) = popup.rows_to_show()
+    assert (row.status, row.reviewed) == ("merged", False)
+    assert not popup.closed_matches(row, show_closed=False)
+    assert popup.row_background(row, theme.DARK) == popup.row_background(replace(row, reviewed=False), theme.DARK)
 
 
 def test_the_closed_filter_hides_finished_rows_until_asked():
@@ -534,12 +568,20 @@ def test_the_closed_filter_hides_finished_rows_until_asked():
     assert [popup.closed_matches(row, show_closed=True) for row in rows] == [True, True, True, True]
 
 
-def test_only_finished_rows_sit_on_a_wash_of_their_status_colour():
+def test_the_reviewed_filter_hides_reviewed_rows_until_asked():
+    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, reviewed=reviewed) for reviewed in (False, True)]
+    assert [popup.reviewed_matches(row, show_reviewed=False) for row in rows] == [True, False]
+    assert [popup.reviewed_matches(row, show_reviewed=True) for row in rows] == [True, True]
+
+
+def test_only_done_rows_sit_on_a_wash_finished_in_their_status_colour_and_reviewed_in_the_reviewer_ink():
     finished = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="merged")
+    reviewed = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open", reviewed=True)
     open_row = popup.Row("", "", "", "", "", "", "", popup.URGENT, status="open")
     unknown = popup.Row("", "", "", "", "", "", "", popup.URGENT)
     status_ink = theme.ink(theme.DARK, popup.STATUS_COLOURS["merged"])
-    assert popup.row_background(finished, theme.DARK) == theme.wash(status_ink, popup.CLOSED_TINT)
+    assert popup.row_background(finished, theme.DARK) == theme.wash(status_ink, popup.DONE_TINT)
+    assert popup.row_background(reviewed, theme.DARK) == theme.wash(theme.DARK.blue, popup.DONE_TINT)
     assert popup.row_background(open_row, theme.DARK) is None
     assert popup.row_background(unknown, theme.DARK) is None
 
