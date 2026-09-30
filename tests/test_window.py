@@ -22,6 +22,7 @@ def row(
     seen: bool = False,
     role: str = "",
     status: str = "",
+    reviewed: bool = False,
     at: str = "2026-01-02T00:00:00.000000Z",
 ) -> popup.Row:
     """Build one row of the table."""
@@ -38,6 +39,7 @@ def row(
         seen=seen,
         role=role,
         status=status,
+        reviewed=reviewed,
     )
 
 
@@ -223,6 +225,16 @@ def test_show_closed_toggles_finished_rows(build_window):
     assert [entry.number for entry in view.entries] == ["#7", "#8"]
 
 
+def test_show_reviewed_toggles_rows_the_user_has_reviewed(build_window):
+    reviewed = row("#9", role="reviewer", reviewed=True, at="2026-01-03T00:00:00.000000Z")
+    view = build_window([*ROWS, reviewed])
+    assert [entry.number for entry in view.entries] == ["#7", "#8"]
+    view.reviewed_chip.setChecked(True)
+    assert [entry.number for entry in view.entries] == ["#9", "#7", "#8"]
+    view.reviewed_chip.setChecked(False)
+    assert [entry.number for entry in view.entries] == ["#7", "#8"]
+
+
 def test_rows_beyond_the_setting_stay_in_the_table_and_scroll_rather_than_grow_the_window(build_window):
     many = [row(f"#{n}", at=f"2026-01-{n + 1:02d}T00:00:00.000000Z") for n in range(6)]
     view = build_window(many, rows_in_view=2)
@@ -297,6 +309,25 @@ def test_refit_height_after_a_filter_change_keeps_the_bottom_edge(build_window, 
     view.chips["author"].click()
     qapp.processEvents()
     assert view.geometry().bottom() == bottom
+
+
+def test_a_dragged_window_keeps_its_size_through_a_toggle_until_it_is_next_shown(build_window, qapp):
+    view = build_window([*ROWS, row("#9", status="merged", at="2026-01-03T00:00:00.000000Z")])
+    usable = view.usable_screen(QPoint(0, 0))
+    view.show_by(QPoint(usable.right() - 10, usable.bottom() - 10))
+    qapp.processEvents()
+    view.resize(view.width(), view.height() + 120)
+    dragged = view.geometry()
+    view.closed_chip.setChecked(True)
+    qapp.processEvents()
+    assert view.geometry() == dragged
+    view.hide()
+    view.show_by(QPoint(usable.right() - 10, usable.bottom() - 10))
+    qapp.processEvents()
+    assert view.height() == view.wanted_height(usable) != dragged.height()
+    view.closed_chip.setChecked(False)
+    qapp.processEvents()
+    assert view.height() == view.wanted_height(usable)
 
 
 def test_refresh_emits_refresh_asked_and_disables_the_button(view, qtbot):
@@ -388,6 +419,14 @@ def test_a_finished_row_and_the_clicked_row_are_washed_not_painted_solid(build_w
     clicked = view.table.item(1, 0).background().color()
     assert clicked.name() == view.table.palette().highlight().color().name()
     assert 0 < clicked.alpha() < 255
+
+
+def test_a_reviewed_row_is_washed_in_the_reviewer_ink(build_window):
+    view = build_window([row("#9", reviewed=True)])
+    view.reviewed_chip.setChecked(True)
+    washed = view.table.item(0, 0).background().color()
+    assert washed.name() == theme.ink(view.inks, popup.REVIEWED_COLOUR)
+    assert 0 < washed.alpha() < 255
 
 
 def test_show_below_puts_the_window_under_another_without_the_focus_and_hiding_ends_the_preview(view):

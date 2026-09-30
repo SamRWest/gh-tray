@@ -45,6 +45,8 @@ In the changes window:
 
 - Double-click a row to open it on GitHub. Right-click a row to mark it seen, or unseen again.
 - Click a heading to sort. Use the buttons at the bottom to filter, and Ctrl+F to search every column.
+- Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or
+  **Show reviewed**; each sits on a tinted background so it reads as done.
 - Hold Ctrl and scroll to change the text size. Drag the title to move the window and an edge to resize it.
 - **Open dashboard** opens gh-dash in a terminal. **Menu** opens the tray menu, for desktops that offer no other way.
 - The window has rounded corners and a see-through background where the desktop can draw them, blurred behind on Windows
