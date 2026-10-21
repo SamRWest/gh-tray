@@ -77,8 +77,10 @@ brings its worktree up to date instead, wherever that worktree is. If the IDE co
 cleared, the settings open at the one missing, and the review carries on once you save.
 
 **Remove local worktree** deletes a pull request's worktree in the checkout folder once you are done, and is greyed out
-until there is one. Git refuses to remove a worktree holding uncommitted work, though an IDE's `.idea` folder does not
-count, and the pull request's branch stays in the clone.
+until there is one. **Remove all local worktrees** does the same for every review worktree in the checkout folder: a
+folder named like `widget-pr7` on the branch of that name, so nothing else there is touched. Git refuses to remove a
+worktree holding uncommitted work, though an IDE's `.idea` folder does not count, and the pull request's branch stays in
+the clone.
 
 No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it:
 

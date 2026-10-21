@@ -27,7 +27,7 @@ from gh_tray.config import (
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
 from gh_tray.github import GitHubError
-from gh_tray.local_review import ReviewError, existing_worktree, open_for_review, remove_worktree
+from gh_tray.local_review import ReviewError, existing_worktree, open_for_review, remove_worktree, review_worktrees
 from gh_tray.notifier import Notifier
 from gh_tray.popup import rows_to_show
 from gh_tray.service import PollResult, poll
@@ -153,6 +153,7 @@ class Tray(QObject):
         self.window.dashboard_asked.connect(self.on_dashboard)
         self.window.review_asked.connect(self.on_review)
         self.window.remove_asked.connect(self.on_remove)
+        self.window.remove_all_asked.connect(self.on_remove_all)
         self.local_review_failed.connect(self.on_local_review_failed)
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
@@ -308,24 +309,39 @@ class Tray(QObject):
             self.local_review_failed.emit(f"Could not review in the IDE: {error}")
 
     def on_remove(self, url: str) -> None:
-        """Remove a pull request's review worktree, on a thread of its own since a large one takes a while to delete.
+        """Remove a pull request's review worktree.
 
         :param url: the pull request's page
         """
         folder = existing_worktree(url, self.config[CHECKOUT_FOLDER_KEY])
-        if folder is not None:
-            threading.Thread(target=self.remove, args=(folder,), daemon=True, name=f"{APP_NAME}-remove").start()
+        self.remove_in_background([folder] if folder is not None else [])
 
-    def remove(self, folder: Path) -> None:
-        """Remove a review worktree, reporting a failure over a signal, since this runs off the toolkit's thread.
+    def on_remove_all(self) -> None:
+        """Remove every review worktree in the checkout folder."""
+        self.remove_in_background(review_worktrees(self.config[CHECKOUT_FOLDER_KEY]))
 
-        :param folder: the worktree
+    def remove_in_background(self, folders: list[Path]) -> None:
+        """Remove review worktrees on a thread of their own, since a large one takes a while to delete.
+
+        :param folders: the worktrees, which may be none
         """
-        try:
-            remove_worktree(folder)
-        except ReviewError as error:
-            logger.warning("could not remove {}: {}", folder, error)
-            self.local_review_failed.emit(f"Could not remove {folder.name}: {error}")
+        if folders:
+            threading.Thread(target=self.remove, args=(folders,), daemon=True, name=f"{APP_NAME}-remove").start()
+
+    def remove(self, folders: list[Path]) -> None:
+        """Remove review worktrees, carrying on past any git refuses and reporting those together over a signal.
+
+        :param folders: the worktrees
+        """
+        refused = []
+        for folder in folders:
+            try:
+                remove_worktree(folder)
+            except ReviewError as error:
+                logger.warning("could not remove {}: {}", folder, error)
+                refused.append(f"{folder.name}: {error}")
+        if refused:
+            self.local_review_failed.emit(f"Could not remove {'; '.join(refused)}")
 
     def on_local_review_failed(self, reason: str) -> None:
         """Say on the tray icon why reviewing in an IDE, or removing a review worktree, failed.

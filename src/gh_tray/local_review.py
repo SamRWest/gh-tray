@@ -31,6 +31,9 @@ REMOTE_URL_LINE = re.compile(r"^\s*url\s*=\s*(\S+)", re.MULTILINE)
 REMOTE_REPOSITORY = re.compile(r"[/:](?P<repository>[^/:]+/[^/]+?)(?:\.git)?/?$")
 # Where JetBrains IDEs keep a project's settings, which they make in every folder they open.
 IDE_SETTINGS_FOLDER = ".idea"
+# The name a review worktree and its branch share, as PullRequest.local_name makes it.
+REVIEW_NAME = re.compile(r".+-pr\d+")
+BRANCH_REFERENCE = "ref: refs/heads/"
 
 
 class ReviewError(RuntimeError):
@@ -114,6 +117,34 @@ def existing_worktree(url: str, checkout_folder: str) -> Path | None:
         return None
     folder = worktree_folder(Path(checkout_folder).expanduser(), pull)
     return folder if folder.is_dir() else None
+
+
+def checked_out_branch(worktree: Path) -> str:
+    """Return the branch a worktree has checked out, or an empty string when it is detached or not a worktree.
+
+    Read from git's own files rather than by running git, so scanning a folder of worktrees stays quick.
+    :param worktree: the folder, whose ``.git`` file points at the worktree's own git folder
+    """
+    try:
+        pointer = (worktree / ".git").read_text(encoding="utf-8").removeprefix("gitdir:").strip()
+        head = (worktree / pointer / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return head.removeprefix(BRANCH_REFERENCE) if head.startswith(BRANCH_REFERENCE) else ""
+
+
+def review_worktrees(checkout_folder: str) -> list[Path]:
+    """Return every review worktree in the checkout folder: a folder named like ``widget-pr7`` on that branch.
+
+    The branch check passes over anything else of a similar name, since the checkout folder can be shared, as the
+    system's temporary folder is.
+    :param checkout_folder: the folder review worktrees go in, from the settings
+    """
+    root = Path(checkout_folder).expanduser()
+    if not checkout_folder or not root.is_dir():
+        return []
+    named = (child for child in sorted(root.iterdir()) if REVIEW_NAME.fullmatch(child.name))
+    return [child for child in named if checked_out_branch(child) == child.name]
 
 
 def git(arguments: list[str], folder: Path) -> str:

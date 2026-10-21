@@ -227,6 +227,7 @@ def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_sub
         "Review in VS Code": False,
         "Review in other IDE": False,
         "Remove local worktree": False,
+        "Remove all local worktrees": False,
     }
     menu = right_click_menu(view, qtbot, 0)
     others = menu.findChild(QMenu)
@@ -247,15 +248,23 @@ def test_a_typed_ide_command_is_named_by_the_command_itself():
     assert window.ide_name("subl --new-window {folder}") == "subl --new-window"
 
 
-def test_remove_local_worktree_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):
+def test_removing_worktrees_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):
     page = "https://github.com/acme/widget/pull/7"
     view = build_window([replace(ROWS[0], url=page)])
     monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+    offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[0]).actions()}
+    assert (offered["Remove local worktree"], offered["Remove all local worktrees"]) == (False, False)
+    # A worktree as git lays one out: a .git file pointing at its own git folder, whose HEAD names the branch.
     (tmp_path / "widget-pr7").mkdir()
+    (tmp_path / "widget-pr7" / ".git").write_text(f"gitdir: {tmp_path / 'gitdir'}\n", encoding="utf-8")
+    (tmp_path / "gitdir").mkdir()
+    (tmp_path / "gitdir" / "HEAD").write_text("ref: refs/heads/widget-pr7\n", encoding="utf-8")
     view.show()
     with qtbot.waitSignal(view.remove_asked) as asked:
         choose(right_click_menu(view, qtbot, 0), "Remove local worktree")
     assert asked.args == [page]
+    with qtbot.waitSignal(view.remove_all_asked):
+        choose(right_click_menu(view, qtbot, 0), "Remove all local worktrees")
 
 
 def test_a_heading_click_sorts_and_a_second_click_reverses(view):

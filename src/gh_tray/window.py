@@ -58,7 +58,7 @@ from gh_tray.config import (
     load_config,
 )
 from gh_tray.environment import FOLDER_PLACEHOLDER, ide_presets
-from gh_tray.local_review import existing_worktree, pull_request_at
+from gh_tray.local_review import existing_worktree, pull_request_at, review_worktrees
 from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -188,7 +188,7 @@ def cells_of(entry: Row) -> list[str]:
 
 
 class ChangesWindow(QWidget):
-    """The window itself. Emits refresh_asked, dashboard_asked, review_asked and remove_asked; only the tray acts."""
+    """The window itself. It only asks, over its signals; the tray polls, opens and reviews, and removes worktrees."""
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
@@ -196,6 +196,7 @@ class ChangesWindow(QWidget):
     review_asked = Signal(str, str)
     # Carries the page of the pull request whose review worktree is to go.
     remove_asked = Signal(str)
+    remove_all_asked = Signal()
 
     def __init__(self, entries: list[Row], layout: QSettings | None = None) -> None:
         """Build the window, hidden.
@@ -573,7 +574,7 @@ class ChangesWindow(QWidget):
         return super().eventFilter(watched, event)
 
     def row_menu(self, entry: Row) -> QMenu:
-        """Return a row's menu: mark it seen or unseen, open it on GitHub, review it in an IDE, or remove its worktree.
+        """Return a row's menu: mark it seen or unseen, open it on GitHub, review it in an IDE, or remove worktrees.
 
         Reviewing in the default IDE, named after the settings, takes one click; the other IDEs sit in a submenu.
         :param entry: the row that was right-clicked
@@ -593,8 +594,11 @@ class ChangesWindow(QWidget):
         for name, command in ide_presets():
             if command != default:
                 others.addAction(name, lambda command=command: self.review(entry.url, command))
+        checkout_folder = str(settings.get(CHECKOUT_FOLDER_KEY, ""))
         remove = menu.addAction("Remove local worktree", lambda: self.remove_asked.emit(entry.url))
-        remove.setEnabled(existing_worktree(entry.url, settings.get(CHECKOUT_FOLDER_KEY, "")) is not None)
+        remove.setEnabled(existing_worktree(entry.url, checkout_folder) is not None)
+        remove_all = menu.addAction("Remove all local worktrees", self.remove_all_asked.emit)
+        remove_all.setEnabled(bool(review_worktrees(checkout_folder)))
         return menu
 
     def toggle_seen(self, entry: Row) -> None:

@@ -35,17 +35,19 @@ def make_clone(folder: Path, remote: str) -> Path:
 
 
 class FakeGitHub:
-    """Stands in for the GitHub CLI, recording each command and folder; a clone it is asked for is made locally."""
+    """Stands in for the GitHub CLI, recording each command and folder, and making clones and branches locally."""
 
     def __init__(self) -> None:
         """Start with nothing asked."""
         self.calls: list[tuple[str, Path | None]] = []
 
     def __call__(self, arguments: list[str], timeout: int = 0, folder: Path | None = None) -> str:
-        """Record one command, making the clone a ``repo clone`` asks for."""
+        """Record one command, making the clone a ``repo clone`` asks for or the branch a ``pr checkout`` names."""
         self.calls.append((" ".join(arguments[:2]), folder))
         if arguments[:2] == ["repo", "clone"]:
             make_clone(Path(arguments[3]), f"https://github.com/{arguments[2]}.git")
+        if arguments[:2] == ["pr", "checkout"] and folder is not None:
+            run_git(folder, "checkout", "-q", "-B", arguments[arguments.index("--branch") + 1])
         return ""
 
 
@@ -126,6 +128,14 @@ def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_rem
     assert (worktree / ".idea" / "workspace.xml").exists()
     local_review.remove_worktree(worktree)
     assert not worktree.exists()
+
+
+def test_only_worktrees_on_their_own_review_branch_count_as_review_worktrees(tmp_path, github):
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path))
+    open_for_review(PAGE.replace("/7", "/8"), QUIET_IDE, str(tmp_path))
+    run_git(tmp_path / "widget", "worktree", "add", "-q", "-b", "someone-elses", str(tmp_path / "widget-pr9"))
+    (tmp_path / "notes-pr3").mkdir()
+    assert local_review.review_worktrees(str(tmp_path)) == [tmp_path / "widget-pr7", tmp_path / "widget-pr8"]
 
 
 def test_a_worktree_holding_uncommitted_work_is_not_removed(tmp_path, github):
