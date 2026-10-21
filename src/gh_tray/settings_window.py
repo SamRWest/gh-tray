@@ -192,7 +192,7 @@ class SettingsDialog(QDialog):
         self.ide.setEditable(True)
         self.ide.addItems([command for _name, command in ide_presets()])
         self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
-        self.ide.setToolTip("The IDE a row's Review in IDE uses by default; {folder} stands for the folder to open.")
+        self.ide.setToolTip("The IDE a row's menu reviews in with one click; {folder} stands for the folder to open.")
         return self.ide
 
     def folder_box(self, key: str, placeholder: str, tooltip: str) -> QLineEdit:

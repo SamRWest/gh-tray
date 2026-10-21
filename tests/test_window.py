@@ -213,7 +213,7 @@ def test_marking_is_remembered_through_remember_row_seen(view, qtbot, build_wind
     assert (marked_row.url, seen) == (view.entries[0].url, True)
 
 
-def test_review_in_ide_offers_the_default_ide_first_then_the_rest_for_a_pull_request_only(
+def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_submenu_for_a_pull_request_only(
     build_window, qtbot, monkeypatch
 ):
     page = "https://github.com/acme/widget/pull/7"
@@ -224,23 +224,27 @@ def test_review_in_ide_offers_the_default_ide_first_then_the_rest_for_a_pull_req
     assert offered == {
         "Mark unseen": True,
         "Open on GitHub": True,
-        "Review in IDE": False,
+        "Review in VS Code": False,
+        "Review in other IDE": False,
         "Remove local worktree": False,
     }
     menu = right_click_menu(view, qtbot, 0)
-    review = menu.findChild(QMenu)
-    assert review is not None, "Review in IDE should be a submenu"
-    assert [action.text() for action in review.actions()] == [
-        "VS Code (default)",
-        "PyCharm",
-        "IntelliJ IDEA",
-        "WebStorm",
-    ]
+    others = menu.findChild(QMenu)
+    assert others is not None, "the other IDEs should sit in a submenu"
+    assert [action.text() for action in others.actions()] == ["PyCharm", "IntelliJ IDEA", "WebStorm"]
     with qtbot.waitSignal(view.review_asked) as asked:
-        choose(review, "PyCharm")
+        choose(others, "PyCharm")
     menu.close()
     assert asked.args == [page, dict(environment.ide_presets())["PyCharm"]]
+    view.show()
+    with qtbot.waitSignal(view.review_asked) as asked:
+        choose(right_click_menu(view, qtbot, 0), "Review in VS Code")
+    assert asked.args == [page, environment.DEFAULT_IDE_COMMAND]
     assert not view.isVisible()
+
+
+def test_a_typed_ide_command_is_named_by_the_command_itself():
+    assert window.ide_name("subl --new-window {folder}") == "subl --new-window"
 
 
 def test_remove_local_worktree_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):

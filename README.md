@@ -60,9 +60,9 @@ notifications.
 
 ### Reviewing in an IDE
 
-**Review in IDE** opens a pull request in its own worktree, so your clone's branch and uncommitted work stay as they
-are. Its submenu lists your default IDE first, then the rest of VS Code, PyCharm, IntelliJ IDEA and WebStorm. Three
-settings shape it:
+**Review in VS Code**, named after your default IDE, opens a pull request in its own worktree, so your clone's branch
+and uncommitted work stay as they are. **Review in other IDE** offers the rest of VS Code, PyCharm, IntelliJ IDEA and
+WebStorm. Three settings shape it:
 
 - **IDE command** is the default IDE, VS Code unless you change it. Pick a ready-made command, such as
   `pycharm64 {folder}` on Windows, or type your own; `{folder}` stands for the worktree, and goes on the end if you

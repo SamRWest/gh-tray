@@ -57,7 +57,7 @@ from gh_tray.config import (
     default_opacity,
     load_config,
 )
-from gh_tray.environment import ide_presets
+from gh_tray.environment import FOLDER_PLACEHOLDER, ide_presets
 from gh_tray.local_review import existing_worktree, pull_request_at
 from gh_tray.popup import (
     COLUMNS,
@@ -159,14 +159,13 @@ def column_of(key: str) -> int:
     return next(index for index, (name, *_rest) in enumerate(COLUMNS) if name == key)
 
 
-def ide_choices(default: str) -> list[tuple[str, str]]:
-    """Return the Review in IDE submenu's entries as (label, command): the default IDE first and marked, then the rest.
+def ide_name(command: str) -> str:
+    """Return what to call an IDE command in a menu: a ready-made command's IDE, or else the command itself.
 
-    :param default: the IDE command from the settings, which may be one typed in rather than a ready-made one
+    :param command: the IDE command, which may be one typed in rather than a ready-made one
     """
-    names = {command: name for name, command in ide_presets()}
-    first = [(f"{names.get(default, default)} (default)", default)] if default else []
-    return first + [(name, command) for name, command in ide_presets() if command != default]
+    names = {preset: name for name, preset in ide_presets()}
+    return names.get(command) or command.replace(FOLDER_PLACEHOLDER, "").strip()
 
 
 def cells_of(entry: Row) -> list[str]:
@@ -576,17 +575,24 @@ class ChangesWindow(QWidget):
     def row_menu(self, entry: Row) -> QMenu:
         """Return a row's menu: mark it seen or unseen, open it on GitHub, review it in an IDE, or remove its worktree.
 
+        Reviewing in the default IDE, named after the settings, takes one click; the other IDEs sit in a submenu.
         :param entry: the row that was right-clicked
         """
         settings = load_config()
+        default = str(settings.get(IDE_COMMAND_KEY, ""))
+        reviewable = pull_request_at(entry.url) is not None
         menu = QMenu(self)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         menu.addAction("Mark unseen" if entry.seen else "Mark seen", lambda: self.toggle_seen(entry))
         menu.addAction("Open on GitHub", lambda: self.open(entry.url)).setEnabled(bool(entry.url))
-        review = menu.addMenu("Review in IDE")
-        review.setEnabled(pull_request_at(entry.url) is not None)
-        for label, command in ide_choices(settings.get(IDE_COMMAND_KEY, "")):
-            review.addAction(label, lambda command=command: self.review(entry.url, command))
+        if default:
+            review = menu.addAction(f"Review in {ide_name(default)}", lambda: self.review(entry.url, default))
+            review.setEnabled(reviewable)
+        others = menu.addMenu("Review in other IDE" if default else "Review in IDE")
+        others.setEnabled(reviewable)
+        for name, command in ide_presets():
+            if command != default:
+                others.addAction(name, lambda command=command: self.review(entry.url, command))
         remove = menu.addAction("Remove local worktree", lambda: self.remove_asked.emit(entry.url))
         remove.setEnabled(existing_worktree(entry.url, settings.get(CHECKOUT_FOLDER_KEY, "")) is not None)
         return menu
