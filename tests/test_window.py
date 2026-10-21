@@ -257,14 +257,32 @@ def make_review_worktree(checkout_folder: Path, name: str) -> None:
     (checkout_folder / name / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
 
 
-def test_the_worktree_column_ticks_a_pull_request_once_it_has_a_review_worktree(build_window, monkeypatch, tmp_path):
+def test_the_worktree_column_ticks_a_pull_request_until_its_worktree_folder_is_really_gone(
+    build_window, monkeypatch, tmp_path
+):
     view = build_window([replace(ROWS[0], url="https://github.com/acme/widget/pull/7")])
     monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
-    view.refresh_worktrees()
-    assert view.table.item(0, window.column_of("wt")).text() == ""
+
+    def ticked() -> bool:
+        view.refresh_worktrees()
+        return view.table.item(0, window.column_of("wt")).text() == window.WORKTREE_MARK
+
+    assert not ticked()
     make_review_worktree(tmp_path, "widget-pr7")
-    view.refresh_worktrees()
-    assert view.table.item(0, window.column_of("wt")).text() == window.WORKTREE_MARK
+    assert ticked()
+    # A removal that fails part way, as on Windows when an IDE holds the folder, takes the .git file but not the folder.
+    (tmp_path / "widget-pr7" / ".git").unlink()
+    assert ticked()
+    (tmp_path / "widget-pr7").rmdir()
+    assert not ticked()
+
+
+def test_a_column_is_never_narrower_than_its_heading_even_when_dragged_narrower(build_window, tmp_path):
+    remembered = QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
+    remembered.setValue(window.COLUMN_KEY.format("wt"), 1.0)
+    remembered.sync()
+    view = build_window()
+    assert view.table.columnWidth(window.column_of("wt")) == view.heading_width("WTree")
 
 
 def test_removing_worktrees_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):

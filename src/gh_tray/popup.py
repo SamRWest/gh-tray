@@ -59,7 +59,7 @@ COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
     ("repo", "Repo", 26, False),
     ("pr", "PR", 7, False),
     # Whether a review worktree is checked out locally.
-    ("wt", "WTree", 4, False),
+    ("wt", "WTree", 7, False),
     ("status", "Status", 10, False),
     ("title", "Title", 44, True),
     ("author", "Author", 16, False),

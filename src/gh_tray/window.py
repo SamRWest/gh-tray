@@ -416,14 +416,27 @@ class ChangesWindow(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(self.fontMetrics().height() + ROW_PADDING)
 
     def size_columns(self) -> None:
-        """Give each column the width the user last dragged it to, or its starting size, then fit them to the table."""
+        """Give each column the width the user last dragged it to, or its starting size, then fit them to the table.
+
+        A column is never set narrower than its heading needs, so a heading is not cut short at any text size.
+        """
         self.fitting = True
         try:
-            for index, (key, _heading, width, _fills) in enumerate(COLUMNS):
-                self.table.setColumnWidth(index, self.characters(self.remembered(COLUMN_KEY.format(key)) or width))
+            for index, (key, heading, width, _fills) in enumerate(COLUMNS):
+                wanted = self.characters(self.remembered(COLUMN_KEY.format(key)) or width)
+                self.table.setColumnWidth(index, max(wanted, self.heading_width(heading)))
         finally:
             self.fitting = False
         self.fit_columns(shrink_all=True)
+
+    def heading_width(self, heading: str) -> int:
+        """Return how wide a column must be to show its heading whole, in pixels.
+
+        :param heading: the column's heading
+        """
+        header = self.table.horizontalHeader()
+        margin = header.style().pixelMetric(QStyle.PixelMetric.PM_HeaderMargin, None, header)
+        return header.fontMetrics().horizontalAdvance(heading) + 2 * margin
 
     def fit_columns(self, shrink_all: bool) -> None:
         """Fit the columns exactly to the table: the filling column takes any leftover width, and shrinks first.
@@ -721,10 +734,14 @@ class ChangesWindow(QWidget):
         self.refresh_worktrees()
 
     def refresh_worktrees(self) -> None:
-        """Mark the rows whose pull requests have a review worktree in the checkout folder, and redraw the table."""
-        names = {folder.name for folder in review_worktrees(str(load_config().get(CHECKOUT_FOLDER_KEY, "")))}
+        """Mark the rows whose pull requests have a review worktree folder in the checkout folder, and redraw the table.
+
+        The folder is what counts, so a removal that fails part way, as git's does when another program holds the
+        folder open, leaves the mark in place until the folder is really gone.
+        """
+        checkout_folder = str(load_config().get(CHECKOUT_FOLDER_KEY, ""))
         self.all_entries = [
-            replace(entry, worktree=(pull := pull_request_at(entry.url)) is not None and pull.local_name in names)
+            replace(entry, worktree=existing_worktree(entry.url, checkout_folder) is not None)
             for entry in self.all_entries
         ]
         self.apply_filter()
