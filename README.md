@@ -43,7 +43,7 @@ amber for anything else unread, green when there is nothing to do, and grey when
 
 In the changes window:
 
-- Double-click a row to open it on GitHub. Right-click a row to mark it seen, or unseen again.
+- Double-click a row to open it on GitHub. Right-click a row to mark it seen or unseen, or to review it in your IDE.
 - Click a heading to sort. Use the buttons at the bottom to filter, and Ctrl+F to search every column.
 - Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or
   **Show reviewed**; each sits on a tinted background so it reads as done.
@@ -56,6 +56,25 @@ You are notified when a review is requested of you, your checks break, a reviewe
 you, or a pull request of yours becomes ready to merge. New comments and merge conflicts are listed but not announced
 unless you turn them on. Only changes are reported, never standing state, so an old backlog does not become a wall of
 notifications.
+
+### Reviewing in an IDE
+
+**Review in IDE** opens a pull request in its own worktree, so your clone's branch and uncommitted work stay as they
+are. Set two things in the settings first:
+
+- **IDE command** opens a folder in your IDE. Pick a ready-made one, such as `pycharm64 {folder}` on Windows or
+  `code {folder}`, or type your own; `{folder}` stands for the worktree, and goes on the end if you leave it out.
+- **Code folder** is the folder your clones are in, such as `~/code`.
+
+The tray then finds a clone in the code folder with a remote for the pull request's repository, or clones it there. It
+adds a worktree in the code folder's `temp` folder, named like `widget-pr7`, and checks out the pull request in it with
+`gh pr checkout`. A second review of the same pull request brings that worktree up to date instead.
+
+No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it. JetBrains IDEs and
+VS Code's [GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github)
+extension each look up the pull request whose branch is checked out, and show its review comments in the editor. A pull
+request from a fork may not be recognised this way; open it from the IDE's own pull request list instead.
+
 ## If something goes wrong
 
 **Open log** in the menu shows the log. To watch the tray in a terminal instead, run `gh-tray --foreground`, or add

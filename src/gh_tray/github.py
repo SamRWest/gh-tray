@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import time
+from pathlib import Path
 
 from loguru import logger
 
@@ -22,11 +23,12 @@ class GitHubError(RuntimeError):
     """A call to GitHub failed, carrying a description fit to show a user."""
 
 
-def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
+def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS, folder: Path | None = None) -> str:
     """Run the GitHub command line tool and return what it printed.
 
     :param arguments: what to pass the tool, without the tool itself
     :param timeout: how long to wait before giving up
+    :param folder: the folder to run in, such as a clone for commands that act on one
     :return: standard output
     :raises GitHubError: when the tool is missing, fails, or takes too long
     """
@@ -35,7 +37,7 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS) -> str:
         raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
     started = time.monotonic()
     try:
-        done = run_quietly([tool, *arguments], timeout=timeout)
+        done = run_quietly([tool, *arguments], timeout=timeout, folder=folder)
     except subprocess.TimeoutExpired as expiry:
         raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
     except OSError as error:

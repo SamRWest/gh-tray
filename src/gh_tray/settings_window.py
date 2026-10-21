@@ -1,4 +1,4 @@
-"""The settings window: polling, notifications, dashboard command, owners, colours, login start and sign-in."""
+"""The settings window: polling, notifications, dashboard and IDE commands, owners, colours, login start and sign-in."""
 
 from __future__ import annotations
 
@@ -11,14 +11,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QRadioButton,
     QSlider,
     QSpinBox,
@@ -30,7 +33,9 @@ from gh_tray import APP_NAME
 from gh_tray.config import (
     APP_ICON_PATH,
     BLUR_KEY,
+    CODE_FOLDER_KEY,
     HIDDEN_OWNERS_KEY,
+    IDE_COMMAND_KEY,
     INVOLVED_KEY,
     NUMBER_RANGES,
     OPACITY_KEY,
@@ -42,7 +47,14 @@ from gh_tray.config import (
     load_config,
     save_config,
 )
-from gh_tray.environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
+from gh_tray.environment import (
+    autostart_enabled,
+    github_auth_state,
+    hide_from_dock,
+    ide_presets,
+    open_in_terminal,
+    set_autostart,
+)
 from gh_tray.events import RULE_LABELS
 from gh_tray.github import GitHubError, organisations, viewer
 from gh_tray.status import write_app_icon
@@ -147,7 +159,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard command and the window's blur and opacity."""
+        """Lay out the numbers, the dashboard and IDE commands, the code folder and the window's blur and opacity."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -160,9 +172,38 @@ class SettingsDialog(QDialog):
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        form.addRow("IDE command", self.ide_choice())
+        form.addRow("Code folder", self.code_folder_picker())
         form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
         return form
+
+    def ide_choice(self) -> QComboBox:
+        """Lay out the IDE command: one of the ready-made commands, or one typed in."""
+        self.ide = QComboBox(self)
+        self.ide.setEditable(True)
+        self.ide.addItems(ide_presets())
+        self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
+        self.ide.setToolTip("Opens a folder in your IDE to review a pull request; {folder} stands for the folder.")
+        return self.ide
+
+    def code_folder_picker(self) -> QHBoxLayout:
+        """Lay out the code folder's box, with a button that picks the folder from the desktop's folder dialog."""
+        self.code_folder = QLineEdit(str(self.config[CODE_FOLDER_KEY]), self)
+        self.code_folder.setPlaceholderText("The folder your clones are in")
+        self.code_folder.setToolTip("Clones are found or made here, and review worktrees go in its temp folder.")
+        browse = QPushButton("Browse...", self)
+        browse.clicked.connect(self.browse_code_folder)
+        row = QHBoxLayout()
+        row.addWidget(self.code_folder, 1)
+        row.addWidget(browse)
+        return row
+
+    def browse_code_folder(self) -> None:
+        """Pick the code folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled."""
+        chosen = QFileDialog.getExistingDirectory(self, "Code folder", self.code_folder.text())
+        if chosen:
+            self.code_folder.setText(chosen)
 
     def blur_switch(self) -> QCheckBox:
         """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
@@ -315,6 +356,8 @@ class SettingsDialog(QDialog):
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
+        self.config[IDE_COMMAND_KEY] = self.ide.currentText().strip()
+        self.config[CODE_FOLDER_KEY] = self.code_folder.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
         self.config[BLUR_KEY] = self.blur.isChecked()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}

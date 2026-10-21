@@ -14,9 +14,11 @@ from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from gh_tray import APP_NAME
-from gh_tray.config import BLUR_KEY, LOG_PATH, OPACITY_KEY, load_config
+from gh_tray.config import BLUR_KEY, CODE_FOLDER_KEY, IDE_COMMAND_KEY, LOG_PATH, OPACITY_KEY, load_config
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
+from gh_tray.github import GitHubError
+from gh_tray.local_review import ReviewError, open_for_review
 from gh_tray.notifier import Notifier
 from gh_tray.popup import rows_to_show
 from gh_tray.service import PollResult, poll
@@ -115,6 +117,8 @@ class Tray(QObject):
 
     # Raised from whichever thread a console interrupt arrives on, so quitting happens on the toolkit's own thread.
     quit_asked = Signal()
+    # Raised from the thread that got a pull request ready to review, carrying why it could not.
+    review_failed = Signal(str)
 
     def __init__(self) -> None:
         """Load the settings, build the icon in its starting state, and build the changes window ready to show."""
@@ -138,6 +142,8 @@ class Tray(QObject):
         self.window = ChangesWindow(rows_to_show(self.config["max_age_days"]), self.layout)
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
+        self.window.review_asked.connect(self.on_review)
+        self.review_failed.connect(self.on_review_failed)
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
@@ -263,6 +269,31 @@ class Tray(QObject):
             open_dashboard(self.config)
         except RuntimeError as error:
             logger.error("could not open the dashboard: {}", error)
+
+    def on_review(self, url: str) -> None:
+        """Open a pull request in the IDE, on a thread of its own since a first clone can take minutes.
+
+        :param url: the pull request's page
+        """
+        threading.Thread(target=self.review, args=(url,), daemon=True, name=f"{APP_NAME}-review").start()
+
+    def review(self, url: str) -> None:
+        """Open a pull request in the IDE, reporting a failure over a signal, since this runs off the toolkit's thread.
+
+        :param url: the pull request's page
+        """
+        try:
+            open_for_review(url, self.config[CODE_FOLDER_KEY], self.config[IDE_COMMAND_KEY])
+        except (ReviewError, GitHubError) as error:
+            logger.warning("could not open {} for review: {}", url, error)
+            self.review_failed.emit(str(error))
+
+    def on_review_failed(self, reason: str) -> None:
+        """Say on the tray icon why a pull request could not be opened in the IDE.
+
+        :param reason: what went wrong, briefly
+        """
+        self.icon.showMessage(f"{APP_NAME}: could not review in the IDE", reason, QSystemTrayIcon.MessageIcon.Warning)
 
     def on_refresh(self, *_) -> None:
         """Poll as soon as possible."""

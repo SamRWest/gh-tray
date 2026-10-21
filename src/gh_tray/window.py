@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 
 from gh_tray import APP_NAME
 from gh_tray.config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
+from gh_tray.local_review import pull_request_at
 from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -121,7 +122,7 @@ COLUMN_KEY = "columns/{}/characters"
 # How strongly the clicked row is tinted towards the desktop's highlight colour.
 HIGHLIGHT_STRENGTH = 0.3
 
-HINT = "Double-click: open PR, right-click: mark seen, ctrl+scroll: resize"
+HINT = "Double-click: open PR, right-click: mark seen or review in IDE, ctrl+scroll: resize"
 
 
 def table_overlay_alpha(opacity: int, offset: int) -> int:
@@ -169,10 +170,12 @@ def cells_of(entry: Row) -> list[str]:
 
 
 class ChangesWindow(QWidget):
-    """The window itself. Emits refresh_asked and dashboard_asked; only the tray polls or opens the dashboard."""
+    """The window itself. Emits refresh_asked, dashboard_asked and review_asked; only the tray acts on them."""
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
+    # Carries the page of the pull request to review in the IDE.
+    review_asked = Signal(str)
 
     def __init__(self, entries: list[Row], layout: QSettings | None = None) -> None:
         """Build the window, hidden.
@@ -529,7 +532,7 @@ class ChangesWindow(QWidget):
             self.open(self.entries[row].url)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Mark a row seen when right-clicked and fit the columns on resize; every other event is the table's own.
+        """Offer a row's menu when right-clicked and fit the columns on resize; every other event is the table's own.
 
         :param watched: whatever the event was sent to
         :param event: the event
@@ -543,11 +546,32 @@ class ChangesWindow(QWidget):
         ):
             row = self.table.rowAt(int(event.position().y()))
             if 0 <= row < len(self.entries):
-                self.set_seen(row, not self.entries[row].seen)
+                self.row_menu(self.entries[row]).popup(event.globalPosition().toPoint())
             return True
         if event.type() == QEvent.Type.Resize:
             self.size_columns()
         return super().eventFilter(watched, event)
+
+    def row_menu(self, entry: Row) -> QMenu:
+        """Return the menu for one row: mark it seen or unseen, open it on GitHub, or review it in the IDE.
+
+        :param entry: the row that was right-clicked
+        """
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.addAction("Mark unseen" if entry.seen else "Mark seen", lambda: self.toggle_seen(entry))
+        menu.addAction("Open on GitHub", lambda: self.open(entry.url)).setEnabled(bool(entry.url))
+        review = menu.addAction("Review in IDE", lambda: self.review(entry.url))
+        review.setEnabled(pull_request_at(entry.url) is not None)
+        return menu
+
+    def toggle_seen(self, entry: Row) -> None:
+        """Mark a row seen, or unseen again, wherever it now sits; a row gone since its menu opened is left alone.
+
+        :param entry: the row to mark
+        """
+        if entry in self.entries:
+            self.set_seen(self.entries.index(entry), not entry.seen)
 
     def set_seen(self, row: int, seen: bool) -> None:
         """Mark one row seen or unseen, remember it for next time, and redraw.
@@ -820,6 +844,14 @@ class ChangesWindow(QWidget):
         """
         webbrowser.open(url)
         self.hide()
+
+    def review(self, url: str) -> None:
+        """Ask the tray to open a pull request in the IDE, and put the window away, since the IDE is about to cover it.
+
+        :param url: the pull request's page
+        """
+        self.hide()
+        self.review_asked.emit(url)
 
     def open_dashboard(self) -> None:
         """Ask the tray to open the dashboard, and put the window away, since the dashboard is about to cover it."""

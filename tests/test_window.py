@@ -7,11 +7,12 @@ that stops firing shows up as a failure here rather than as a control that silen
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
-from PySide6.QtWidgets import QFrame
+from PySide6.QtWidgets import QApplication, QFrame, QMenu
 from pytestqt.qtbot import QtBot
 
 from gh_tray import config, popup, theme, window
@@ -180,23 +181,48 @@ def test_a_double_click_below_the_last_row_opens_nothing(view, qtbot, build_wind
     assert view.isVisible()
 
 
-def test_a_right_click_marks_a_row_seen_and_a_second_click_unmarks_it_and_the_title_count_follows(view, qtbot):
+def right_click_menu(view: window.ChangesWindow, qtbot: QtBot, row_index: int) -> QMenu:
+    """Right-click a row and return the menu that opens."""
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=cell_centre(view, row_index))
+    menu = QApplication.activePopupWidget()
+    assert isinstance(menu, QMenu), "a right click on a row should open its menu"
+    return menu
+
+
+def choose(menu: QMenu, text: str) -> None:
+    """Pick one entry of a menu, and close the menu as a click on the entry would."""
+    next(action for action in menu.actions() if action.text() == text).trigger()
+    menu.close()
+
+
+def test_a_right_click_offers_marking_a_row_seen_then_unseen_and_the_title_count_follows(view, qtbot):
     view.show()
     assert view.windowTitle().endswith("1 notification")
-    spot = cell_centre(view, 0)
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=spot)
+    choose(right_click_menu(view, qtbot, 0), "Mark seen")
     assert view.entries[0].seen is True
     assert view.windowTitle().endswith("nothing to do")
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=spot)
+    choose(right_click_menu(view, qtbot, 0), "Mark unseen")
     assert view.entries[0].seen is False
     assert view.windowTitle().endswith("1 notification")
 
 
 def test_marking_is_remembered_through_remember_row_seen(view, qtbot, build_window):
     view.show()
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=cell_centre(view, 0))
+    choose(right_click_menu(view, qtbot, 0), "Mark seen")
     marked_row, seen = build_window.seen_marks[-1]
     assert (marked_row.url, seen) == (view.entries[0].url, True)
+
+
+def test_review_in_ide_is_offered_only_for_a_pull_request_and_asks_the_tray_with_its_page(build_window, qtbot):
+    page = "https://github.com/acme/widget/pull/7"
+    view = build_window([replace(ROWS[0], url=page), ROWS[1]])
+    view.show()
+    offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[1]).actions()}
+    assert offered == {"Mark unseen": True, "Open on GitHub": True, "Review in IDE": False}
+    with qtbot.waitSignal(view.review_asked) as asked:
+        choose(right_click_menu(view, qtbot, 0), "Review in IDE")
+    assert asked.args == [page]
+    assert not view.isVisible()
 
 
 def test_a_heading_click_sorts_and_a_second_click_reverses(view):

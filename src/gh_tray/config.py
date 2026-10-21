@@ -26,6 +26,8 @@ LAYOUT_PATH = APP_DIR / "layout.ini"
 
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
+    "ide_command": "",
+    "code_folder": "",
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
@@ -47,7 +49,10 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-TEXT_KEYS = ("dashboard_command",)
+# The command that opens a folder in the IDE, and the folder holding clones, for reviewing a pull request locally.
+IDE_COMMAND_KEY = "ide_command"
+CODE_FOLDER_KEY = "code_folder"
+TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CODE_FOLDER_KEY)
 HIDDEN_OWNERS_KEY = "hidden_owners"
 # Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"

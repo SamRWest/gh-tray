@@ -118,6 +118,13 @@ def test_the_menu_lists_the_expected_entries_in_order(build_tray):
     ]
 
 
+def test_asking_to_review_without_the_settings_says_what_is_missing(build_tray, qtbot):
+    subject = build_tray()
+    with qtbot.waitSignal(subject.review_failed, timeout=5000) as failed:
+        subject.window.review_asked.emit("https://github.com/acme/widget/pull/7")
+    assert "Settings" in failed.args[0]
+
+
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):
     subject = build_tray()
     opened = []
