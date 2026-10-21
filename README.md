@@ -60,7 +60,8 @@ notifications.
 ### Reviewing in an IDE
 
 **Review in IDE** opens a pull request in its own worktree, so your clone's branch and uncommitted work stay as they
-are. Set two things in the settings first:
+are. It needs two settings. If either is missing, it opens the settings at the one missing, with the IDE list dropped
+down, and carries on once you save:
 
 - **IDE command** opens a folder in your IDE. Pick a ready-made one, such as `pycharm64 {folder}` on Windows or
   `code {folder}`, or type your own; `{folder}` stands for the worktree, and goes on the end if you leave it out.

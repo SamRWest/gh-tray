@@ -199,6 +199,13 @@ class SettingsDialog(QDialog):
         row.addWidget(browse)
         return row
 
+    def ask_for_review_settings(self) -> None:
+        """Point at the missing review setting: drop the IDE command's list open, or else focus the code folder."""
+        if not self.ide.currentText().strip():
+            self.ide.showPopup()
+        else:
+            self.code_folder.setFocus()
+
     def browse_code_folder(self) -> None:
         """Pick the code folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled."""
         chosen = QFileDialog.getExistingDirectory(self, "Code folder", self.code_folder.text())

@@ -14,7 +14,15 @@ from PySide6.QtGui import QCursor, QDesktopServices
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from gh_tray import APP_NAME
-from gh_tray.config import BLUR_KEY, CODE_FOLDER_KEY, IDE_COMMAND_KEY, LOG_PATH, OPACITY_KEY, load_config
+from gh_tray.config import (
+    BLUR_KEY,
+    CODE_FOLDER_KEY,
+    IDE_COMMAND_KEY,
+    LOG_PATH,
+    OPACITY_KEY,
+    has_review_settings,
+    load_config,
+)
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
 from gh_tray.github import GitHubError
@@ -147,6 +155,8 @@ class Tray(QObject):
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
+        # The page of a pull request whose review waits on the settings window, or empty when none does.
+        self.pending_review = ""
         self.account: Account | None = None
         self.lookup = AccountLookup()
         self.lookup.found.connect(self.on_account_found)
@@ -273,8 +283,13 @@ class Tray(QObject):
     def on_review(self, url: str) -> None:
         """Open a pull request in the IDE, on a thread of its own since a first clone can take minutes.
 
+        Without an IDE command or code folder, the settings open at the one missing, and the review waits for them.
         :param url: the pull request's page
         """
+        if not has_review_settings(self.config):
+            self.pending_review = url
+            self.open_settings().ask_for_review_settings()
+            return
         threading.Thread(target=self.review, args=(url,), daemon=True, name=f"{APP_NAME}-review").start()
 
     def review(self, url: str) -> None:
@@ -316,8 +331,8 @@ class Tray(QObject):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_PATH))):
             logger.error("the desktop refused to open the log at {}", LOG_PATH)
 
-    def open_settings(self, *_) -> None:
-        """Open the settings window, or bring it forward if it is already open."""
+    def open_settings(self, *_) -> SettingsDialog:
+        """Open the settings window, or bring it forward if it is already open, and return it."""
         if self.settings is None:
             self.settings = SettingsDialog(account=self.account, blurrable=bool(self.window.blur))
             self.settings.accepted.connect(self.on_settings_saved)
@@ -328,6 +343,7 @@ class Tray(QObject):
         self.settings.show()
         self.settings.raise_()
         self.settings.activateWindow()
+        return self.settings
 
     def on_settings_saved(self) -> None:
         """Apply the saved settings: colours change at once, everything else on the next poll."""
@@ -335,7 +351,10 @@ class Tray(QObject):
         self.window.on_scheme_changed()
 
     def on_settings_closed(self, _result: int) -> None:
-        """Forget the settings window, then look up the account again to catch changes made since it opened."""
+        """Forget the settings window, then look up the account again to catch changes made since it opened.
+
+        A review that waited on the settings goes ahead if they were saved with what it needs, and is dropped if not.
+        """
         self.settings = None
         self.account = None
         self.lookup.start()
@@ -345,6 +364,9 @@ class Tray(QObject):
         saved = load_config()
         self.window.set_blur(bool(saved.get(BLUR_KEY, True)))
         self.window.set_opacity(saved.get(OPACITY_KEY))
+        waiting, self.pending_review = self.pending_review, ""
+        if waiting and has_review_settings(saved):
+            self.on_review(waiting)
 
     def on_opacity_moved(self, percent: int) -> None:
         """Follow the settings slider live, bringing the window up under the settings if it is hidden.

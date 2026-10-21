@@ -147,6 +147,14 @@ def merge_stored(config: dict, stored: object) -> dict:
     return config
 
 
+def has_review_settings(config: dict) -> bool:
+    """Return whether the settings name both the IDE command and the code folder, which reviewing in an IDE needs.
+
+    :param config: the settings
+    """
+    return bool(config.get(IDE_COMMAND_KEY) and config.get(CODE_FOLDER_KEY))
+
+
 def default_opacity(blurred: bool) -> int:
     """Return how solid the changes window is when the settings do not say.
 
