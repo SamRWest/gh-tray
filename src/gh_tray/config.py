@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict = {
     "watch_others": True,
     "watched_owners": [],
     "involved": False,
+    "all_mine": True,
     "theme": "auto",
     "opacity": None,
     "blur": True,
@@ -63,6 +64,8 @@ HIDDEN_OWNERS_KEY = "hidden_owners"
 WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
 INVOLVED_KEY = "involved"
+# Whether the window lists every open pull request of the user's own, not only those that want something of them.
+ALL_MINE_KEY = "all_mine"
 THEME_KEY = "theme"
 # How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
 # what lies behind the window: a blurred background can be more see-through and still read.
@@ -119,6 +122,7 @@ def normalise(config: dict) -> dict:
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
     config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
+    config[ALL_MINE_KEY] = bool(config.get(ALL_MINE_KEY, DEFAULT_CONFIG[ALL_MINE_KEY]))
     config[BLUR_KEY] = bool(config.get(BLUR_KEY, DEFAULT_CONFIG[BLUR_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()

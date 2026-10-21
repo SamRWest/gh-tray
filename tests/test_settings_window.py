@@ -77,12 +77,15 @@ def test_save_and_close_writes_the_settings_through_save_config_and_toggles_auto
     dialog.toggles["mention"].setChecked(False)
     dialog.style_buttons[theme.ALWAYS_LIGHT].setChecked(True)
     dialog.autostart.setChecked(True)
+    assert dialog.all_mine.isChecked(), "every PR of the user's own is listed unless they say otherwise"
+    dialog.all_mine.setChecked(False)
     dialog.save_and_close()
     written = build_dialog.saved[-1]
     assert written["poll_minutes"] == 30
     assert written["dashboard_command"] == "gh dash --repo acme/gadget"
     assert written["toasts"]["mention"] is False
     assert written[config.THEME_KEY] == theme.ALWAYS_LIGHT
+    assert written[config.ALL_MINE_KEY] is False
     assert build_dialog.autostart_calls == [True]
 
 

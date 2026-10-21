@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
+    ALL_MINE_KEY,
     APP_ICON_PATH,
     BLUR_KEY,
     CHECKOUT_FOLDER_KEY,
@@ -159,7 +160,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard and IDE commands, the checkout folder, and the blur and opacity."""
+        """Lay out the numbers, which PRs to list, the dashboard and IDE commands, the checkout folder, and the blur."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -169,6 +170,10 @@ class SettingsDialog(QDialog):
             spin.setValue(int(self.config[key]))
             form.addRow(label, spin)
             self.numbers[key] = spin
+        self.all_mine = QCheckBox("Show all my PRs, not only those waiting on me", self)
+        self.all_mine.setToolTip("Lists the rest as Author rows, already marked seen, so they never count as news.")
+        self.all_mine.setChecked(bool(self.config.get(ALL_MINE_KEY, True)))
+        form.addRow(self.all_mine)
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
@@ -379,6 +384,7 @@ class SettingsDialog(QDialog):
         self.config[WATCHED_OWNERS_KEY] = [login for login, switch in switches if switch.isChecked()]
         self.config[WATCH_OTHERS_KEY] = self.others.isChecked()
         self.config[INVOLVED_KEY] = self.involved.isChecked()
+        self.config[ALL_MINE_KEY] = self.all_mine.isChecked()
         self.config[THEME_KEY] = self.chosen_theme()
         save_config(self.config)
         set_autostart(self.autostart.isChecked())

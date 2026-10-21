@@ -142,6 +142,7 @@ def glyph_for(entry: Row) -> str:
     return SEEN_GLYPH if entry.seen else UNSEEN_GLYPH
 
 
+AUTHOR_LABEL = "Author"
 # Standing state: label, whose name to show, whether it blocks, and its ink; unlike event labels, describes now.
 STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     ("reviewing", "Awaiting your review", "author", True, "orange"),
@@ -151,7 +152,12 @@ STANDING_STATES: tuple[tuple[str, str, str, bool, str], ...] = (
     # Listed for as long as it is open, matching the dashboard; never blocking, since a review given asks nothing more.
     ("reviewed", "Reviewer", "author", False, REVIEWED_COLOUR),
     ("involved", "Involved", "author", False, "blue"),
+    # Only when the settings ask for all the user's own pull requests: one wanting nothing of them is listed for
+    # reference, last, and reads as already seen, so it never counts as news.
+    ("authored", AUTHOR_LABEL, "author", False, "violet"),
 )
+# Marks a row as seen however recently its pull request changed, unless the user has marked it otherwise.
+ALREADY_SEEN = datetime.max.replace(tzinfo=UTC)
 
 
 def org_and_name(repo: str) -> tuple[str, str]:
@@ -250,10 +256,11 @@ def row_from_event(event: dict, seen: bool) -> Row:
     )
 
 
-def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
+def standing_state(entry: dict, all_mine: bool = False) -> tuple[str, str, bool, str] | None:
     """Return how a pull request stands, when that is something worth acting on.
 
     :param entry: one pull request as the last poll recorded it
+    :param all_mine: whether every open pull request of the user's own is wanted, even one that wants nothing of them
     :return: its label, whose name to show, whether it blocks and the name of its ink, or None when nothing is wanted
     """
     for state, label, who_field, urgent, colour in STANDING_STATES:
@@ -264,25 +271,30 @@ def standing_state(entry: dict) -> tuple[str, str, bool, str] | None:
             "ready_to_merge": entry.get("side") == "authored" and mergeable_now(entry),
             "reviewed": reviewed_by_user(entry),
             "involved": entry.get("side") == "involved" and not reviewed_by_user(entry),
+            "authored": all_mine and entry.get("side") == "authored",
         }[state]
         if matches:
             return label, str(entry.get(who_field, "")), urgent, colour
     return None
 
 
-def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str, dict] | None = None) -> list[Row]:
+def rows_from_snapshot(
+    entries: dict, already_listed: set[str], marks: dict[str, dict] | None = None, all_mine: bool = False
+) -> list[Row]:
     """Build rows for the pull requests that want something from the user right now.
 
     These keep the window from ever saying "nothing" while a review still waits. Only a mark on the row itself
-    dims one: a review waiting a fortnight is still waiting, whatever the list was last cleared.
+    dims one: a review waiting a fortnight is still waiting, whatever the list was last cleared. The user's own pull
+    requests that want nothing of them are the exception, starting out seen.
     :param entries: pull requests as the last poll recorded them
     :param already_listed: addresses of pull requests a change has already put in the list
     :param marks: the rows the user has marked by hand, as :func:`gh_tray.events.seen_marks` returns them
+    :param all_mine: whether every open pull request of the user's own is wanted, even one that wants nothing of them
     :return: rows, blocking ones first and most recently touched first within that
     """
     rows = []
     for entry in entries.values():
-        standing = standing_state(entry)
+        standing = standing_state(entry, all_mine)
         url = str(entry.get("url", ""))
         if standing is None or (url and url in already_listed):
             continue
@@ -303,7 +315,7 @@ def rows_from_snapshot(entries: dict, already_listed: set[str], marks: dict[str,
                     url=url,
                     colour=colour,
                     at=touched,
-                    seen=has_been_seen(identity, touched, marks or {}, None),
+                    seen=has_been_seen(identity, touched, marks or {}, ALREADY_SEEN if label == AUTHOR_LABEL else None),
                     author=str(entry.get("author", "")),
                     role=role_of(entry),
                 ),
@@ -339,12 +351,13 @@ def one_per_pull_request(rows: list[Row]) -> list[Row]:
     return kept
 
 
-def rows_to_show(max_age_days: int = 0) -> list[Row]:
+def rows_to_show(max_age_days: int = 0, all_mine: bool = False) -> list[Row]:
     """Return the lines to list: what changed since the user last looked, plus what is waiting on them.
 
     Standing state is included, so a quiet day still shows something. Nothing is cut to a count: the window sizes
     itself around its first rows and the rest scroll.
     :param max_age_days: changes older than this are left out, or zero to keep every change recorded
+    :param all_mine: whether every open pull request of the user's own is wanted, even one that wants nothing of them
     """
     marker = last_seen()
     since = moment(marker) if marker else None
@@ -358,7 +371,8 @@ def rows_to_show(max_age_days: int = 0) -> list[Row]:
     entries, _damaged = read_snapshot()
     changes = [filled_in(row, entries or {}) for row in changes]
     listed = {row.url for row in changes if row.url}
-    rows = one_per_pull_request(sorted_rows(changes + rows_from_snapshot(entries or {}, listed, marks)))
+    standing = rows_from_snapshot(entries or {}, listed, marks, all_mine)
+    rows = one_per_pull_request(sorted_rows(changes + standing))
     return with_current_state(rows, states_by_page(entries or {}))
 
 

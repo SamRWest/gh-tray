@@ -32,7 +32,9 @@ REVIEWING = "is:pr is:open review-requested:@me archived:false"
 INVOLVED = "is:pr is:open involves:@me archived:false"
 # Sorted newest first, since GitHub's best-match order can drop a freshly closed pull request from the results.
 CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
-# Anything older has already left the event log's trimmed tail, regardless of the age cutoff.
+# The least look-back for closed pull requests. The event log is trimmed by count, not age, so it can hold older
+# changes; the look-back then reaches back to the oldest, since each of those rows needs to know how its pull request
+# ended. The search stops after a few pages, newest first, so only an unusually busy account loses the oldest.
 CLOSED_LOOKBACK_DAYS = 30
 
 
@@ -284,10 +286,27 @@ def read_last_run() -> str:
     return stored.get("lastRunAt", "") if isinstance(stored, dict) else ""
 
 
-def collect(config: dict) -> tuple[dict | None, str]:
+def closed_lookback_days(oldest_change: str, now: datetime) -> int:
+    """Return how many days back to look for closed pull requests.
+
+    A pull request closes after every change recorded about it, so reaching back to the oldest change the event log
+    still holds finds how the pull request behind each of its rows ended.
+    :param oldest_change: when the oldest change in the event log happened, or an empty string when it holds none
+    :param now: the moment to measure against
+    """
+    try:
+        oldest = datetime.fromisoformat(oldest_change) if oldest_change else now
+    except ValueError:
+        logger.warning("the oldest change's time {!r} is unreadable; looking back the usual span", oldest_change)
+        oldest = now
+    return max(CLOSED_LOOKBACK_DAYS, (now - oldest).days + 1)
+
+
+def collect(config: dict, oldest_change: str = "") -> tuple[dict | None, str]:
     """Gather everything the application needs from GitHub.
 
     :param config: current settings, supplying the age cutoff
+    :param oldest_change: when the oldest change in the event log happened, or an empty string when it holds none
     :return: the digest and an empty string on success, or None and a description of the failure
     """
     started = datetime.now(UTC)
@@ -296,7 +315,7 @@ def collect(config: dict) -> tuple[dict | None, str]:
     hidden = config.get(HIDDEN_OWNERS_KEY) or []
     authored_search = search_for(AUTHORED, cutoff, started, hidden)
     reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
-    closed_search = search_for(CLOSED, CLOSED_LOOKBACK_DAYS, started, hidden)
+    closed_search = search_for(CLOSED, closed_lookback_days(oldest_change, started), started, hidden)
     involved_search = search_for(INVOLVED, cutoff, started, hidden) if config.get(INVOLVED_KEY) else ""
     logger.debug(
         "searching for {!r}, {!r}, {!r} and {!r}, and mentions since {}",

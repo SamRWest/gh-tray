@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QMenu, QProgressDialog, QSystemTrayIcon
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
+    ALL_MINE_KEY,
     BLUR_KEY,
     CHECKOUT_FOLDER_KEY,
     IDE_COMMAND_KEY,
@@ -154,7 +155,7 @@ class Tray(QObject):
         self.icon.activated.connect(self.on_activated)
         self.layout = layout_store()
         self.zoom = FontZoom(self.layout)
-        self.window = ChangesWindow(rows_to_show(self.config["max_age_days"]), self.layout)
+        self.window = ChangesWindow(rows_to_show(self.config["max_age_days"], self.config[ALL_MINE_KEY]), self.layout)
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
         self.window.review_asked.connect(self.on_review)
@@ -430,9 +431,10 @@ class Tray(QObject):
         return self.settings
 
     def on_settings_saved(self) -> None:
-        """Apply the saved settings: colours change at once, everything else on the next poll."""
+        """Apply the saved settings: colours and which pull requests are listed change at once, the rest next poll."""
         self.config = load_config()
         self.window.on_scheme_changed()
+        self.window.reload()
 
     def on_settings_closed(self, _result: int) -> None:
         """Forget the settings window, then look up the account again to catch changes made since it opened.

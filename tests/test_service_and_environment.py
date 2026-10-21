@@ -44,7 +44,19 @@ def digest_with(ci: str = "SUCCESS", comments: int = 0) -> dict:
 
 def stub_collector(monkeypatch, digest: dict | None, error: str = ""):
     """Make the polling cycle read a fixed digest instead of running the collector."""
-    monkeypatch.setattr(service, "collect", lambda _config: (digest, error))
+    monkeypatch.setattr(service, "collect", lambda _config, _oldest_change="": (digest, error))
+
+
+def test_a_poll_asks_for_closed_pull_requests_back_to_the_oldest_change_still_logged(workspace, monkeypatch):
+    asked: list[str] = []
+    monkeypatch.setattr(
+        service, "collect", lambda _config, oldest_change="": asked.append(oldest_change) or (None, "x")
+    )
+    service.poll({})
+    events.append_events([{"at": "2026-08-26T03:36:21Z", "kind": "new_comment", "key": "acme/widget#7"}])
+    events.append_events([{"at": "2026-10-20T00:00:00Z", "kind": "new_comment", "key": "acme/widget#7"}])
+    service.poll({})
+    assert asked == ["", "2026-08-26T03:36:21Z"]
 
 
 def test_the_first_poll_establishes_a_baseline_without_inventing_changes(workspace, monkeypatch):

@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
+    ALL_MINE_KEY,
     APP_ICON_PATH,
     BLUR_KEY,
     CHECKOUT_FOLDER_KEY,
@@ -735,7 +736,7 @@ class ChangesWindow(QWidget):
         """Read the stored data again and redraw the table in the order and filter currently chosen."""
         settings = load_config()
         self.rows_in_view = settings["popup_rows"]
-        self.all_entries = rows_to_show(settings["max_age_days"])
+        self.all_entries = rows_to_show(settings["max_age_days"], bool(settings.get(ALL_MINE_KEY, True)))
         self.refresh_worktrees()
 
     def refresh_worktrees(self) -> None:
