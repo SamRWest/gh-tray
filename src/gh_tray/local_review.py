@@ -267,15 +267,14 @@ def open_in_ide(command: str, folder: Path) -> None:
         raise ReviewError(f"the IDE command failed with exit code {code}: {line}")
 
 
-def open_for_review(url: str, ide_command: str, checkout_folder: str, code_folder: str = "") -> None:
+def open_for_review(url: str, ide_command: str, checkout_folder: str) -> None:
     """Open a pull request in the IDE, finding or cloning its repository and adding or updating its worktree.
 
-    A clone is looked for in the code folder, then the checkout folder, and made in the first of them that is set.
-    Slow, since a first clone can take minutes, so meant for a thread other than the toolkit's.
+    Clones and worktrees both live in the checkout folder. Slow, since a first clone can take minutes, so meant for a
+    thread other than the toolkit's.
     :param url: the pull request's page
     :param ide_command: the command that opens a folder in the IDE
-    :param checkout_folder: the folder review worktrees go in, from the settings
-    :param code_folder: the folder holding the user's own clones, from the settings, or empty for none
+    :param checkout_folder: the folder clones and review worktrees go in, from the settings
     :raises ReviewError: when the page or settings will not do, or git fails
     :raises GitHubError: when cloning or checking out fails
     """
@@ -284,15 +283,15 @@ def open_for_review(url: str, ide_command: str, checkout_folder: str, code_folde
         raise ReviewError(f"{url} is not a pull request")
     if not ide_command or not checkout_folder:
         raise ReviewError("set the IDE command and checkout folder in Settings first")
-    roots = [Path(folder).expanduser() for folder in (code_folder, checkout_folder) if folder]
-    if missing := [root for root in roots if not root.is_dir()]:
-        raise ReviewError(f"the folder {missing[0]} does not exist")
-    planned = worktree_folder(roots[-1], pull)
-    if planned.exists():
-        clone = clone_of(planned)
-    else:
-        found = next(filter(None, (find_clone(root, pull.repository) for root in roots)), None)
-        clone = found or clone_into(roots[0], pull.repository)
+    root = Path(checkout_folder).expanduser()
+    if not root.is_dir():
+        raise ReviewError(f"the checkout folder {root} does not exist")
+    planned = worktree_folder(root, pull)
+    clone = (
+        clone_of(planned)
+        if planned.exists()
+        else find_clone(root, pull.repository) or clone_into(root, pull.repository)
+    )
     # A worktree already on the pull request's branch is reused wherever it is, since git lets only one hold it.
     folder = worktree_on_branch(clone, pull.local_name) or planned
     if not folder.exists():

@@ -132,6 +132,8 @@ COLUMN_KEY = "columns/{}/characters"
 HIGHLIGHT_STRENGTH = 0.3
 
 HINT = "Double-click: open PR, right-click: menu, ctrl+scroll: resize"
+# A tick, marking a row whose pull request has a review worktree.
+WORKTREE_MARK = "✓"
 
 
 def table_overlay_alpha(opacity: int, offset: int) -> int:
@@ -179,6 +181,7 @@ def cells_of(entry: Row) -> list[str]:
         owner,
         name,
         entry.number,
+        WORKTREE_MARK if entry.worktree else "",
         entry.status,
         entry.title,
         entry.author,
@@ -258,8 +261,7 @@ class ChangesWindow(QWidget):
         except OSError as error:
             logger.debug("could not set the window icon: {}", error)
         self.build()
-        self.apply_filter()
-        self.refill()
+        self.refresh_worktrees()
         QGuiApplication.styleHints().colorSchemeChanged.connect(self.on_scheme_changed)
 
     def build(self) -> None:
@@ -716,6 +718,15 @@ class ChangesWindow(QWidget):
         settings = load_config()
         self.rows_in_view = settings["popup_rows"]
         self.all_entries = rows_to_show(settings["max_age_days"])
+        self.refresh_worktrees()
+
+    def refresh_worktrees(self) -> None:
+        """Mark the rows whose pull requests have a review worktree in the checkout folder, and redraw the table."""
+        names = {folder.name for folder in review_worktrees(str(load_config().get(CHECKOUT_FOLDER_KEY, "")))}
+        self.all_entries = [
+            replace(entry, worktree=(pull := pull_request_at(entry.url)) is not None and pull.local_name in names)
+            for entry in self.all_entries
+        ]
         self.apply_filter()
         self.refill()
 

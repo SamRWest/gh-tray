@@ -248,17 +248,32 @@ def test_a_typed_ide_command_is_named_by_the_command_itself():
     assert window.ide_name("subl --new-window {folder}") == "subl --new-window"
 
 
+def make_review_worktree(checkout_folder: Path, name: str) -> None:
+    """Lay out a review worktree as git does: a .git file pointing at a git folder, whose HEAD names the branch."""
+    gitdir = checkout_folder / f"{name}-gitdir"
+    gitdir.mkdir()
+    (gitdir / "HEAD").write_text(f"ref: refs/heads/{name}\n", encoding="utf-8")
+    (checkout_folder / name).mkdir()
+    (checkout_folder / name / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+
+
+def test_the_worktree_column_ticks_a_pull_request_once_it_has_a_review_worktree(build_window, monkeypatch, tmp_path):
+    view = build_window([replace(ROWS[0], url="https://github.com/acme/widget/pull/7")])
+    monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+    view.refresh_worktrees()
+    assert view.table.item(0, window.column_of("wt")).text() == ""
+    make_review_worktree(tmp_path, "widget-pr7")
+    view.refresh_worktrees()
+    assert view.table.item(0, window.column_of("wt")).text() == window.WORKTREE_MARK
+
+
 def test_removing_worktrees_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):
     page = "https://github.com/acme/widget/pull/7"
     view = build_window([replace(ROWS[0], url=page)])
     monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
     offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[0]).actions()}
     assert (offered["Remove local worktree"], offered["Remove all local worktrees"]) == (False, False)
-    # A worktree as git lays one out: a .git file pointing at its own git folder, whose HEAD names the branch.
-    (tmp_path / "widget-pr7").mkdir()
-    (tmp_path / "widget-pr7" / ".git").write_text(f"gitdir: {tmp_path / 'gitdir'}\n", encoding="utf-8")
-    (tmp_path / "gitdir").mkdir()
-    (tmp_path / "gitdir" / "HEAD").write_text("ref: refs/heads/widget-pr7\n", encoding="utf-8")
+    make_review_worktree(tmp_path, "widget-pr7")
     view.show()
     with qtbot.waitSignal(view.remove_asked) as asked:
         choose(right_click_menu(view, qtbot, 0), "Remove local worktree")

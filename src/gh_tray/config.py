@@ -29,8 +29,8 @@ LAYOUT_PATH = APP_DIR / "layout.ini"
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
     "ide_command": DEFAULT_IDE_COMMAND,
-    "code_folder": "",
-    # Review worktrees are throwaway, so by default they go where the system keeps temporary files.
+    # Review worktrees are throwaway, so by default they, and the clones they come from, go where the system keeps
+    # temporary files.
     "checkout_folder": tempfile.gettempdir(),
     "poll_minutes": 10,
     "max_age_days": 365,
@@ -53,12 +53,11 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-# For reviewing a pull request locally: the command that opens a folder in the IDE, the folder holding the user's own
-# clones (optional), and the folder review worktrees go in.
+# For reviewing a pull request locally: the command that opens a folder in the IDE, and the folder clones and review
+# worktrees go in.
 IDE_COMMAND_KEY = "ide_command"
-CODE_FOLDER_KEY = "code_folder"
 CHECKOUT_FOLDER_KEY = "checkout_folder"
-TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CODE_FOLDER_KEY, CHECKOUT_FOLDER_KEY)
+TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CHECKOUT_FOLDER_KEY)
 HIDDEN_OWNERS_KEY = "hidden_owners"
 # Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"

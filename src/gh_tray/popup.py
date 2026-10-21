@@ -58,6 +58,8 @@ COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
     ("org", "Org", 16, False),
     ("repo", "Repo", 26, False),
     ("pr", "PR", 7, False),
+    # Whether a review worktree is checked out locally.
+    ("wt", "WTree", 4, False),
     ("status", "Status", 10, False),
     ("title", "Title", 44, True),
     ("author", "Author", 16, False),
@@ -72,6 +74,7 @@ SORT_KEYS = {
     "org": lambda row: org_and_name(row.repo)[0].casefold(),
     "repo": lambda row: org_and_name(row.repo)[1].casefold(),
     "pr": lambda row: pull_request_number(row.number),
+    "wt": lambda row: row.worktree,
     "status": lambda row: row.status.casefold(),
     "title": lambda row: row.title.casefold(),
     "author": lambda row: (not row.author, row.author.casefold()),
@@ -107,6 +110,8 @@ class Row:
     status: str = ""
     # Whether the user has reviewed it and nothing more is asked of them, per :func:`reviewed_by_user`.
     reviewed: bool = False
+    # Whether its pull request has a review worktree checked out locally; found by the window, not stored.
+    worktree: bool = False
 
 
 # A name's ink, from a stable digest of its spelling, so it is the same colour every time; an identity tag only.

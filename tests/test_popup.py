@@ -242,6 +242,7 @@ def test_every_column_has_a_heading_and_a_width():
         "Org",
         "Repo",
         "PR",
+        "WTree",
         "Status",
         "Title",
         "Author",

@@ -62,19 +62,18 @@ notifications.
 
 **Review in VS Code**, named after your default IDE, opens a pull request in its own worktree, so your clone's branch
 and uncommitted work stay as they are. **Review in other IDE** offers the rest of VS Code, PyCharm, IntelliJ IDEA and
-WebStorm. Three settings shape it:
+WebStorm. Two settings shape it:
 
 - **IDE command** is the default IDE, VS Code unless you change it. Pick a ready-made command, such as
   `pycharm64 {folder}` on Windows, or type your own; `{folder}` stands for the worktree, and goes on the end if you
   leave it out.
-- **Code folder** is optional: the folder your clones are in, such as `~/code`.
-- **Checkout folder** is where worktrees go. It starts as your system's temporary folder.
+- **Checkout folder** is where clones and worktrees go. It starts as your system's temporary folder.
 
-The tray looks for a clone with a remote for the pull request's repository in the code folder, then the checkout folder,
-and clones it into the first of them that is set if there is none. It adds a worktree named like `widget-pr7` and checks
-the pull request out in it with `gh pr checkout`, on a branch of the same name. A later review of the same pull request
-brings its worktree up to date instead, wherever that worktree is. If the IDE command or checkout folder has been
-cleared, the settings open at the one missing, and the review carries on once you save.
+The tray looks in the checkout folder for a clone with a remote for the pull request's repository, and clones it there
+if there is none. It adds a worktree named like `widget-pr7` beside it and checks the pull request out in it with
+`gh pr checkout`, on a branch of the same name. A later review of the same pull request brings its worktree up to date
+instead, wherever that worktree is. The **WTree** column ticks each pull request that has a worktree. If the IDE command
+or checkout folder has been cleared, the settings open at the one missing, and the review carries on once you save.
 
 **Remove local worktree** deletes a pull request's worktree in the checkout folder once you are done, and is greyed out
 until there is one. **Remove all local worktrees** does the same for every review worktree in the checkout folder: a

@@ -34,7 +34,6 @@ from gh_tray.config import (
     APP_ICON_PATH,
     BLUR_KEY,
     CHECKOUT_FOLDER_KEY,
-    CODE_FOLDER_KEY,
     HIDDEN_OWNERS_KEY,
     IDE_COMMAND_KEY,
     INVOLVED_KEY,
@@ -160,7 +159,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard and IDE commands, the review folders and the window's blur and opacity."""
+        """Lay out the numbers, the dashboard and IDE commands, the checkout folder, and the blur and opacity."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -174,13 +173,9 @@ class SettingsDialog(QDialog):
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
         form.addRow("IDE command", self.ide_choice())
-        self.code_folder = self.folder_box(
-            CODE_FOLDER_KEY, "Optional: the folder your clones are in", "Searched first for a clone, and cloned into."
-        )
-        form.addRow("Code folder", self.with_browse_button(self.code_folder))
-        self.checkout_folder = self.folder_box(
-            CHECKOUT_FOLDER_KEY, "Where review worktrees go", "Review worktrees go here, named like widget-pr7."
-        )
+        self.checkout_folder = QLineEdit(str(self.config[CHECKOUT_FOLDER_KEY]), self)
+        self.checkout_folder.setPlaceholderText("Where clones and review worktrees go")
+        self.checkout_folder.setToolTip("Clones are found or made here, and review worktrees go here, like widget-pr7.")
         form.addRow("Checkout folder", self.with_browse_button(self.checkout_folder))
         form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
@@ -194,18 +189,6 @@ class SettingsDialog(QDialog):
         self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
         self.ide.setToolTip("The IDE a row's menu reviews in with one click; {folder} stands for the folder to open.")
         return self.ide
-
-    def folder_box(self, key: str, placeholder: str, tooltip: str) -> QLineEdit:
-        """Return a box holding the folder one setting names.
-
-        :param key: the setting
-        :param placeholder: what the box says while empty
-        :param tooltip: what the folder is for
-        """
-        box = QLineEdit(str(self.config[key]), self)
-        box.setPlaceholderText(placeholder)
-        box.setToolTip(tooltip)
-        return box
 
     def with_browse_button(self, box: QLineEdit) -> QHBoxLayout:
         """Lay out a folder's box with a button beside it that picks the folder from the desktop's folder dialog.
@@ -387,7 +370,6 @@ class SettingsDialog(QDialog):
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
         self.config[IDE_COMMAND_KEY] = self.ide.currentText().strip()
-        self.config[CODE_FOLDER_KEY] = self.code_folder.text().strip()
         self.config[CHECKOUT_FOLDER_KEY] = self.checkout_folder.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
         self.config[BLUR_KEY] = self.blur.isChecked()

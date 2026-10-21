@@ -18,7 +18,6 @@ from gh_tray import APP_NAME
 from gh_tray.config import (
     BLUR_KEY,
     CHECKOUT_FOLDER_KEY,
-    CODE_FOLDER_KEY,
     IDE_COMMAND_KEY,
     LOG_PATH,
     OPACITY_KEY,
@@ -128,6 +127,8 @@ class Tray(QObject):
     quit_asked = Signal()
     # Raised from the thread that got a pull request ready to review, or removed its worktree, carrying why it failed.
     local_review_failed = Signal(str)
+    # Raised from the same threads once worktrees may have come or gone, so the window's worktree column follows.
+    worktrees_changed = Signal()
 
     def __init__(self) -> None:
         """Load the settings, build the icon in its starting state, and build the changes window ready to show."""
@@ -154,6 +155,7 @@ class Tray(QObject):
         self.window.review_asked.connect(self.on_review)
         self.window.remove_asked.connect(self.on_remove)
         self.window.remove_all_asked.connect(self.on_remove_all)
+        self.worktrees_changed.connect(self.window.refresh_worktrees)
         self.local_review_failed.connect(self.on_local_review_failed)
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
@@ -303,10 +305,13 @@ class Tray(QObject):
         :param command: the command that opens a folder in the chosen IDE
         """
         try:
-            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.config[CODE_FOLDER_KEY])
+            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY])
         except (ReviewError, GitHubError) as error:
             logger.warning("could not open {} for review: {}", url, error)
             self.local_review_failed.emit(f"Could not review in the IDE: {error}")
+        finally:
+            # Even a review that failed part way may have left a worktree behind.
+            self.worktrees_changed.emit()
 
     def on_remove(self, url: str) -> None:
         """Remove a pull request's review worktree.
@@ -340,6 +345,7 @@ class Tray(QObject):
             except ReviewError as error:
                 logger.warning("could not remove {}: {}", folder, error)
                 refused.append(f"{folder.name}: {error}")
+        self.worktrees_changed.emit()
         if refused:
             self.local_review_failed.emit(f"Could not remove {'; '.join(refused)}")
 

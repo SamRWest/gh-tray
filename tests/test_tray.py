@@ -129,6 +129,8 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     monkeypatch.setattr(settings_window, "save_config", stored.update)
     monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
     monkeypatch.setattr(settings_window, "set_autostart", lambda _wanted: None)
+    # The settings window would otherwise ask GitHub about the account on a thread of its own.
+    monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
     reviewed = []
     monkeypatch.setattr(tray, "open_for_review", lambda *arguments: reviewed.append(arguments))
     subject = build_tray()
@@ -141,9 +143,10 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     assert settings.ide.view().isVisible(), "the IDE command's list should be open, ready to pick from"
     settings.ide.hidePopup()
     settings.checkout_folder.setText(str(tmp_path))
-    settings.save_and_close()
-    qtbot.waitUntil(lambda: bool(reviewed))
-    assert reviewed == [(page, "idea64 {folder}", str(tmp_path), "")]
+    # Waiting for the review thread's last signal, not just its call, keeps teardown from racing that thread.
+    with qtbot.waitSignal(subject.worktrees_changed):
+        settings.save_and_close()
+    assert reviewed == [(page, "idea64 {folder}", str(tmp_path))]
 
 
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):

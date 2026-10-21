@@ -86,22 +86,21 @@ def test_save_and_close_writes_the_settings_through_save_config_and_toggles_auto
     assert build_dialog.autostart_calls == [True]
 
 
-def test_the_ide_command_offers_ready_made_commands_and_saves_what_is_typed_with_both_folders(build_dialog, tmp_path):
+def test_the_ide_command_offers_ready_made_commands_and_saves_what_is_typed_with_the_checkout_folder(
+    build_dialog, tmp_path
+):
     dialog = build_dialog({**config.DEFAULT_CONFIG, config.IDE_COMMAND_KEY: "idea64 {folder}"})
     assert dialog.ide.currentText() == "idea64 {folder}"
     offered = [dialog.ide.itemText(index) for index in range(dialog.ide.count())]
     assert offered == [command for _name, command in environment.ide_presets()]
     dialog.ide.setCurrentText("code --new-window {folder}")
-    dialog.code_folder.setText(str(tmp_path / "code"))
-    dialog.checkout_folder.setText(str(tmp_path / "checkout"))
+    dialog.checkout_folder.setText(str(tmp_path))
     dialog.save_and_close()
     written = build_dialog.saved[-1]
-    keys = (config.IDE_COMMAND_KEY, config.CODE_FOLDER_KEY, config.CHECKOUT_FOLDER_KEY)
-    assert [written[key] for key in keys] == [
+    assert (written[config.IDE_COMMAND_KEY], written[config.CHECKOUT_FOLDER_KEY]) == (
         "code --new-window {folder}",
-        str(tmp_path / "code"),
-        str(tmp_path / "checkout"),
-    ]
+        str(tmp_path),
+    )
 
 
 def test_chosen_theme_follows_the_radio_buttons(build_dialog):

@@ -86,14 +86,12 @@ def test_a_clone_is_found_by_any_of_its_remotes_in_any_address_form_and_any_case
 QUIET_IDE = python_command("pass")
 
 
-def test_review_adds_a_worktree_to_a_clone_in_the_code_folder_and_a_second_review_only_updates_it(tmp_path, github):
-    code, checkout = tmp_path / "code", tmp_path / "checkout"
-    make_clone(code / "widget", "git@github.com:Acme/Widget.git")
-    checkout.mkdir()
-    worktree = checkout / "widget-pr7"
-    open_for_review(PAGE, RECORDING_IDE, str(checkout), str(code))
+def test_review_adds_a_worktree_to_a_clone_in_the_checkout_folder_and_a_second_review_only_updates_it(tmp_path, github):
+    make_clone(tmp_path / "widget", "git@github.com:Acme/Widget.git")
+    worktree = tmp_path / "widget-pr7"
+    open_for_review(PAGE, RECORDING_IDE, str(tmp_path))
     assert (worktree / "opened").exists()
-    open_for_review(PAGE, RECORDING_IDE, str(checkout), str(code))
+    open_for_review(PAGE, RECORDING_IDE, str(tmp_path))
     assert github.calls == [("pr checkout", worktree), ("pr checkout", worktree)]
 
 
@@ -109,13 +107,12 @@ def test_removing_a_worktree_keeps_the_clone_made_in_the_checkout_folder_for_the
 
 
 def test_a_worktree_already_on_the_pull_requests_branch_is_reused_wherever_it_is(tmp_path, github):
-    clone = make_clone(tmp_path / "code" / "widget", "https://github.com/acme/widget")
+    clone = make_clone(tmp_path / "widget", "https://github.com/acme/widget")
     elsewhere = tmp_path / "elsewhere" / "widget-pr7"
     run_git(clone, "worktree", "add", "-q", "-b", "widget-pr7", str(elsewhere))
-    (tmp_path / "checkout").mkdir()
-    open_for_review(PAGE, QUIET_IDE, str(tmp_path / "checkout"), str(tmp_path / "code"))
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path))
     assert github.calls == [("pr checkout", elsewhere)]
-    assert not (tmp_path / "checkout" / "widget-pr7").exists()
+    assert not (tmp_path / "widget-pr7").exists()
 
 
 def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_removal(tmp_path, github):
