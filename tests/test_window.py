@@ -7,14 +7,15 @@ that stops firing shows up as a failure here rather than as a control that silen
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
-from PySide6.QtWidgets import QFrame
+from PySide6.QtWidgets import QApplication, QFrame, QMenu
 from pytestqt.qtbot import QtBot
 
-from gh_tray import config, popup, theme, window
+from gh_tray import config, environment, popup, theme, window
 
 
 def row(
@@ -180,23 +181,135 @@ def test_a_double_click_below_the_last_row_opens_nothing(view, qtbot, build_wind
     assert view.isVisible()
 
 
-def test_a_right_click_marks_a_row_seen_and_a_second_click_unmarks_it_and_the_title_count_follows(view, qtbot):
+def right_click_menu(view: window.ChangesWindow, qtbot: QtBot, row_index: int) -> QMenu:
+    """Right-click a row and return the menu that opens."""
+    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=cell_centre(view, row_index))
+    menu = QApplication.activePopupWidget()
+    assert isinstance(menu, QMenu), "a right click on a row should open its menu"
+    return menu
+
+
+def choose(menu: QMenu, text: str) -> None:
+    """Pick one entry of a menu, and close the menu as a click on the entry would."""
+    next(action for action in menu.actions() if action.text() == text).trigger()
+    menu.close()
+
+
+def test_a_right_click_offers_marking_a_row_seen_then_unseen_and_the_title_count_follows(view, qtbot):
     view.show()
     assert view.windowTitle().endswith("1 notification")
-    spot = cell_centre(view, 0)
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=spot)
+    choose(right_click_menu(view, qtbot, 0), "Mark seen")
     assert view.entries[0].seen is True
     assert view.windowTitle().endswith("nothing to do")
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=spot)
+    choose(right_click_menu(view, qtbot, 0), "Mark unseen")
     assert view.entries[0].seen is False
     assert view.windowTitle().endswith("1 notification")
 
 
 def test_marking_is_remembered_through_remember_row_seen(view, qtbot, build_window):
     view.show()
-    qtbot.mouseClick(view.table.viewport(), Qt.MouseButton.RightButton, pos=cell_centre(view, 0))
+    choose(right_click_menu(view, qtbot, 0), "Mark seen")
     marked_row, seen = build_window.seen_marks[-1]
     assert (marked_row.url, seen) == (view.entries[0].url, True)
+
+
+def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_submenu_for_a_pull_request_only(
+    build_window, qtbot, monkeypatch
+):
+    page = "https://github.com/acme/widget/pull/7"
+    view = build_window([replace(ROWS[0], url=page), ROWS[1]])
+    monkeypatch.setattr(window, "load_config", lambda: {config.IDE_COMMAND_KEY: environment.DEFAULT_IDE_COMMAND})
+    view.show()
+    offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[1]).actions()}
+    assert offered == {
+        "Mark unseen": True,
+        "Open on GitHub": True,
+        "Review in VS Code": False,
+        "Review in other IDE": False,
+        "Open worktree dir": False,
+        "Remove local worktree": False,
+        "Remove all local worktrees": False,
+    }
+    menu = right_click_menu(view, qtbot, 0)
+    others = menu.findChild(QMenu)
+    assert others is not None, "the other IDEs should sit in a submenu"
+    assert [action.text() for action in others.actions()] == ["PyCharm", "IntelliJ IDEA", "WebStorm"]
+    with qtbot.waitSignal(view.review_asked) as asked:
+        choose(others, "PyCharm")
+    menu.close()
+    assert asked.args == [page, dict(environment.ide_presets())["PyCharm"]]
+    view.show()
+    with qtbot.waitSignal(view.review_asked) as asked:
+        choose(right_click_menu(view, qtbot, 0), "Review in VS Code")
+    assert asked.args == [page, environment.DEFAULT_IDE_COMMAND]
+    assert not view.isVisible()
+
+
+def test_a_typed_ide_command_is_named_by_the_command_itself():
+    assert window.ide_name("subl --new-window {folder}") == "subl --new-window"
+
+
+def make_review_worktree(checkout_folder: Path, name: str) -> None:
+    """Lay out a review worktree as git does: a .git file pointing at a git folder, whose HEAD names the branch."""
+    gitdir = checkout_folder / f"{name}-gitdir"
+    gitdir.mkdir()
+    (gitdir / "HEAD").write_text(f"ref: refs/heads/{name}\n", encoding="utf-8")
+    (checkout_folder / name).mkdir()
+    (checkout_folder / name / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+
+
+def test_the_worktree_column_ticks_a_pull_request_until_its_worktree_folder_is_really_gone(
+    build_window, monkeypatch, tmp_path
+):
+    view = build_window([replace(ROWS[0], url="https://github.com/acme/widget/pull/7")])
+    monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+
+    def ticked() -> bool:
+        view.refresh_worktrees()
+        return view.table.item(0, window.column_of("wt")).text() == window.WORKTREE_MARK
+
+    assert not ticked()
+    make_review_worktree(tmp_path, "widget-pr7")
+    assert ticked()
+    # A removal that fails part way, as on Windows when an IDE holds the folder, takes the .git file but not the folder.
+    (tmp_path / "widget-pr7" / ".git").unlink()
+    assert ticked()
+    (tmp_path / "widget-pr7").rmdir()
+    assert not ticked()
+
+
+def test_a_column_is_never_narrower_than_its_heading_even_when_dragged_narrower(build_window, tmp_path):
+    remembered = QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
+    remembered.setValue(window.COLUMN_KEY.format("wt"), 1.0)
+    remembered.sync()
+    view = build_window()
+    assert view.table.columnWidth(window.column_of("wt")) == view.heading_width("WTree")
+
+
+def test_opening_and_removing_worktrees_is_offered_once_a_review_has_made_one(
+    build_window, qtbot, monkeypatch, tmp_path
+):
+    page = "https://github.com/acme/widget/pull/7"
+    view = build_window([replace(ROWS[0], url=page)])
+    monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+    shown = []
+    monkeypatch.setattr(window.QDesktopServices, "openUrl", lambda url: shown.append(Path(url.toLocalFile())) or True)
+    offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[0]).actions()}
+    assert [offered[text] for text in ("Open worktree dir", "Remove local worktree", "Remove all local worktrees")] == [
+        False,
+        False,
+        False,
+    ]
+    make_review_worktree(tmp_path, "widget-pr7")
+    view.show()
+    choose(right_click_menu(view, qtbot, 0), "Open worktree dir")
+    assert shown == [tmp_path / "widget-pr7"]
+    view.show()
+    with qtbot.waitSignal(view.remove_asked) as asked:
+        choose(right_click_menu(view, qtbot, 0), "Remove local worktree")
+    assert asked.args == [page]
+    with qtbot.waitSignal(view.remove_all_asked):
+        choose(right_click_menu(view, qtbot, 0), "Remove all local worktrees")
 
 
 def test_a_heading_click_sorts_and_a_second_click_reverses(view):

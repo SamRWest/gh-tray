@@ -113,6 +113,13 @@ def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkey
     assert digest["closed"][0]["state"] == "MERGED"
 
 
+def test_closed_pull_requests_are_looked_for_back_to_the_oldest_change_still_logged():
+    now = datetime(2026, 10, 22, tzinfo=UTC)
+    assert collector.closed_lookback_days("", now) == collector.CLOSED_LOOKBACK_DAYS
+    assert collector.closed_lookback_days("2026-10-20T00:00:00Z", now) == collector.CLOSED_LOOKBACK_DAYS
+    assert collector.closed_lookback_days("2026-08-26T03:36:21.662863Z", now) == 57
+
+
 def test_whichever_of_the_two_came_last_is_the_one_named():
     later_review = node(reviews=margin("reviewer", "2026-05-31T00:00:00Z"))
     assert collector.normalise(later_review, "authored")["lastCommentBy"] == "reviewer"

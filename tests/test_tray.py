@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -111,11 +112,72 @@ def test_the_menu_lists_the_expected_entries_in_order(build_tray):
         "Recent changes...",
         "Awaiting your review",
         "Mark all seen",
+        "Pop-up notifications",
         "Start at login",
         "Settings...",
         "Open log",
         "Quit",
     ]
+
+
+def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_carries_on(
+    build_tray, monkeypatch, qtbot, tmp_path
+):
+    from gh_tray import settings_window
+
+    stored = copy.deepcopy(config.DEFAULT_CONFIG) | {config.IDE_COMMAND_KEY: "", config.CHECKOUT_FOLDER_KEY: ""}
+    for module in (tray, settings_window):
+        monkeypatch.setattr(module, "load_config", lambda: copy.deepcopy(stored))
+    monkeypatch.setattr(settings_window, "save_config", stored.update)
+    monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
+    monkeypatch.setattr(settings_window, "set_autostart", lambda _wanted: None)
+    # The settings window would otherwise ask GitHub about the account on a thread of its own.
+    monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
+    reviewed = []
+
+    def review(url: str, command: str, checkout_folder: str, report: Callable[[str], None]) -> None:
+        report("Cloning acme/widget")
+        reviewed.append((url, command, checkout_folder))
+
+    monkeypatch.setattr(tray, "open_for_review", review)
+    subject = build_tray()
+    monkeypatch.setattr(subject.lookup, "start", lambda: None)
+    page = "https://github.com/acme/widget/pull/7"
+    subject.window.review_asked.emit(page, "idea64 {folder}")
+    settings = subject.settings
+    assert settings is not None
+    qtbot.addWidget(settings)
+    assert settings.ide.view().isVisible(), "the IDE command's list should be open, ready to pick from"
+    settings.ide.hidePopup()
+    settings.checkout_folder.setText(str(tmp_path))
+    # Waiting for the review thread's last signal, not just its call, keeps teardown from racing that thread.
+    with qtbot.waitSignal(subject.review_ended):
+        settings.save_and_close()
+    assert reviewed == [(page, "idea64 {folder}", str(tmp_path))]
+    progress = subject.progress
+    assert progress is not None
+    assert (progress.labelText(), progress.isVisible()) == ("Cloning acme/widget", False)
+
+
+def test_pop_up_notifications_turned_off_from_the_menu_stay_off_until_turned_on_again(build_tray, monkeypatch, qtbot):
+    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    monkeypatch.setattr(tray, "load_config", lambda: copy.deepcopy(stored))
+    monkeypatch.setattr(tray, "save_config", stored.update)
+    subject = build_tray()
+    notified: list[list[dict]] = []
+    monkeypatch.setattr(subject.notifier, "notify", lambda events, _toasts: notified.append(events))
+
+    def pop_ups():
+        return next(action for action in subject.menu.actions() if action.text() == "Pop-up notifications")
+
+    assert pop_ups().isChecked()
+    pop_ups().trigger()
+    assert (stored[config.NOTIFICATIONS_KEY], pop_ups().isChecked()) == (False, False)
+    subject.on_polled(PollResult(status=Status(), events=[{"kind": "ci_broken", "while": "off"}]))
+    pop_ups().trigger()
+    subject.on_polled(PollResult(status=Status(), events=[{"kind": "ci_broken", "while": "on"}]))
+    qtbot.waitUntil(lambda: bool(notified))
+    assert notified == [[{"kind": "ci_broken", "while": "on"}]]
 
 
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):

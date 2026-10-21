@@ -7,16 +7,29 @@ import threading
 import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 from loguru import logger
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCursor, QDesktopServices
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QMenu, QProgressDialog, QSystemTrayIcon
 
 from gh_tray import APP_NAME
-from gh_tray.config import BLUR_KEY, LOG_PATH, OPACITY_KEY, load_config
+from gh_tray.config import (
+    ALL_MINE_KEY,
+    BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
+    IDE_COMMAND_KEY,
+    LOG_PATH,
+    NOTIFICATIONS_KEY,
+    OPACITY_KEY,
+    load_config,
+    save_config,
+)
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
+from gh_tray.github import GitHubError
+from gh_tray.local_review import ReviewError, existing_worktree, open_for_review, remove_worktree, review_worktrees
 from gh_tray.notifier import Notifier
 from gh_tray.popup import rows_to_show
 from gh_tray.service import PollResult, poll
@@ -34,6 +47,8 @@ RETRY_FRACTION = 4
 MINIMUM_WAIT_SECONDS = 60
 # Nudges the toolkit's loop so Ctrl+C can be handled where there is no console handler of its own.
 HEARTBEAT_MS = 500
+# How many characters wide the review progress window is, so the longest step's words fit on one line.
+PROGRESS_CHARACTERS = 60
 
 
 def open_dashboard(config: dict) -> None:
@@ -115,6 +130,13 @@ class Tray(QObject):
 
     # Raised from whichever thread a console interrupt arrives on, so quitting happens on the toolkit's own thread.
     quit_asked = Signal()
+    # Raised from the thread that got a pull request ready to review, or removed its worktree, carrying why it failed.
+    local_review_failed = Signal(str)
+    # Raised from the same threads once worktrees may have come or gone, so the window's worktree column follows.
+    worktrees_changed = Signal()
+    # Raised from the review thread as it starts each step, carrying what the step does, and once it is done.
+    review_stage = Signal(str)
+    review_ended = Signal()
 
     def __init__(self) -> None:
         """Load the settings, build the icon in its starting state, and build the changes window ready to show."""
@@ -135,12 +157,24 @@ class Tray(QObject):
         self.icon.activated.connect(self.on_activated)
         self.layout = layout_store()
         self.zoom = FontZoom(self.layout)
-        self.window = ChangesWindow(rows_to_show(self.config["max_age_days"]), self.layout)
+        self.window = ChangesWindow(rows_to_show(self.config["max_age_days"], self.config[ALL_MINE_KEY]), self.layout)
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
+        self.window.review_asked.connect(self.on_review)
+        self.window.remove_asked.connect(self.on_remove)
+        self.window.remove_all_asked.connect(self.on_remove_all)
+        self.worktrees_changed.connect(self.window.refresh_worktrees)
+        self.local_review_failed.connect(self.on_local_review_failed)
+        self.review_stage.connect(self.on_review_stage)
+        self.review_ended.connect(self.on_review_ended)
+        # Says what a review is doing while it runs; made on first use and hidden, not closed, between reviews.
+        self.progress: QProgressDialog | None = None
+        self.reviews_running = 0
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
+        # The page and IDE command of a review waiting on the settings window, or None when none is.
+        self.pending_review: tuple[str, str] | None = None
         self.account: Account | None = None
         self.lookup = AccountLookup()
         self.lookup.found.connect(self.on_account_found)
@@ -162,6 +196,9 @@ class Tray(QObject):
         self.menu.addMenu(self.reviews_menu())
         self.menu.addSeparator()
         self.menu.addAction("Mark all seen", self.on_mark_seen)
+        pop_ups = self.menu.addAction("Pop-up notifications", self.on_toggle_notifications)
+        pop_ups.setCheckable(True)
+        pop_ups.setChecked(load_config()[NOTIFICATIONS_KEY])
         login = self.menu.addAction("Start at login", self.on_toggle_autostart)
         login.setCheckable(True)
         login.setChecked(autostart_enabled())
@@ -215,8 +252,9 @@ class Tray(QObject):
             result.error,
         )
         self.repaint()
-        # Notifying runs on its own thread so a hang in the desktop's notification service cannot freeze the app.
-        if result.events:
+        # Notifying runs on its own thread so a hang in the desktop's notification service cannot freeze the app. The
+        # switch is read afresh, since the poll's own copy of the settings predates any flick of it during the poll.
+        if result.events and load_config()[NOTIFICATIONS_KEY]:
             threading.Thread(
                 target=self.notifier.notify,
                 args=(result.events, self.config["toasts"]),
@@ -264,6 +302,105 @@ class Tray(QObject):
         except RuntimeError as error:
             logger.error("could not open the dashboard: {}", error)
 
+    def on_review(self, url: str, command: str) -> None:
+        """Open a pull request in an IDE, on a thread of its own since a first clone can take minutes.
+
+        Without a command or checkout folder, the settings open at the one missing, and the review waits for them.
+        :param url: the pull request's page
+        :param command: the command that opens a folder in the chosen IDE
+        """
+        if not (command and self.config[CHECKOUT_FOLDER_KEY]):
+            self.pending_review = (url, command)
+            self.open_settings().ask_for_review_settings()
+            return
+        self.reviews_running += 1
+        self.show_progress()
+        threading.Thread(target=self.review, args=(url, command), daemon=True, name=f"{APP_NAME}-review").start()
+
+    def review(self, url: str, command: str) -> None:
+        """Open a pull request in an IDE off the toolkit's thread, so report each step and any failure over signals.
+
+        :param url: the pull request's page
+        :param command: the command that opens a folder in the chosen IDE
+        """
+        try:
+            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.review_stage.emit)
+        except (ReviewError, GitHubError) as error:
+            logger.warning("could not open {} for review: {}", url, error)
+            self.local_review_failed.emit(f"Could not review in the IDE: {error}")
+        finally:
+            # Even a review that failed part way may have left a worktree behind.
+            self.worktrees_changed.emit()
+            self.review_ended.emit()
+
+    def show_progress(self) -> None:
+        """Show the window that says what a review is doing, its bar moving to show it is still at work."""
+        if self.progress is None:
+            self.progress = QProgressDialog("", "", 0, 0)
+            self.progress.setWindowTitle(f"{APP_NAME}: review in IDE")
+            self.progress.setCancelButton(None)
+            self.progress.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+            self.progress.setMinimumWidth(self.progress.fontMetrics().averageCharWidth() * PROGRESS_CHARACTERS)
+        self.progress.setLabelText("Getting the pull request ready")
+        self.progress.show()
+
+    def on_review_stage(self, stage: str) -> None:
+        """Show what a review is now doing.
+
+        :param stage: the step, in a few words
+        """
+        if self.progress is not None:
+            self.progress.setLabelText(stage)
+
+    def on_review_ended(self) -> None:
+        """Put the progress window away once no review is still running."""
+        self.reviews_running = max(0, self.reviews_running - 1)
+        if self.reviews_running == 0 and self.progress is not None:
+            self.progress.hide()
+
+    def on_remove(self, url: str) -> None:
+        """Remove a pull request's review worktree.
+
+        :param url: the pull request's page
+        """
+        folder = existing_worktree(url, self.config[CHECKOUT_FOLDER_KEY])
+        self.remove_in_background([folder] if folder is not None else [])
+
+    def on_remove_all(self) -> None:
+        """Remove every review worktree in the checkout folder."""
+        self.remove_in_background(review_worktrees(self.config[CHECKOUT_FOLDER_KEY]))
+
+    def remove_in_background(self, folders: list[Path]) -> None:
+        """Remove review worktrees on a thread of their own, since a large one takes a while to delete.
+
+        :param folders: the worktrees, which may be none
+        """
+        if folders:
+            threading.Thread(target=self.remove, args=(folders,), daemon=True, name=f"{APP_NAME}-remove").start()
+
+    def remove(self, folders: list[Path]) -> None:
+        """Remove review worktrees, carrying on past any git refuses and reporting those together over a signal.
+
+        :param folders: the worktrees
+        """
+        refused = []
+        for folder in folders:
+            try:
+                remove_worktree(folder)
+            except ReviewError as error:
+                logger.warning("could not remove {}: {}", folder, error)
+                refused.append(f"{folder.name}: {error}")
+        self.worktrees_changed.emit()
+        if refused:
+            self.local_review_failed.emit(f"Could not remove {'; '.join(refused)}")
+
+    def on_local_review_failed(self, reason: str) -> None:
+        """Say on the tray icon why reviewing in an IDE, or removing a review worktree, failed.
+
+        :param reason: what went wrong, briefly
+        """
+        self.icon.showMessage(APP_NAME, reason, QSystemTrayIcon.MessageIcon.Warning)
+
     def on_refresh(self, *_) -> None:
         """Poll as soon as possible."""
         self.poller.ask()
@@ -280,13 +417,20 @@ class Tray(QObject):
         set_autostart(not autostart_enabled())
         self.build_menu()
 
+    def on_toggle_notifications(self, *_) -> None:
+        """Turn the desktop pop-ups about changes on or off, and remember the choice; changes are still listed."""
+        settings = load_config()
+        settings[NOTIFICATIONS_KEY] = not settings[NOTIFICATIONS_KEY]
+        save_config(settings)
+        self.build_menu()
+
     def on_open_log(self, *_) -> None:
         """Open the log file in whatever the desktop opens text files with."""
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_PATH))):
             logger.error("the desktop refused to open the log at {}", LOG_PATH)
 
-    def open_settings(self, *_) -> None:
-        """Open the settings window, or bring it forward if it is already open."""
+    def open_settings(self, *_) -> SettingsDialog:
+        """Open the settings window, or bring it forward if it is already open, and return it."""
         if self.settings is None:
             self.settings = SettingsDialog(account=self.account, blurrable=bool(self.window.blur))
             self.settings.accepted.connect(self.on_settings_saved)
@@ -297,14 +441,19 @@ class Tray(QObject):
         self.settings.show()
         self.settings.raise_()
         self.settings.activateWindow()
+        return self.settings
 
     def on_settings_saved(self) -> None:
-        """Apply the saved settings: colours change at once, everything else on the next poll."""
+        """Apply the saved settings: colours and which pull requests are listed change at once, the rest next poll."""
         self.config = load_config()
         self.window.on_scheme_changed()
+        self.window.reload()
 
     def on_settings_closed(self, _result: int) -> None:
-        """Forget the settings window, then look up the account again to catch changes made since it opened."""
+        """Forget the settings window, then look up the account again to catch changes made since it opened.
+
+        A review that waited on the settings goes ahead if they were saved with what it needs, and is dropped if not.
+        """
         self.settings = None
         self.account = None
         self.lookup.start()
@@ -314,6 +463,12 @@ class Tray(QObject):
         saved = load_config()
         self.window.set_blur(bool(saved.get(BLUR_KEY, True)))
         self.window.set_opacity(saved.get(OPACITY_KEY))
+        waiting, self.pending_review = self.pending_review, None
+        if waiting is not None:
+            url, command = waiting
+            command = command or self.config[IDE_COMMAND_KEY]
+            if command and self.config[CHECKOUT_FOLDER_KEY]:
+                self.on_review(url, command)
 
     def on_opacity_moved(self, percent: int) -> None:
         """Follow the settings slider live, bringing the window up under the settings if it is hidden.

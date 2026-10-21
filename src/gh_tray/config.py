@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import tempfile
 
 from loguru import logger
 from platformdirs import user_data_path
 
 from gh_tray import APP_NAME
+from gh_tray.environment import DEFAULT_IDE_COMMAND
 from gh_tray.storage import read_json, write_json_atomic
 from gh_tray.theme import STYLES
 
@@ -26,6 +28,10 @@ LAYOUT_PATH = APP_DIR / "layout.ini"
 
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
+    "ide_command": DEFAULT_IDE_COMMAND,
+    # Review worktrees are throwaway, so by default they, and the clones they come from, go where the system keeps
+    # temporary files.
+    "checkout_folder": tempfile.gettempdir(),
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
@@ -33,6 +39,8 @@ DEFAULT_CONFIG: dict = {
     "watch_others": True,
     "watched_owners": [],
     "involved": False,
+    "all_mine": True,
+    "notifications": True,
     "theme": "auto",
     "opacity": None,
     "blur": True,
@@ -47,12 +55,20 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-TEXT_KEYS = ("dashboard_command",)
+# For reviewing a pull request locally: the command that opens a folder in the IDE, and the folder clones and review
+# worktrees go in.
+IDE_COMMAND_KEY = "ide_command"
+CHECKOUT_FOLDER_KEY = "checkout_folder"
+TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CHECKOUT_FOLDER_KEY)
 HIDDEN_OWNERS_KEY = "hidden_owners"
 # Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
 WATCHED_OWNERS_KEY = "watched_owners"
 INVOLVED_KEY = "involved"
+# Whether the window lists every open pull request of the user's own, not only those that want something of them.
+ALL_MINE_KEY = "all_mine"
+# Whether changes raise desktop pop-ups at all; the switches under "toasts" choose which kinds, while this is on.
+NOTIFICATIONS_KEY = "notifications"
 THEME_KEY = "theme"
 # How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
 # what lies behind the window: a blurred background can be more see-through and still read.
@@ -109,6 +125,8 @@ def normalise(config: dict) -> dict:
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
     config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
+    config[ALL_MINE_KEY] = bool(config.get(ALL_MINE_KEY, DEFAULT_CONFIG[ALL_MINE_KEY]))
+    config[NOTIFICATIONS_KEY] = bool(config.get(NOTIFICATIONS_KEY, DEFAULT_CONFIG[NOTIFICATIONS_KEY]))
     config[BLUR_KEY] = bool(config.get(BLUR_KEY, DEFAULT_CONFIG[BLUR_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()

@@ -7,7 +7,7 @@ import copy
 import pytest
 from pytestqt.qtbot import QtBot
 
-from gh_tray import config, settings_window, theme
+from gh_tray import config, environment, settings_window, theme
 from gh_tray.settings_window import Account, SettingsDialog
 
 TESTER = Account(
@@ -77,13 +77,42 @@ def test_save_and_close_writes_the_settings_through_save_config_and_toggles_auto
     dialog.toggles["mention"].setChecked(False)
     dialog.style_buttons[theme.ALWAYS_LIGHT].setChecked(True)
     dialog.autostart.setChecked(True)
+    assert dialog.all_mine.isChecked(), "every PR of the user's own is listed unless they say otherwise"
+    dialog.all_mine.setChecked(False)
     dialog.save_and_close()
     written = build_dialog.saved[-1]
     assert written["poll_minutes"] == 30
     assert written["dashboard_command"] == "gh dash --repo acme/gadget"
     assert written["toasts"]["mention"] is False
     assert written[config.THEME_KEY] == theme.ALWAYS_LIGHT
+    assert written[config.ALL_MINE_KEY] is False
     assert build_dialog.autostart_calls == [True]
+
+
+def test_the_ide_command_offers_ready_made_commands_and_saves_what_is_typed_with_the_checkout_folder(
+    build_dialog, tmp_path
+):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, config.IDE_COMMAND_KEY: "idea64 {folder}"})
+    assert dialog.ide.currentText() == "idea64 {folder}"
+    offered = [dialog.ide.itemText(index) for index in range(dialog.ide.count())]
+    assert offered == [command for _name, command in environment.ide_presets()]
+    dialog.ide.setCurrentText("code --new-window {folder}")
+    dialog.checkout_folder.setText(str(tmp_path))
+    dialog.save_and_close()
+    written = build_dialog.saved[-1]
+    assert (written[config.IDE_COMMAND_KEY], written[config.CHECKOUT_FOLDER_KEY]) == (
+        "code --new-window {folder}",
+        str(tmp_path),
+    )
+
+
+def test_saving_keeps_a_setting_changed_elsewhere_while_the_window_was_open(build_dialog):
+    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    dialog = build_dialog(stored)
+    # Pop-up notifications turned off from the tray menu after the window opened.
+    stored[config.NOTIFICATIONS_KEY] = False
+    dialog.save_and_close()
+    assert build_dialog.saved[-1][config.NOTIFICATIONS_KEY] is False
 
 
 def test_chosen_theme_follows_the_radio_buttons(build_dialog):

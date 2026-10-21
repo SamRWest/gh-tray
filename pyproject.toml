@@ -8,7 +8,8 @@ dependencies = [
     "cyclopts>=3.0",
     "desktop-notifier>=6.0",
     "loguru>=0.7",
-    "pillow>=10.1",
+    # 13.0 is the first without the PDF, GIF and TIFF parsing advisories that the security scan reports on 12.x.
+    "pillow>=13.0.0",
     "platformdirs>=4.2",
     # Keeps the tray out of the macOS Dock, which the toolkit has no way to ask for.
     "pyobjc-framework-cocoa>=10.0; sys_platform == 'darwin'",

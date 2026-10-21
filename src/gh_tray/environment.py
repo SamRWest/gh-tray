@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shlex
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,9 @@ from gh_tray import APP_NAME
 
 # What Windows calls UTF-8, which a console has to be put into by number.
 UTF8_CODE_PAGE = 65001
+# Stands for the folder to open in an IDE command.
+FOLDER_PLACEHOLDER = "{folder}"
+DEFAULT_IDE_COMMAND = f"code {FOLDER_PLACEHOLDER}"
 
 # Tried in order; first present wins. A maximised window still keeps its title bar, unlike full screen.
 LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
@@ -43,18 +47,22 @@ def no_console_flag() -> int:
     return subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
-def run_quietly(command: list[str], timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+def run_quietly(
+    command: list[str], timeout: float | None = None, folder: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run a command without a console window and return what it printed.
 
     Encoding is fixed at UTF-8, matching the GitHub tool's output, so the system codepage cannot mangle a tick or title.
     :param command: the program and its arguments
     :param timeout: how long to wait, or None to wait as long as it takes
+    :param folder: the folder to run in, or None for this process's own
     :return: the finished command, with its output as text
     """
     return subprocess.run(
         command,
         check=False,
         timeout=timeout,
+        cwd=folder,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -113,6 +121,28 @@ def hide_from_dock() -> None:
 def github_cli() -> str | None:
     """Return the path to the GitHub command line tool, or None when it is not installed."""
     return shutil.which("gh")
+
+
+def shell_quote(argument: str) -> str:
+    """Return one argument quoted for this platform's shell, so a space in a path cannot split it in two.
+
+    :param argument: the argument, such as a folder
+    """
+    return subprocess.list2cmdline([argument]) if sys.platform == "win32" else shlex.quote(argument)
+
+
+def ide_presets() -> tuple[tuple[str, str], ...]:
+    """Return the commonest IDEs as (name, command opening a folder in it), under this platform's launcher names.
+
+    VS Code comes first, as the default.
+    """
+    # JetBrains installs on Windows put pycharm64.exe and the like on the path; elsewhere the launchers drop the 64.
+    suffix = "64" if sys.platform == "win32" else ""
+    jetbrains = (("PyCharm", "pycharm"), ("IntelliJ IDEA", "idea"), ("WebStorm", "webstorm"))
+    return (
+        ("VS Code", DEFAULT_IDE_COMMAND),
+        *((name, f"{launcher}{suffix} {FOLDER_PLACEHOLDER}") for name, launcher in jetbrains),
+    )
 
 
 def github_auth_state() -> tuple[bool, str]:

@@ -1,4 +1,4 @@
-"""The settings window: polling, notifications, dashboard command, owners, colours, login start and sign-in."""
+"""The settings window: polling, notifications, dashboard and IDE commands, owners, colours, login start and sign-in."""
 
 from __future__ import annotations
 
@@ -11,14 +11,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QRadioButton,
     QSlider,
     QSpinBox,
@@ -28,9 +31,12 @@ from PySide6.QtWidgets import (
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
+    ALL_MINE_KEY,
     APP_ICON_PATH,
     BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
     HIDDEN_OWNERS_KEY,
+    IDE_COMMAND_KEY,
     INVOLVED_KEY,
     NUMBER_RANGES,
     OPACITY_KEY,
@@ -42,7 +48,14 @@ from gh_tray.config import (
     load_config,
     save_config,
 )
-from gh_tray.environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
+from gh_tray.environment import (
+    autostart_enabled,
+    github_auth_state,
+    hide_from_dock,
+    ide_presets,
+    open_in_terminal,
+    set_autostart,
+)
 from gh_tray.events import RULE_LABELS
 from gh_tray.github import GitHubError, organisations, viewer
 from gh_tray.status import write_app_icon
@@ -147,7 +160,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard command and the window's blur and opacity."""
+        """Lay out the numbers, which PRs to list, the dashboard and IDE commands, the checkout folder, and the blur."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -157,12 +170,58 @@ class SettingsDialog(QDialog):
             spin.setValue(int(self.config[key]))
             form.addRow(label, spin)
             self.numbers[key] = spin
+        self.all_mine = QCheckBox("Show all my PRs, not only those waiting on me", self)
+        self.all_mine.setToolTip("Lists the rest as Author rows, already marked seen, so they never count as news.")
+        self.all_mine.setChecked(bool(self.config.get(ALL_MINE_KEY, True)))
+        form.addRow(self.all_mine)
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        form.addRow("IDE command", self.ide_choice())
+        self.checkout_folder = QLineEdit(str(self.config[CHECKOUT_FOLDER_KEY]), self)
+        self.checkout_folder.setPlaceholderText("Where clones and review worktrees go")
+        self.checkout_folder.setToolTip("Clones are found or made here, and review worktrees go here, like widget-pr7.")
+        form.addRow("Checkout folder", self.with_browse_button(self.checkout_folder))
         form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
         return form
+
+    def ide_choice(self) -> QComboBox:
+        """Lay out the IDE command: one of the ready-made commands, or one typed in."""
+        self.ide = QComboBox(self)
+        self.ide.setEditable(True)
+        self.ide.addItems([command for _name, command in ide_presets()])
+        self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
+        self.ide.setToolTip("The IDE a row's menu reviews in with one click; {folder} stands for the folder to open.")
+        return self.ide
+
+    def with_browse_button(self, box: QLineEdit) -> QHBoxLayout:
+        """Lay out a folder's box with a button beside it that picks the folder from the desktop's folder dialog.
+
+        :param box: the folder's box, which the dialog starts from and fills
+        """
+        browse = QPushButton("Browse...", self)
+        browse.clicked.connect(lambda: self.browse_into(box))
+        row = QHBoxLayout()
+        row.addWidget(box, 1)
+        row.addWidget(browse)
+        return row
+
+    def browse_into(self, box: QLineEdit) -> None:
+        """Pick a folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled.
+
+        :param box: the folder's box
+        """
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder", box.text())
+        if chosen:
+            box.setText(chosen)
+
+    def ask_for_review_settings(self) -> None:
+        """Point at the missing review setting: drop the IDE command's list open, or else focus the checkout folder."""
+        if not self.ide.currentText().strip():
+            self.ide.showPopup()
+        else:
+            self.checkout_folder.setFocus()
 
     def blur_switch(self) -> QCheckBox:
         """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
@@ -311,10 +370,17 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, APP_NAME, str(error))
 
     def save_and_close(self) -> None:
-        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
+        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked.
+
+        The stored settings are read again first, so a setting changed elsewhere while this window was open, such as
+        pop-up notifications from the tray menu, is not written back over with what it was when the window opened.
+        """
+        self.config = load_config()
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
+        self.config[IDE_COMMAND_KEY] = self.ide.currentText().strip()
+        self.config[CHECKOUT_FOLDER_KEY] = self.checkout_folder.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
         self.config[BLUR_KEY] = self.blur.isChecked()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
@@ -323,6 +389,7 @@ class SettingsDialog(QDialog):
         self.config[WATCHED_OWNERS_KEY] = [login for login, switch in switches if switch.isChecked()]
         self.config[WATCH_OTHERS_KEY] = self.others.isChecked()
         self.config[INVOLVED_KEY] = self.involved.isChecked()
+        self.config[ALL_MINE_KEY] = self.all_mine.isChecked()
         self.config[THEME_KEY] = self.chosen_theme()
         save_config(self.config)
         set_autostart(self.autostart.isChecked())

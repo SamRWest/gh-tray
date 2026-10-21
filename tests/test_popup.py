@@ -242,6 +242,7 @@ def test_every_column_has_a_heading_and_a_width():
         "Org",
         "Repo",
         "PR",
+        "WTree",
         "Status",
         "Title",
         "Author",
@@ -613,6 +614,26 @@ def test_an_involved_pull_request_stands_as_a_quiet_row_under_its_own_filter():
     assert (row.label, row.role, row.colour, row.who) == ("Involved", "involved", "blue", "bob")
     assert popup.role_matches(row, "involved") and not popup.role_matches(row, "reviewer")
     assert ("involved", "Involved") in popup.FILTER_CHOICES
+
+
+def test_a_quiet_pull_request_of_the_users_own_is_listed_as_already_seen_only_when_all_theirs_are_wanted():
+    entry = {
+        "side": "authored",
+        "repo": "acme/widget",
+        "number": 7,
+        "isDraft": True,
+        "ci": "SUCCESS",
+        "url": "https://example.test/7",
+        "author": "me",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
+    assert popup.rows_from_snapshot({"authored:acme/widget#7": entry}, set()) == []
+    (row,) = popup.rows_from_snapshot({"authored:acme/widget#7": entry}, set(), all_mine=True)
+    assert (row.label, row.role, row.seen) == ("Author", "author", True)
+    assert popup.role_matches(row, "author")
+    # Something that does want the user, such as broken checks, is still listed that way, and as news.
+    (broken,) = popup.rows_from_snapshot({"authored:acme/widget#7": entry | {"ci": "FAILURE"}}, set(), all_mine=True)
+    assert (broken.label, broken.seen) == ("Checks failing", False)
 
 
 def test_an_involved_pull_request_the_user_has_reviewed_stands_as_theirs_to_review():
