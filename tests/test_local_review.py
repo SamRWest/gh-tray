@@ -16,18 +16,21 @@ from gh_tray.local_review import PullRequest, ReviewError, open_for_review
 PAGE = "https://github.com/acme/widget/pull/7"
 
 
-def make_clone(folder: Path, remote: str) -> Path:
-    """Make a git repository with one commit and an origin remote, standing in for a clone."""
+def run_git(folder: Path, *arguments: str) -> None:
+    """Run git in a folder, failing the test if git fails."""
     git = shutil.which("git")
     assert git, "these tests run real git"
+    subprocess.run([git, "-C", str(folder), *arguments], check=True)
+
+
+def make_clone(folder: Path, remote: str) -> Path:
+    """Make a git repository with one commit and an origin remote, standing in for a clone."""
     folder.mkdir(parents=True)
-    identity = ["-c", "user.name=tester", "-c", "user.email=tester@example.test"]
-    for arguments in (
-        ["init", "-q"],
-        ["remote", "add", "origin", remote],
-        [*identity, "commit", "-q", "--allow-empty", "-m", "start"],
-    ):
-        subprocess.run([git, "-C", str(folder), *arguments], check=True)
+    run_git(folder, "init", "-q")
+    run_git(folder, "remote", "add", "origin", remote)
+    run_git(
+        folder, "-c", "user.name=tester", "-c", "user.email=t@example.test", "commit", "-q", "--allow-empty", "-m", "a"
+    )
     return folder
 
 
@@ -101,6 +104,28 @@ def test_removing_a_worktree_keeps_the_clone_made_in_the_checkout_folder_for_the
     assert local_review.existing_worktree(PAGE, str(tmp_path)) is None
     open_for_review(PAGE, QUIET_IDE, str(tmp_path))
     assert [command for command, _folder in github.calls] == ["repo clone", "pr checkout", "pr checkout"]
+
+
+def test_a_worktree_already_on_the_pull_requests_branch_is_reused_wherever_it_is(tmp_path, github):
+    clone = make_clone(tmp_path / "code" / "widget", "https://github.com/acme/widget")
+    elsewhere = tmp_path / "elsewhere" / "widget-pr7"
+    run_git(clone, "worktree", "add", "-q", "-b", "widget-pr7", str(elsewhere))
+    (tmp_path / "checkout").mkdir()
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path / "checkout"), str(tmp_path / "code"))
+    assert github.calls == [("pr checkout", elsewhere)]
+    assert not (tmp_path / "checkout" / "widget-pr7").exists()
+
+
+def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_removal(tmp_path, github):
+    jetbrains = python_command(
+        "import pathlib, sys; pathlib.Path(sys.argv[1], '.idea').mkdir(); "
+        "pathlib.Path(sys.argv[1], '.idea', 'workspace.xml').touch()"
+    )
+    open_for_review(PAGE, jetbrains, str(tmp_path))
+    worktree = tmp_path / "widget-pr7"
+    assert (worktree / ".idea" / "workspace.xml").exists()
+    local_review.remove_worktree(worktree)
+    assert not worktree.exists()
 
 
 def test_a_worktree_holding_uncommitted_work_is_not_removed(tmp_path, github):

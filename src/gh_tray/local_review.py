@@ -29,6 +29,8 @@ PULL_REQUEST_URL = re.compile(r"^https?://[^/]+/(?P<owner>[^/]+)/(?P<name>[^/]+)
 REMOTE_URL_LINE = re.compile(r"^\s*url\s*=\s*(\S+)", re.MULTILINE)
 # The owner and name that end every form of remote address: https://, ssh:// and git@host:owner/name alike.
 REMOTE_REPOSITORY = re.compile(r"[/:](?P<repository>[^/:]+/[^/]+?)(?:\.git)?/?$")
+# Where JetBrains IDEs keep a project's settings, which they make in every folder they open.
+IDE_SETTINGS_FOLDER = ".idea"
 
 
 class ReviewError(RuntimeError):
@@ -48,6 +50,14 @@ class PullRequest:
     def repository(self) -> str:
         """Return the repository as ``owner/name``."""
         return f"{self.owner}/{self.name}"
+
+    @property
+    def local_name(self) -> str:
+        """Return the name its review worktree and branch share, such as ``widget-pr7``.
+
+        The repository's name keeps the branch apart from any of the user's own, such as a plain ``pr-7``.
+        """
+        return f"{self.name}-pr{self.number}"
 
 
 def pull_request_at(url: str) -> PullRequest | None:
@@ -85,12 +95,12 @@ def find_clone(folder: Path, repository: str) -> Path | None:
 
 
 def worktree_folder(checkout_folder: Path, pull: PullRequest) -> Path:
-    """Return where a pull request's review worktree lives, such as ``<checkout folder>/widget-pr7``.
+    """Return where a pull request's review worktree goes, such as ``<checkout folder>/widget-pr7``.
 
     :param checkout_folder: the folder review worktrees go in
     :param pull: the pull request
     """
-    return checkout_folder / f"{pull.name}-pr{pull.number}"
+    return checkout_folder / pull.local_name
 
 
 def existing_worktree(url: str, checkout_folder: str) -> Path | None:
@@ -139,26 +149,50 @@ def clone_into(folder: Path, repository: str) -> Path:
     return clone
 
 
+def clone_of(worktree: Path) -> Path:
+    """Return the clone a worktree belongs to.
+
+    :param worktree: the worktree
+    :raises ReviewError: when the folder is not a worktree
+    """
+    return Path(git(["rev-parse", "--path-format=absolute", "--git-common-dir"], worktree).strip()).parent
+
+
+def worktree_on_branch(clone: Path, branch: str) -> Path | None:
+    """Return the worktree of a clone that has a branch checked out, wherever it is, or None when none has.
+
+    Pruning first forgets worktrees whose folders were deleted by hand, which would otherwise still hold the branch.
+    :param clone: the clone
+    :param branch: the branch's name
+    """
+    git(["worktree", "prune"], clone)
+    for block in git(["worktree", "list", "--porcelain"], clone).split("\n\n"):
+        fields = dict(line.split(" ", 1) for line in block.splitlines() if " " in line)
+        if fields.get("branch") == f"refs/heads/{branch}":
+            return Path(fields["worktree"])
+    return None
+
+
 def add_worktree(clone: Path, folder: Path) -> None:
     """Add a worktree to a clone, detached until a pull request's branch is checked out in it.
 
-    Pruning first forgets worktrees whose folders were deleted by hand, which would otherwise keep their branches.
     :param clone: the clone to add the worktree to
     :param folder: where the worktree goes
     """
-    git(["worktree", "prune"], clone)
     git(["worktree", "add", "--detach", str(folder)], clone)
 
 
 def remove_worktree(folder: Path) -> None:
     """Remove a review worktree, keeping its branch in the clone; git refuses one with uncommitted changes.
 
-    Git runs from the clone, since Windows cannot delete the folder a process is working in.
+    An IDE's own untracked settings folder is not the user's work, so it does not stop the removal. Git runs from the
+    clone, since Windows cannot delete the folder a process is working in.
     :param folder: the worktree
     :raises ReviewError: when git fails, for instance over uncommitted changes
     """
-    shared = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], folder).strip()
-    git(["worktree", "remove", str(folder)], Path(shared).parent)
+    changes = git(["status", "--porcelain"], folder).splitlines()
+    only_ide_settings = bool(changes) and all(line.startswith(f"?? {IDE_SETTINGS_FOLDER}/") for line in changes)
+    git(["worktree", "remove", *(["--force"] if only_ide_settings else []), str(folder)], clone_of(folder))
 
 
 def check_out(pull: PullRequest, folder: Path) -> None:
@@ -168,7 +202,7 @@ def check_out(pull: PullRequest, folder: Path) -> None:
     :param folder: the worktree
     :raises GitHubError: when the checkout fails, for instance over uncommitted changes in the way
     """
-    run(["pr", "checkout", pull.url, "--branch", f"pr-{pull.number}"], timeout=CHECKOUT_TIMEOUT_SECONDS, folder=folder)
+    run(["pr", "checkout", pull.url, "--branch", pull.local_name], timeout=CHECKOUT_TIMEOUT_SECONDS, folder=folder)
 
 
 def ide_command_line(command: str, folder: Path) -> str:
@@ -222,10 +256,16 @@ def open_for_review(url: str, ide_command: str, checkout_folder: str, code_folde
     roots = [Path(folder).expanduser() for folder in (code_folder, checkout_folder) if folder]
     if missing := [root for root in roots if not root.is_dir()]:
         raise ReviewError(f"the folder {missing[0]} does not exist")
-    folder = worktree_folder(roots[-1], pull)
+    planned = worktree_folder(roots[-1], pull)
+    if planned.exists():
+        clone = clone_of(planned)
+    else:
+        found = next(filter(None, (find_clone(root, pull.repository) for root in roots)), None)
+        clone = found or clone_into(roots[0], pull.repository)
+    # A worktree already on the pull request's branch is reused wherever it is, since git lets only one hold it.
+    folder = worktree_on_branch(clone, pull.local_name) or planned
     if not folder.exists():
-        clone = next(filter(None, (find_clone(root, pull.repository) for root in roots)), None)
-        add_worktree(clone or clone_into(roots[0], pull.repository), folder)
+        add_worktree(clone, folder)
     check_out(pull, folder)
     logger.info("opening {} for review in {}", pull.url, folder)
     open_in_ide(ide_command, folder)
