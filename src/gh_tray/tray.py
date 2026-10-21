@@ -7,6 +7,7 @@ import threading
 import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 from loguru import logger
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
@@ -16,17 +17,17 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from gh_tray import APP_NAME
 from gh_tray.config import (
     BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
     CODE_FOLDER_KEY,
     IDE_COMMAND_KEY,
     LOG_PATH,
     OPACITY_KEY,
-    has_review_settings,
     load_config,
 )
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
 from gh_tray.github import GitHubError
-from gh_tray.local_review import ReviewError, open_for_review
+from gh_tray.local_review import ReviewError, existing_worktree, open_for_review, remove_worktree
 from gh_tray.notifier import Notifier
 from gh_tray.popup import rows_to_show
 from gh_tray.service import PollResult, poll
@@ -125,8 +126,8 @@ class Tray(QObject):
 
     # Raised from whichever thread a console interrupt arrives on, so quitting happens on the toolkit's own thread.
     quit_asked = Signal()
-    # Raised from the thread that got a pull request ready to review, carrying why it could not.
-    review_failed = Signal(str)
+    # Raised from the thread that got a pull request ready to review, or removed its worktree, carrying why it failed.
+    local_review_failed = Signal(str)
 
     def __init__(self) -> None:
         """Load the settings, build the icon in its starting state, and build the changes window ready to show."""
@@ -151,12 +152,13 @@ class Tray(QObject):
         self.window.refresh_asked.connect(self.on_refresh)
         self.window.dashboard_asked.connect(self.on_dashboard)
         self.window.review_asked.connect(self.on_review)
-        self.review_failed.connect(self.on_review_failed)
+        self.window.remove_asked.connect(self.on_remove)
+        self.local_review_failed.connect(self.on_local_review_failed)
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
-        # The page of a pull request whose review waits on the settings window, or empty when none does.
-        self.pending_review = ""
+        # The page and IDE command of a review waiting on the settings window, or None when none is.
+        self.pending_review: tuple[str, str] | None = None
         self.account: Account | None = None
         self.lookup = AccountLookup()
         self.lookup.found.connect(self.on_account_found)
@@ -280,35 +282,57 @@ class Tray(QObject):
         except RuntimeError as error:
             logger.error("could not open the dashboard: {}", error)
 
-    def on_review(self, url: str) -> None:
-        """Open a pull request in the IDE, on a thread of its own since a first clone can take minutes.
+    def on_review(self, url: str, command: str) -> None:
+        """Open a pull request in an IDE, on a thread of its own since a first clone can take minutes.
 
-        Without an IDE command or code folder, the settings open at the one missing, and the review waits for them.
+        Without a command or checkout folder, the settings open at the one missing, and the review waits for them.
         :param url: the pull request's page
+        :param command: the command that opens a folder in the chosen IDE
         """
-        if not has_review_settings(self.config):
-            self.pending_review = url
+        if not (command and self.config[CHECKOUT_FOLDER_KEY]):
+            self.pending_review = (url, command)
             self.open_settings().ask_for_review_settings()
             return
-        threading.Thread(target=self.review, args=(url,), daemon=True, name=f"{APP_NAME}-review").start()
+        threading.Thread(target=self.review, args=(url, command), daemon=True, name=f"{APP_NAME}-review").start()
 
-    def review(self, url: str) -> None:
-        """Open a pull request in the IDE, reporting a failure over a signal, since this runs off the toolkit's thread.
+    def review(self, url: str, command: str) -> None:
+        """Open a pull request in an IDE, reporting a failure over a signal, since this runs off the toolkit's thread.
+
+        :param url: the pull request's page
+        :param command: the command that opens a folder in the chosen IDE
+        """
+        try:
+            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.config[CODE_FOLDER_KEY])
+        except (ReviewError, GitHubError) as error:
+            logger.warning("could not open {} for review: {}", url, error)
+            self.local_review_failed.emit(f"Could not review in the IDE: {error}")
+
+    def on_remove(self, url: str) -> None:
+        """Remove a pull request's review worktree, on a thread of its own since a large one takes a while to delete.
 
         :param url: the pull request's page
         """
-        try:
-            open_for_review(url, self.config[CODE_FOLDER_KEY], self.config[IDE_COMMAND_KEY])
-        except (ReviewError, GitHubError) as error:
-            logger.warning("could not open {} for review: {}", url, error)
-            self.review_failed.emit(str(error))
+        folder = existing_worktree(url, self.config[CHECKOUT_FOLDER_KEY])
+        if folder is not None:
+            threading.Thread(target=self.remove, args=(folder,), daemon=True, name=f"{APP_NAME}-remove").start()
 
-    def on_review_failed(self, reason: str) -> None:
-        """Say on the tray icon why a pull request could not be opened in the IDE.
+    def remove(self, folder: Path) -> None:
+        """Remove a review worktree, reporting a failure over a signal, since this runs off the toolkit's thread.
+
+        :param folder: the worktree
+        """
+        try:
+            remove_worktree(folder)
+        except ReviewError as error:
+            logger.warning("could not remove {}: {}", folder, error)
+            self.local_review_failed.emit(f"Could not remove {folder.name}: {error}")
+
+    def on_local_review_failed(self, reason: str) -> None:
+        """Say on the tray icon why reviewing in an IDE, or removing a review worktree, failed.
 
         :param reason: what went wrong, briefly
         """
-        self.icon.showMessage(f"{APP_NAME}: could not review in the IDE", reason, QSystemTrayIcon.MessageIcon.Warning)
+        self.icon.showMessage(APP_NAME, reason, QSystemTrayIcon.MessageIcon.Warning)
 
     def on_refresh(self, *_) -> None:
         """Poll as soon as possible."""
@@ -364,9 +388,12 @@ class Tray(QObject):
         saved = load_config()
         self.window.set_blur(bool(saved.get(BLUR_KEY, True)))
         self.window.set_opacity(saved.get(OPACITY_KEY))
-        waiting, self.pending_review = self.pending_review, ""
-        if waiting and has_review_settings(saved):
-            self.on_review(waiting)
+        waiting, self.pending_review = self.pending_review, None
+        if waiting is not None:
+            url, command = waiting
+            command = command or self.config[IDE_COMMAND_KEY]
+            if command and self.config[CHECKOUT_FOLDER_KEY]:
+                self.on_review(url, command)
 
     def on_opacity_moved(self, percent: int) -> None:
         """Follow the settings slider live, bringing the window up under the settings if it is hidden.

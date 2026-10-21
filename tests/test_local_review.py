@@ -77,30 +77,48 @@ def test_a_clone_is_found_by_any_of_its_remotes_in_any_address_form_and_any_case
     assert local_review.find_clone(tmp_path, "acme/gadget") is None
 
 
-def test_review_adds_a_worktree_to_the_local_clone_and_a_second_review_only_updates_it(tmp_path, github):
-    make_clone(tmp_path / "widget", "git@github.com:Acme/Widget.git")
-    worktree = tmp_path / "temp" / "widget-pr7"
-    open_for_review(PAGE, str(tmp_path), RECORDING_IDE)
+# Opens nothing and leaves the worktree clean, so it can be removed.
+QUIET_IDE = python_command("pass")
+
+
+def test_review_adds_a_worktree_to_a_clone_in_the_code_folder_and_a_second_review_only_updates_it(tmp_path, github):
+    code, checkout = tmp_path / "code", tmp_path / "checkout"
+    make_clone(code / "widget", "git@github.com:Acme/Widget.git")
+    checkout.mkdir()
+    worktree = checkout / "widget-pr7"
+    open_for_review(PAGE, RECORDING_IDE, str(checkout), str(code))
     assert (worktree / "opened").exists()
-    open_for_review(PAGE, str(tmp_path), RECORDING_IDE)
+    open_for_review(PAGE, RECORDING_IDE, str(checkout), str(code))
     assert github.calls == [("pr checkout", worktree), ("pr checkout", worktree)]
 
 
-def test_review_clones_a_repository_the_code_folder_lacks(tmp_path, github):
-    open_for_review(PAGE, str(tmp_path), RECORDING_IDE)
-    assert [command for command, _folder in github.calls] == ["repo clone", "pr checkout"]
-    assert (tmp_path / "temp" / "widget-pr7" / "opened").exists()
+def test_removing_a_worktree_keeps_the_clone_made_in_the_checkout_folder_for_the_next_review(tmp_path, github):
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path))
+    worktree = tmp_path / "widget-pr7"
+    assert local_review.existing_worktree(PAGE, str(tmp_path)) == worktree
+    local_review.remove_worktree(worktree)
+    assert not worktree.exists()
+    assert local_review.existing_worktree(PAGE, str(tmp_path)) is None
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path))
+    assert [command for command, _folder in github.calls] == ["repo clone", "pr checkout", "pr checkout"]
+
+
+def test_a_worktree_holding_uncommitted_work_is_not_removed(tmp_path, github):
+    open_for_review(PAGE, RECORDING_IDE, str(tmp_path))
+    with pytest.raises(ReviewError, match="untracked"):
+        local_review.remove_worktree(tmp_path / "widget-pr7")
+    assert (tmp_path / "widget-pr7" / "opened").exists()
 
 
 def test_an_ide_command_that_fails_at_once_is_reported(tmp_path, github):
     make_clone(tmp_path / "widget", "https://github.com/acme/widget")
     with pytest.raises(ReviewError, match="exit code 3"):
-        open_for_review(PAGE, str(tmp_path), python_command("raise SystemExit(3)"))
+        open_for_review(PAGE, python_command("raise SystemExit(3)"), str(tmp_path))
 
 
-def test_review_needs_both_the_ide_command_and_the_code_folder(tmp_path):
+def test_review_needs_both_the_ide_command_and_the_checkout_folder(tmp_path):
     with pytest.raises(ReviewError, match="Settings"):
-        open_for_review(PAGE, str(tmp_path), "")
+        open_for_review(PAGE, RECORDING_IDE, "")
 
 
 def test_an_ide_command_without_the_placeholder_gets_the_folder_on_the_end(tmp_path):

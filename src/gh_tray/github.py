@@ -54,16 +54,17 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS, folder: Path 
     return done.stdout
 
 
-def first_error_line(stderr: str) -> str:
+def first_error_line(stderr: str, limit: int | None = 120) -> str:
     """Pick the most informative line out of a failed call.
 
     :param stderr: everything the tool wrote to its error stream
-    :return: a short single-line description
+    :param limit: how many characters to keep, sized for hover text by default, or None to keep the whole line
+    :return: a single-line description
     """
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
     if not lines:
         return "the GitHub CLI failed without saying why"
-    return next((line for line in lines if "error" in line.lower()), lines[0])[:120]
+    return next((line for line in lines if "error" in line.lower()), lines[0])[:limit]
 
 
 def parse(payload: str, what: str) -> object:

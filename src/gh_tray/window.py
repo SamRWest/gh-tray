@@ -48,8 +48,17 @@ from PySide6.QtWidgets import (
 )
 
 from gh_tray import APP_NAME
-from gh_tray.config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
-from gh_tray.local_review import pull_request_at
+from gh_tray.config import (
+    APP_ICON_PATH,
+    BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
+    IDE_COMMAND_KEY,
+    OPACITY_KEY,
+    default_opacity,
+    load_config,
+)
+from gh_tray.environment import ide_presets
+from gh_tray.local_review import existing_worktree, pull_request_at
 from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -150,6 +159,16 @@ def column_of(key: str) -> int:
     return next(index for index, (name, *_rest) in enumerate(COLUMNS) if name == key)
 
 
+def ide_choices(default: str) -> list[tuple[str, str]]:
+    """Return the Review in IDE submenu's entries as (label, command): the default IDE first and marked, then the rest.
+
+    :param default: the IDE command from the settings, which may be one typed in rather than a ready-made one
+    """
+    names = {command: name for name, command in ide_presets()}
+    first = [(f"{names.get(default, default)} (default)", default)] if default else []
+    return first + [(name, command) for name, command in ide_presets() if command != default]
+
+
 def cells_of(entry: Row) -> list[str]:
     """Return one row's text, in column order.
 
@@ -170,12 +189,14 @@ def cells_of(entry: Row) -> list[str]:
 
 
 class ChangesWindow(QWidget):
-    """The window itself. Emits refresh_asked, dashboard_asked and review_asked; only the tray acts on them."""
+    """The window itself. Emits refresh_asked, dashboard_asked, review_asked and remove_asked; only the tray acts."""
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
-    # Carries the page of the pull request to review in the IDE.
-    review_asked = Signal(str)
+    # Carries the page of the pull request to review, and the command that opens a folder in the chosen IDE.
+    review_asked = Signal(str, str)
+    # Carries the page of the pull request whose review worktree is to go.
+    remove_asked = Signal(str)
 
     def __init__(self, entries: list[Row], layout: QSettings | None = None) -> None:
         """Build the window, hidden.
@@ -553,16 +574,21 @@ class ChangesWindow(QWidget):
         return super().eventFilter(watched, event)
 
     def row_menu(self, entry: Row) -> QMenu:
-        """Return the menu for one row: mark it seen or unseen, open it on GitHub, or review it in the IDE.
+        """Return a row's menu: mark it seen or unseen, open it on GitHub, review it in an IDE, or remove its worktree.
 
         :param entry: the row that was right-clicked
         """
+        settings = load_config()
         menu = QMenu(self)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         menu.addAction("Mark unseen" if entry.seen else "Mark seen", lambda: self.toggle_seen(entry))
         menu.addAction("Open on GitHub", lambda: self.open(entry.url)).setEnabled(bool(entry.url))
-        review = menu.addAction("Review in IDE", lambda: self.review(entry.url))
+        review = menu.addMenu("Review in IDE")
         review.setEnabled(pull_request_at(entry.url) is not None)
+        for label, command in ide_choices(settings.get(IDE_COMMAND_KEY, "")):
+            review.addAction(label, lambda command=command: self.review(entry.url, command))
+        remove = menu.addAction("Remove local worktree", lambda: self.remove_asked.emit(entry.url))
+        remove.setEnabled(existing_worktree(entry.url, settings.get(CHECKOUT_FOLDER_KEY, "")) is not None)
         return menu
 
     def toggle_seen(self, entry: Row) -> None:
@@ -845,13 +871,14 @@ class ChangesWindow(QWidget):
         webbrowser.open(url)
         self.hide()
 
-    def review(self, url: str) -> None:
-        """Ask the tray to open a pull request in the IDE, and put the window away, since the IDE is about to cover it.
+    def review(self, url: str, command: str) -> None:
+        """Ask the tray to open a pull request in an IDE, and put the window away, since the IDE is about to cover it.
 
         :param url: the pull request's page
+        :param command: the command that opens a folder in the chosen IDE
         """
         self.hide()
-        self.review_asked.emit(url)
+        self.review_asked.emit(url, command)
 
     def open_dashboard(self) -> None:
         """Ask the tray to open the dashboard, and put the window away, since the dashboard is about to cover it."""

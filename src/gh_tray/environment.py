@@ -25,6 +25,7 @@ from gh_tray import APP_NAME
 UTF8_CODE_PAGE = 65001
 # Stands for the folder to open in an IDE command.
 FOLDER_PLACEHOLDER = "{folder}"
+DEFAULT_IDE_COMMAND = f"code {FOLDER_PLACEHOLDER}"
 
 # Tried in order; first present wins. A maximised window still keeps its title bar, unlike full screen.
 LINUX_TERMINALS: tuple[tuple[str, str | None, tuple[str, ...]], ...] = (
@@ -130,12 +131,18 @@ def shell_quote(argument: str) -> str:
     return subprocess.list2cmdline([argument]) if sys.platform == "win32" else shlex.quote(argument)
 
 
-def ide_presets() -> tuple[str, ...]:
-    """Return ready-made commands that open a folder in the commonest IDEs, under this platform's launcher names."""
+def ide_presets() -> tuple[tuple[str, str], ...]:
+    """Return the commonest IDEs as (name, command opening a folder in it), under this platform's launcher names.
+
+    VS Code comes first, as the default.
+    """
     # JetBrains installs on Windows put pycharm64.exe and the like on the path; elsewhere the launchers drop the 64.
     suffix = "64" if sys.platform == "win32" else ""
-    launchers = (*(f"{name}{suffix}" for name in ("pycharm", "idea", "webstorm")), "code")
-    return tuple(f"{launcher} {FOLDER_PLACEHOLDER}" for launcher in launchers)
+    jetbrains = (("PyCharm", "pycharm"), ("IntelliJ IDEA", "idea"), ("WebStorm", "webstorm"))
+    return (
+        ("VS Code", DEFAULT_IDE_COMMAND),
+        *((name, f"{launcher}{suffix} {FOLDER_PLACEHOLDER}") for name, launcher in jetbrains),
+    )
 
 
 def github_auth_state() -> tuple[bool, str]:

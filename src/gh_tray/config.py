@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import tempfile
 
 from loguru import logger
 from platformdirs import user_data_path
 
 from gh_tray import APP_NAME
+from gh_tray.environment import DEFAULT_IDE_COMMAND
 from gh_tray.storage import read_json, write_json_atomic
 from gh_tray.theme import STYLES
 
@@ -26,8 +28,10 @@ LAYOUT_PATH = APP_DIR / "layout.ini"
 
 DEFAULT_CONFIG: dict = {
     "dashboard_command": "",
-    "ide_command": "",
+    "ide_command": DEFAULT_IDE_COMMAND,
     "code_folder": "",
+    # Review worktrees are throwaway, so by default they go where the system keeps temporary files.
+    "checkout_folder": tempfile.gettempdir(),
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
@@ -49,10 +53,12 @@ DEFAULT_CONFIG: dict = {
     },
 }
 
-# The command that opens a folder in the IDE, and the folder holding clones, for reviewing a pull request locally.
+# For reviewing a pull request locally: the command that opens a folder in the IDE, the folder holding the user's own
+# clones (optional), and the folder review worktrees go in.
 IDE_COMMAND_KEY = "ide_command"
 CODE_FOLDER_KEY = "code_folder"
-TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CODE_FOLDER_KEY)
+CHECKOUT_FOLDER_KEY = "checkout_folder"
+TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CODE_FOLDER_KEY, CHECKOUT_FOLDER_KEY)
 HIDDEN_OWNERS_KEY = "hidden_owners"
 # Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
@@ -145,14 +151,6 @@ def merge_stored(config: dict, stored: object) -> dict:
     elif toasts is not None:
         logger.warning("the notification settings are not a set of switches, falling back to defaults")
     return config
-
-
-def has_review_settings(config: dict) -> bool:
-    """Return whether the settings name both the IDE command and the code folder, which reviewing in an IDE needs.
-
-    :param config: the settings
-    """
-    return bool(config.get(IDE_COMMAND_KEY) and config.get(CODE_FOLDER_KEY))
 
 
 def default_opacity(blurred: bool) -> int:

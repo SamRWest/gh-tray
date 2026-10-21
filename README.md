@@ -43,7 +43,8 @@ amber for anything else unread, green when there is nothing to do, and grey when
 
 In the changes window:
 
-- Double-click a row to open it on GitHub. Right-click a row to mark it seen or unseen, or to review it in your IDE.
+- Double-click a row to open it on GitHub. Right-click a row to mark it seen or unseen, review it in an IDE, or remove
+  the worktree a review made.
 - Click a heading to sort. Use the buttons at the bottom to filter, and Ctrl+F to search every column.
 - Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or
   **Show reviewed**; each sits on a tinted background so it reads as done.
@@ -60,21 +61,33 @@ notifications.
 ### Reviewing in an IDE
 
 **Review in IDE** opens a pull request in its own worktree, so your clone's branch and uncommitted work stay as they
-are. It needs two settings. If either is missing, it opens the settings at the one missing, with the IDE list dropped
-down, and carries on once you save:
+are. Its submenu lists your default IDE first, then the rest of VS Code, PyCharm, IntelliJ IDEA and WebStorm. Three
+settings shape it:
 
-- **IDE command** opens a folder in your IDE. Pick a ready-made one, such as `pycharm64 {folder}` on Windows or
-  `code {folder}`, or type your own; `{folder}` stands for the worktree, and goes on the end if you leave it out.
-- **Code folder** is the folder your clones are in, such as `~/code`.
+- **IDE command** is the default IDE, VS Code unless you change it. Pick a ready-made command, such as
+  `pycharm64 {folder}` on Windows, or type your own; `{folder}` stands for the worktree, and goes on the end if you
+  leave it out.
+- **Code folder** is optional: the folder your clones are in, such as `~/code`.
+- **Checkout folder** is where worktrees go, named like `widget-pr7`. It starts as your system's temporary folder.
 
-The tray then finds a clone in the code folder with a remote for the pull request's repository, or clones it there. It
-adds a worktree in the code folder's `temp` folder, named like `widget-pr7`, and checks out the pull request in it with
-`gh pr checkout`. A second review of the same pull request brings that worktree up to date instead.
+The tray looks for a clone with a remote for the pull request's repository in the code folder, then the checkout folder,
+and clones it into the first of them that is set if there is none. It adds the worktree and checks the pull request out
+in it with `gh pr checkout`. A second review of the same pull request brings that worktree up to date instead. If the
+IDE command or checkout folder has been cleared, the settings open at the one missing, and the review carries on once
+you save.
 
-No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it. JetBrains IDEs and
-VS Code's [GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github)
-extension each look up the pull request whose branch is checked out, and show its review comments in the editor. A pull
-request from a fork may not be recognised this way; open it from the IDE's own pull request list instead.
+**Remove local worktree** deletes a pull request's worktree once you are done, and is greyed out until there is one. Git
+refuses to remove a worktree holding uncommitted work, and the pull request's branch stays in the clone.
+
+No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it:
+
+- VS Code's
+  [GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github)
+  extension looks up the pull request for the checked-out branch when the folder opens, and shows its review comments in
+  the editor.
+- JetBrains IDEs do the same only once their **Pull Requests** tool window has been opened in that project. Open it from
+  **Git | GitHub | View Pull Requests**, and the review comments appear in the editor.
+- A pull request from a fork may not be recognised either way; open it from the IDE's own pull request list instead.
 
 ## If something goes wrong
 

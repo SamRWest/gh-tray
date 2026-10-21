@@ -123,7 +123,7 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
 ):
     from gh_tray import settings_window
 
-    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    stored = copy.deepcopy(config.DEFAULT_CONFIG) | {config.IDE_COMMAND_KEY: "", config.CHECKOUT_FOLDER_KEY: ""}
     for module in (tray, settings_window):
         monkeypatch.setattr(module, "load_config", lambda: copy.deepcopy(stored))
     monkeypatch.setattr(settings_window, "save_config", stored.update)
@@ -134,17 +134,16 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     subject = build_tray()
     monkeypatch.setattr(subject.lookup, "start", lambda: None)
     page = "https://github.com/acme/widget/pull/7"
-    subject.window.review_asked.emit(page)
+    subject.window.review_asked.emit(page, "idea64 {folder}")
     settings = subject.settings
     assert settings is not None
     qtbot.addWidget(settings)
     assert settings.ide.view().isVisible(), "the IDE command's list should be open, ready to pick from"
     settings.ide.hidePopup()
-    settings.ide.setCurrentText("code {folder}")
-    settings.code_folder.setText(str(tmp_path))
+    settings.checkout_folder.setText(str(tmp_path))
     settings.save_and_close()
     qtbot.waitUntil(lambda: bool(reviewed))
-    assert reviewed == [(page, str(tmp_path), "code {folder}")]
+    assert reviewed == [(page, "idea64 {folder}", str(tmp_path), "")]
 
 
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):

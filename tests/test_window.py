@@ -15,7 +15,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QMenu
 from pytestqt.qtbot import QtBot
 
-from gh_tray import config, popup, theme, window
+from gh_tray import config, environment, popup, theme, window
 
 
 def row(
@@ -213,16 +213,45 @@ def test_marking_is_remembered_through_remember_row_seen(view, qtbot, build_wind
     assert (marked_row.url, seen) == (view.entries[0].url, True)
 
 
-def test_review_in_ide_is_offered_only_for_a_pull_request_and_asks_the_tray_with_its_page(build_window, qtbot):
+def test_review_in_ide_offers_the_default_ide_first_then_the_rest_for_a_pull_request_only(
+    build_window, qtbot, monkeypatch
+):
     page = "https://github.com/acme/widget/pull/7"
     view = build_window([replace(ROWS[0], url=page), ROWS[1]])
+    monkeypatch.setattr(window, "load_config", lambda: {config.IDE_COMMAND_KEY: environment.DEFAULT_IDE_COMMAND})
     view.show()
     offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[1]).actions()}
-    assert offered == {"Mark unseen": True, "Open on GitHub": True, "Review in IDE": False}
+    assert offered == {
+        "Mark unseen": True,
+        "Open on GitHub": True,
+        "Review in IDE": False,
+        "Remove local worktree": False,
+    }
+    menu = right_click_menu(view, qtbot, 0)
+    review = menu.findChild(QMenu)
+    assert review is not None, "Review in IDE should be a submenu"
+    assert [action.text() for action in review.actions()] == [
+        "VS Code (default)",
+        "PyCharm",
+        "IntelliJ IDEA",
+        "WebStorm",
+    ]
     with qtbot.waitSignal(view.review_asked) as asked:
-        choose(right_click_menu(view, qtbot, 0), "Review in IDE")
-    assert asked.args == [page]
+        choose(review, "PyCharm")
+    menu.close()
+    assert asked.args == [page, dict(environment.ide_presets())["PyCharm"]]
     assert not view.isVisible()
+
+
+def test_remove_local_worktree_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):
+    page = "https://github.com/acme/widget/pull/7"
+    view = build_window([replace(ROWS[0], url=page)])
+    monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+    (tmp_path / "widget-pr7").mkdir()
+    view.show()
+    with qtbot.waitSignal(view.remove_asked) as asked:
+        choose(right_click_menu(view, qtbot, 0), "Remove local worktree")
+    assert asked.args == [page]
 
 
 def test_a_heading_click_sorts_and_a_second_click_reverses(view):

@@ -33,6 +33,7 @@ from gh_tray import APP_NAME
 from gh_tray.config import (
     APP_ICON_PATH,
     BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
     CODE_FOLDER_KEY,
     HIDDEN_OWNERS_KEY,
     IDE_COMMAND_KEY,
@@ -159,7 +160,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard and IDE commands, the code folder and the window's blur and opacity."""
+        """Lay out the numbers, the dashboard and IDE commands, the review folders and the window's blur and opacity."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -173,7 +174,14 @@ class SettingsDialog(QDialog):
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
         form.addRow("IDE command", self.ide_choice())
-        form.addRow("Code folder", self.code_folder_picker())
+        self.code_folder = self.folder_box(
+            CODE_FOLDER_KEY, "Optional: the folder your clones are in", "Searched first for a clone, and cloned into."
+        )
+        form.addRow("Code folder", self.with_browse_button(self.code_folder))
+        self.checkout_folder = self.folder_box(
+            CHECKOUT_FOLDER_KEY, "Where review worktrees go", "Review worktrees go here, named like widget-pr7."
+        )
+        form.addRow("Checkout folder", self.with_browse_button(self.checkout_folder))
         form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
         return form
@@ -182,35 +190,50 @@ class SettingsDialog(QDialog):
         """Lay out the IDE command: one of the ready-made commands, or one typed in."""
         self.ide = QComboBox(self)
         self.ide.setEditable(True)
-        self.ide.addItems(ide_presets())
+        self.ide.addItems([command for _name, command in ide_presets()])
         self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
-        self.ide.setToolTip("Opens a folder in your IDE to review a pull request; {folder} stands for the folder.")
+        self.ide.setToolTip("The IDE a row's Review in IDE uses by default; {folder} stands for the folder to open.")
         return self.ide
 
-    def code_folder_picker(self) -> QHBoxLayout:
-        """Lay out the code folder's box, with a button that picks the folder from the desktop's folder dialog."""
-        self.code_folder = QLineEdit(str(self.config[CODE_FOLDER_KEY]), self)
-        self.code_folder.setPlaceholderText("The folder your clones are in")
-        self.code_folder.setToolTip("Clones are found or made here, and review worktrees go in its temp folder.")
+    def folder_box(self, key: str, placeholder: str, tooltip: str) -> QLineEdit:
+        """Return a box holding the folder one setting names.
+
+        :param key: the setting
+        :param placeholder: what the box says while empty
+        :param tooltip: what the folder is for
+        """
+        box = QLineEdit(str(self.config[key]), self)
+        box.setPlaceholderText(placeholder)
+        box.setToolTip(tooltip)
+        return box
+
+    def with_browse_button(self, box: QLineEdit) -> QHBoxLayout:
+        """Lay out a folder's box with a button beside it that picks the folder from the desktop's folder dialog.
+
+        :param box: the folder's box, which the dialog starts from and fills
+        """
         browse = QPushButton("Browse...", self)
-        browse.clicked.connect(self.browse_code_folder)
+        browse.clicked.connect(lambda: self.browse_into(box))
         row = QHBoxLayout()
-        row.addWidget(self.code_folder, 1)
+        row.addWidget(box, 1)
         row.addWidget(browse)
         return row
 
+    def browse_into(self, box: QLineEdit) -> None:
+        """Pick a folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled.
+
+        :param box: the folder's box
+        """
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder", box.text())
+        if chosen:
+            box.setText(chosen)
+
     def ask_for_review_settings(self) -> None:
-        """Point at the missing review setting: drop the IDE command's list open, or else focus the code folder."""
+        """Point at the missing review setting: drop the IDE command's list open, or else focus the checkout folder."""
         if not self.ide.currentText().strip():
             self.ide.showPopup()
         else:
-            self.code_folder.setFocus()
-
-    def browse_code_folder(self) -> None:
-        """Pick the code folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled."""
-        chosen = QFileDialog.getExistingDirectory(self, "Code folder", self.code_folder.text())
-        if chosen:
-            self.code_folder.setText(chosen)
+            self.checkout_folder.setFocus()
 
     def blur_switch(self) -> QCheckBox:
         """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
@@ -365,6 +388,7 @@ class SettingsDialog(QDialog):
         self.config["dashboard_command"] = self.dashboard.text().strip()
         self.config[IDE_COMMAND_KEY] = self.ide.currentText().strip()
         self.config[CODE_FOLDER_KEY] = self.code_folder.text().strip()
+        self.config[CHECKOUT_FOLDER_KEY] = self.checkout_folder.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
         self.config[BLUR_KEY] = self.blur.isChecked()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
