@@ -200,12 +200,30 @@ def is_leftover(folder: Path) -> bool:
     return folder.is_dir() and not (folder / ".git").exists()
 
 
+def ensure_not_held_open(folder: Path) -> None:
+    """Refuse to go on while another program holds a folder open, before anything in it is deleted.
+
+    Windows will not rename a folder that a program is working in or has a file open in, so renaming it and back finds
+    out without harm, where deleting would remove the files and then fail on the folder. Elsewhere a folder held open
+    can be deleted anyway, and the rename always succeeds.
+    :param folder: the folder about to be deleted
+    :raises ReviewError: when the folder is held open
+    """
+    probe = folder.with_name(f"{folder.name}.probe")
+    try:
+        folder.rename(probe)
+    except OSError as error:
+        raise ReviewError(f"{folder.name} is open in another program. {CLOSE_IDE_HINT}") from error
+    probe.rename(folder)
+
+
 def clear_leftover(folder: Path) -> None:
     """Delete what a removal that failed part way left of a worktree, which git no longer knows about.
 
     :param folder: the worktree's folder
     :raises ReviewError: when another program still holds the folder open
     """
+    ensure_not_held_open(folder)
     try:
         delete_folder(folder)
     except OSError as error:
@@ -275,12 +293,34 @@ def add_worktree(clone: Path, folder: Path) -> None:
     git(["worktree", "add", "--detach", str(folder)], clone)
 
 
+def restore_worktree(clone: Path, folder: Path, branch: str) -> None:
+    """Put back a worktree that git unregistered and partly deleted, on its branch, with its deleted files.
+
+    Git adds a worktree only where nothing is in the way, so the new .git file is made in an empty folder beside it
+    and moved in, and ``git worktree repair`` then points git at the real folder. Checking out brings back only what
+    was deleted, which is safe because git removes a worktree only once nothing in it is uncommitted.
+    :param clone: the clone the worktree belonged to
+    :param folder: the worktree's folder, which is still there
+    :param branch: the branch it had checked out
+    :raises ReviewError: when git cannot put it back
+    """
+    staging = folder.with_name(f"{folder.name}.restoring")
+    git(["worktree", "add", "--no-checkout", str(staging), branch], clone)
+    (staging / ".git").replace(folder / ".git")
+    staging.rmdir()
+    git(["worktree", "repair", str(folder)], clone)
+    git(["reset", "--quiet"], folder)
+    git(["checkout", "--", "."], folder)
+
+
 def remove_worktree(folder: Path) -> None:
     """Remove a review worktree, keeping its branch in the clone; git refuses one with uncommitted changes.
 
-    An IDE's own untracked settings folder is not the user's work, so it does not stop the removal. Git runs from the
-    clone, since Windows cannot delete the folder a process is working in. What an earlier removal that failed part
-    way left behind is deleted outright, since git no longer knows it.
+    An IDE's own untracked settings folder is not the user's work, so it does not stop the removal. A folder another
+    program holds open is left alone, and should git still fail part way, the worktree is put back whole, since an
+    IDE with it open would otherwise be left looking at half a repository. Git runs from the clone, since Windows
+    cannot delete the folder a process is working in. What an earlier removal that failed part way left behind is
+    deleted outright, since git no longer knows it.
     :param folder: the worktree
     :raises ReviewError: when git fails, for instance over uncommitted changes or a folder an IDE holds open
     """
@@ -289,9 +329,19 @@ def remove_worktree(folder: Path) -> None:
         return
     changes = git(["status", "--porcelain"], folder).splitlines()
     only_ide_settings = bool(changes) and all(line.startswith(f"?? {IDE_SETTINGS_FOLDER}/") for line in changes)
+    clone, branch = clone_of(folder), checked_out_branch(folder)
+    ensure_not_held_open(folder)
     try:
-        git(["worktree", "remove", *(["--force"] if only_ide_settings else []), str(folder)], clone_of(folder))
+        git(["worktree", "remove", *(["--force"] if only_ide_settings else []), str(folder)], clone)
     except ReviewError as error:
+        # Git deletes the files first and unregisters the worktree even when the folder itself will not go; a refusal
+        # over uncommitted work leaves it registered and untouched, so that is never "restored" over the user's edits.
+        if folder.exists() and branch and worktree_on_branch(clone, branch) is None:
+            try:
+                restore_worktree(clone, folder, branch)
+            except ReviewError as broken:
+                raise ReviewError(f"{error}; putting {folder.name} back also failed: {broken}") from broken
+            raise ReviewError(f"{error}. {folder.name} was put back as it was. {CLOSE_IDE_HINT}") from error
         if any(sign in str(error) for sign in HELD_OPEN_SIGNS):
             raise ReviewError(f"{error}. {CLOSE_IDE_HINT}") from error
         raise

@@ -181,6 +181,45 @@ def test_a_folder_held_open_is_reported_with_a_hint_to_close_the_ide(tmp_path):
         local_review.remove_worktree(tmp_path / "widget-pr7")
 
 
+def make_clone_with_a_file(folder: Path) -> Path:
+    """Make a clone whose one commit holds a file, so a test can see that file deleted and brought back."""
+    clone = make_clone(folder, "https://github.com/acme/widget")
+    (clone / "widget.txt").write_text("a widget", encoding="utf-8")
+    run_git(clone, "add", "widget.txt")
+    run_git(clone, "-c", "user.name=tester", "-c", "user.email=t@example.test", "commit", "-q", "-m", "b")
+    return clone
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a folder a program is working in")
+def test_a_worktree_a_program_is_working_in_is_left_whole(tmp_path, github):
+    clone = make_clone_with_a_file(tmp_path / "widget")
+    review(PAGE, QUIET_IDE, tmp_path)
+    worktree = tmp_path / "widget-pr7"
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], cwd=worktree)
+    try:
+        with pytest.raises(ReviewError, match="open in another program"):
+            local_review.remove_worktree(worktree)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert (worktree / "widget.txt").exists()
+    assert local_review.worktree_on_branch(clone, "widget-pr7") == worktree
+
+
+def test_a_worktree_git_unregistered_and_partly_deleted_is_put_back_whole(tmp_path, github):
+    clone = make_clone_with_a_file(tmp_path / "widget")
+    review(PAGE, QUIET_IDE, tmp_path)
+    worktree = tmp_path / "widget-pr7"
+    # What git leaves when it cannot delete the folder itself: its files gone, and the worktree unregistered.
+    (worktree / "widget.txt").unlink()
+    (worktree / ".git").unlink()
+    run_git(clone, "worktree", "prune")
+    local_review.restore_worktree(clone, worktree, "widget-pr7")
+    assert (worktree / "widget.txt").read_text(encoding="utf-8") == "a widget"
+    assert local_review.worktree_on_branch(clone, "widget-pr7") == worktree
+    assert local_review.git(["status", "--porcelain"], worktree) == ""
+
+
 def test_a_clone_cut_short_is_cleared_away_so_the_next_review_clones_afresh(tmp_path, monkeypatch):
     def slow_clone(arguments: list[str], timeout: int = 0, folder: Path | None = None) -> str:
         (Path(arguments[3]) / ".git").mkdir(parents=True)

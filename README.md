@@ -84,8 +84,9 @@ PATH, or give its full path in the settings.
 you are done; both are greyed out until there is one. **Remove all local worktrees** does the same for every review
 worktree in the checkout folder: a folder named like `widget-pr7` on the branch of that name, so nothing else there is
 touched. Git refuses to remove a worktree holding uncommitted work, though an IDE's `.idea` folder does not count, and
-the pull request's branch stays in the clone. On Windows a removal fails part way if an IDE still has the worktree open;
-close the IDE, and the next removal or review clears what was left.
+the pull request's branch stays in the clone. A worktree an IDE or other program has open is left alone, with a message
+to close it first, since deleting it would leave the IDE looking at half a repository. Should git still fail part way,
+the worktree is put back as it was.
 
 No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it:
 
