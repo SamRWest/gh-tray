@@ -10,9 +10,9 @@ from dataclasses import replace
 from pathlib import Path
 
 from loguru import logger
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCursor, QDesktopServices
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QMenu, QProgressDialog, QSystemTrayIcon
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
@@ -44,6 +44,8 @@ RETRY_FRACTION = 4
 MINIMUM_WAIT_SECONDS = 60
 # Nudges the toolkit's loop so Ctrl+C can be handled where there is no console handler of its own.
 HEARTBEAT_MS = 500
+# How many characters wide the review progress window is, so the longest step's words fit on one line.
+PROGRESS_CHARACTERS = 60
 
 
 def open_dashboard(config: dict) -> None:
@@ -129,6 +131,9 @@ class Tray(QObject):
     local_review_failed = Signal(str)
     # Raised from the same threads once worktrees may have come or gone, so the window's worktree column follows.
     worktrees_changed = Signal()
+    # Raised from the review thread as it starts each step, carrying what the step does, and once it is done.
+    review_stage = Signal(str)
+    review_ended = Signal()
 
     def __init__(self) -> None:
         """Load the settings, build the icon in its starting state, and build the changes window ready to show."""
@@ -157,6 +162,11 @@ class Tray(QObject):
         self.window.remove_all_asked.connect(self.on_remove_all)
         self.worktrees_changed.connect(self.window.refresh_worktrees)
         self.local_review_failed.connect(self.on_local_review_failed)
+        self.review_stage.connect(self.on_review_stage)
+        self.review_ended.connect(self.on_review_ended)
+        # Says what a review is doing while it runs; made on first use and hidden, not closed, between reviews.
+        self.progress: QProgressDialog | None = None
+        self.reviews_running = 0
         self.window.attach_menu(self.menu)
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
@@ -296,22 +306,50 @@ class Tray(QObject):
             self.pending_review = (url, command)
             self.open_settings().ask_for_review_settings()
             return
+        self.reviews_running += 1
+        self.show_progress()
         threading.Thread(target=self.review, args=(url, command), daemon=True, name=f"{APP_NAME}-review").start()
 
     def review(self, url: str, command: str) -> None:
-        """Open a pull request in an IDE, reporting a failure over a signal, since this runs off the toolkit's thread.
+        """Open a pull request in an IDE off the toolkit's thread, so report each step and any failure over signals.
 
         :param url: the pull request's page
         :param command: the command that opens a folder in the chosen IDE
         """
         try:
-            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY])
+            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.review_stage.emit)
         except (ReviewError, GitHubError) as error:
             logger.warning("could not open {} for review: {}", url, error)
             self.local_review_failed.emit(f"Could not review in the IDE: {error}")
         finally:
             # Even a review that failed part way may have left a worktree behind.
             self.worktrees_changed.emit()
+            self.review_ended.emit()
+
+    def show_progress(self) -> None:
+        """Show the window that says what a review is doing, its bar moving to show it is still at work."""
+        if self.progress is None:
+            self.progress = QProgressDialog("", "", 0, 0)
+            self.progress.setWindowTitle(f"{APP_NAME}: review in IDE")
+            self.progress.setCancelButton(None)
+            self.progress.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+            self.progress.setMinimumWidth(self.progress.fontMetrics().averageCharWidth() * PROGRESS_CHARACTERS)
+        self.progress.setLabelText("Getting the pull request ready")
+        self.progress.show()
+
+    def on_review_stage(self, stage: str) -> None:
+        """Show what a review is now doing.
+
+        :param stage: the step, in a few words
+        """
+        if self.progress is not None:
+            self.progress.setLabelText(stage)
+
+    def on_review_ended(self) -> None:
+        """Put the progress window away once no review is still running."""
+        self.reviews_running = max(0, self.reviews_running - 1)
+        if self.reviews_running == 0 and self.progress is not None:
+            self.progress.hide()
 
     def on_remove(self, url: str) -> None:
         """Remove a pull request's review worktree.

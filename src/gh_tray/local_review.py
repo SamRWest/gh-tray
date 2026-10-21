@@ -7,23 +7,29 @@ to open. The JetBrains plugin only does so once its Pull Requests tool window ha
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
 from gh_tray.environment import FOLDER_PLACEHOLDER, no_console_flag, run_quietly, shell_quote
-from gh_tray.github import first_error_line, run
+from gh_tray.github import GitHubError, first_error_line, run
 
-GIT_TIMEOUT_SECONDS = 60
-CHECKOUT_TIMEOUT_SECONDS = 120
-# A first clone of a large repository can take minutes.
-CLONE_TIMEOUT_SECONDS = 900
+# How long each git or GitHub step may take. A repository too big to clone in that time can be cloned into the
+# checkout folder by hand, where a review finds it.
+STEP_TIMEOUT_SECONDS = 60
 # Long enough for a shell to report a launcher it cannot find, short enough not to wait on one that stays running.
 LAUNCH_CHECK_SECONDS = 5
+# How git reports a folder another program holds open, as an IDE does on Windows, and what to do about it.
+HELD_OPEN_SIGNS = ("Permission denied", "resource busy", "being used by another process")
+CLOSE_IDE_HINT = "Close any IDE that has it open, then try again."
 
 PULL_REQUEST_URL = re.compile(r"^https?://[^/]+/(?P<owner>[^/]+)/(?P<name>[^/]+)/pull/(?P<number>\d+)/?$")
 REMOTE_URL_LINE = re.compile(r"^\s*url\s*=\s*(\S+)", re.MULTILINE)
@@ -158,13 +164,52 @@ def git(arguments: list[str], folder: Path) -> str:
     if not tool:
         raise ReviewError("git not found - install it")
     try:
-        done = run_quietly([tool, "-C", str(folder), *arguments], timeout=GIT_TIMEOUT_SECONDS)
+        done = run_quietly([tool, "-C", str(folder), *arguments], timeout=STEP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as expiry:
-        raise ReviewError(f"git did not finish within {GIT_TIMEOUT_SECONDS}s") from expiry
+        raise ReviewError(f"git did not finish within {STEP_TIMEOUT_SECONDS}s") from expiry
     if done.returncode != 0:
         # Kept whole: git names the folder first, so cutting the line short can cut off the reason.
         raise ReviewError(first_error_line(done.stderr, limit=None))
     return done.stdout
+
+
+def make_writable_and_retry(delete: Callable[[str], object], path: str, _error: BaseException) -> None:
+    """Clear a file's read-only flag, which Windows sets on git's object files, and delete it again.
+
+    :param delete: the deletion that failed
+    :param path: what it failed on
+    """
+    os.chmod(path, stat.S_IWRITE)
+    delete(path)
+
+
+def delete_folder(folder: Path) -> None:
+    """Delete a folder and everything in it, read-only files included.
+
+    :param folder: the folder
+    :raises OSError: when another program holds part of it open
+    """
+    shutil.rmtree(folder, onexc=make_writable_and_retry)
+
+
+def is_leftover(folder: Path) -> bool:
+    """Return whether a folder is what a removal that failed part way left of a worktree: there, but without its .git.
+
+    :param folder: a worktree's folder
+    """
+    return folder.is_dir() and not (folder / ".git").exists()
+
+
+def clear_leftover(folder: Path) -> None:
+    """Delete what a removal that failed part way left of a worktree, which git no longer knows about.
+
+    :param folder: the worktree's folder
+    :raises ReviewError: when another program still holds the folder open
+    """
+    try:
+        delete_folder(folder)
+    except OSError as error:
+        raise ReviewError(f"could not delete {folder.name}: {error.strerror or error}. {CLOSE_IDE_HINT}") from error
 
 
 def clone_into(folder: Path, repository: str) -> Path:
@@ -172,11 +217,28 @@ def clone_into(folder: Path, repository: str) -> Path:
 
     :param folder: the folder to clone into
     :param repository: the repository as ``owner/name``
-    :raises GitHubError: when the clone fails, for instance because a folder of that name is already there
+    :raises ReviewError: when a folder of that name is in the way, or the clone takes too long
+    :raises GitHubError: when the clone fails
     """
     clone = folder / repository.split("/")[1]
+    if clone.exists():
+        raise ReviewError(f"{clone} is in the way of a clone of {repository}")
     logger.info("cloning {} into {}", repository, clone)
-    run(["repo", "clone", repository, str(clone)], timeout=CLONE_TIMEOUT_SECONDS)
+    try:
+        run(["repo", "clone", repository, str(clone)], timeout=STEP_TIMEOUT_SECONDS)
+    except GitHubError as error:
+        # A clone cut short leaves a folder that would pass for a whole one at the next review.
+        try:
+            if clone.exists():
+                delete_folder(clone)
+        except OSError as leftover:
+            logger.warning("could not delete the unfinished clone {}: {}", clone, leftover)
+        if isinstance(error.__cause__, subprocess.TimeoutExpired):
+            raise ReviewError(
+                f"cloning {repository} took over {STEP_TIMEOUT_SECONDS}s; clone it into {folder} yourself, then review"
+                " again"
+            ) from error
+        raise
     return clone
 
 
@@ -217,13 +279,22 @@ def remove_worktree(folder: Path) -> None:
     """Remove a review worktree, keeping its branch in the clone; git refuses one with uncommitted changes.
 
     An IDE's own untracked settings folder is not the user's work, so it does not stop the removal. Git runs from the
-    clone, since Windows cannot delete the folder a process is working in.
+    clone, since Windows cannot delete the folder a process is working in. What an earlier removal that failed part
+    way left behind is deleted outright, since git no longer knows it.
     :param folder: the worktree
-    :raises ReviewError: when git fails, for instance over uncommitted changes
+    :raises ReviewError: when git fails, for instance over uncommitted changes or a folder an IDE holds open
     """
+    if is_leftover(folder):
+        clear_leftover(folder)
+        return
     changes = git(["status", "--porcelain"], folder).splitlines()
     only_ide_settings = bool(changes) and all(line.startswith(f"?? {IDE_SETTINGS_FOLDER}/") for line in changes)
-    git(["worktree", "remove", *(["--force"] if only_ide_settings else []), str(folder)], clone_of(folder))
+    try:
+        git(["worktree", "remove", *(["--force"] if only_ide_settings else []), str(folder)], clone_of(folder))
+    except ReviewError as error:
+        if any(sign in str(error) for sign in HELD_OPEN_SIGNS):
+            raise ReviewError(f"{error}. {CLOSE_IDE_HINT}") from error
+        raise
 
 
 def check_out(pull: PullRequest, folder: Path) -> None:
@@ -233,7 +304,7 @@ def check_out(pull: PullRequest, folder: Path) -> None:
     :param folder: the worktree
     :raises GitHubError: when the checkout fails, for instance over uncommitted changes in the way
     """
-    run(["pr", "checkout", pull.url, "--branch", pull.local_name], timeout=CHECKOUT_TIMEOUT_SECONDS, folder=folder)
+    run(["pr", "checkout", pull.url, "--branch", pull.local_name], timeout=STEP_TIMEOUT_SECONDS, folder=folder)
 
 
 def ide_command_line(command: str, folder: Path) -> str:
@@ -263,18 +334,25 @@ def open_in_ide(command: str, folder: Path) -> None:
         code = launched.wait(LAUNCH_CHECK_SECONDS)
     except subprocess.TimeoutExpired:
         return
-    if code != 0:
-        raise ReviewError(f"the IDE command failed with exit code {code}: {line}")
+    if code == 0:
+        return
+    # Only looked for after a failure, so a shell builtin such as start is never mistaken for a missing program.
+    launcher = shlex.split(command, posix=False)[0].strip('"')
+    missing = (
+        "" if shutil.which(launcher) else f" {launcher} is not on your PATH: add its folder, or set its full path."
+    )
+    raise ReviewError(f"the IDE command failed with exit code {code}: {line}.{missing}")
 
 
-def open_for_review(url: str, ide_command: str, checkout_folder: str) -> None:
+def open_for_review(url: str, ide_command: str, checkout_folder: str, report: Callable[[str], None]) -> None:
     """Open a pull request in the IDE, finding or cloning its repository and adding or updating its worktree.
 
-    Clones and worktrees both live in the checkout folder. Slow, since a first clone can take minutes, so meant for a
+    Clones and worktrees both live in the checkout folder. Slow, since a clone can take up to a minute, so meant for a
     thread other than the toolkit's.
     :param url: the pull request's page
     :param ide_command: the command that opens a folder in the IDE
     :param checkout_folder: the folder clones and review worktrees go in, from the settings
+    :param report: told what each step is about to do, in a few words fit to show a user
     :raises ReviewError: when the page or settings will not do, or git fails
     :raises GitHubError: when cloning or checking out fails
     """
@@ -287,15 +365,20 @@ def open_for_review(url: str, ide_command: str, checkout_folder: str) -> None:
     if not root.is_dir():
         raise ReviewError(f"the checkout folder {root} does not exist")
     planned = worktree_folder(root, pull)
-    clone = (
-        clone_of(planned)
-        if planned.exists()
-        else find_clone(root, pull.repository) or clone_into(root, pull.repository)
-    )
+    if is_leftover(planned):
+        report(f"Clearing what an earlier removal left of {planned.name}")
+        clear_leftover(planned)
+    clone = clone_of(planned) if planned.exists() else find_clone(root, pull.repository)
+    if clone is None:
+        report(f"Cloning {pull.repository}")
+        clone = clone_into(root, pull.repository)
     # A worktree already on the pull request's branch is reused wherever it is, since git lets only one hold it.
     folder = worktree_on_branch(clone, pull.local_name) or planned
     if not folder.exists():
+        report(f"Adding the worktree {folder.name}")
         add_worktree(clone, folder)
+    report(f"Checking out pull request #{pull.number}")
     check_out(pull, folder)
+    report("Opening the IDE")
     logger.info("opening {} for review in {}", pull.url, folder)
     open_in_ide(ide_command, folder)

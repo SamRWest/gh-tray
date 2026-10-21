@@ -11,13 +11,15 @@ import time
 import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 from loguru import logger
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QBrush,
     QCloseEvent,
     QColor,
+    QDesktopServices,
     QGuiApplication,
     QHideEvent,
     QIcon,
@@ -610,8 +612,11 @@ class ChangesWindow(QWidget):
             if command != default:
                 others.addAction(name, lambda command=command: self.review(entry.url, command))
         checkout_folder = str(settings.get(CHECKOUT_FOLDER_KEY, ""))
+        worktree = existing_worktree(entry.url, checkout_folder)
+        browse = menu.addAction("Open worktree dir", lambda: self.browse(worktree) if worktree else None)
+        browse.setEnabled(worktree is not None)
         remove = menu.addAction("Remove local worktree", lambda: self.remove_asked.emit(entry.url))
-        remove.setEnabled(existing_worktree(entry.url, checkout_folder) is not None)
+        remove.setEnabled(worktree is not None)
         remove_all = menu.addAction("Remove all local worktrees", self.remove_all_asked.emit)
         remove_all.setEnabled(bool(review_worktrees(checkout_folder)))
         return menu
@@ -907,6 +912,15 @@ class ChangesWindow(QWidget):
         :param url: the page to open
         """
         webbrowser.open(url)
+        self.hide()
+
+    def browse(self, folder: Path) -> None:
+        """Show a folder in the desktop's file browser, and put the window away, since the browser is about to cover it.
+
+        :param folder: the folder to show
+        """
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            logger.error("the desktop refused to open {}", folder)
         self.hide()
 
     def review(self, url: str, command: str) -> None:

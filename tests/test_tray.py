@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -132,7 +133,12 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     # The settings window would otherwise ask GitHub about the account on a thread of its own.
     monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
     reviewed = []
-    monkeypatch.setattr(tray, "open_for_review", lambda *arguments: reviewed.append(arguments))
+
+    def review(url: str, command: str, checkout_folder: str, report: Callable[[str], None]) -> None:
+        report("Cloning acme/widget")
+        reviewed.append((url, command, checkout_folder))
+
+    monkeypatch.setattr(tray, "open_for_review", review)
     subject = build_tray()
     monkeypatch.setattr(subject.lookup, "start", lambda: None)
     page = "https://github.com/acme/widget/pull/7"
@@ -144,9 +150,12 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     settings.ide.hidePopup()
     settings.checkout_folder.setText(str(tmp_path))
     # Waiting for the review thread's last signal, not just its call, keeps teardown from racing that thread.
-    with qtbot.waitSignal(subject.worktrees_changed):
+    with qtbot.waitSignal(subject.review_ended):
         settings.save_and_close()
     assert reviewed == [(page, "idea64 {folder}", str(tmp_path))]
+    progress = subject.progress
+    assert progress is not None
+    assert (progress.labelText(), progress.isVisible()) == ("Cloning acme/widget", False)
 
 
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):

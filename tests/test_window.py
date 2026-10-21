@@ -226,6 +226,7 @@ def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_sub
         "Open on GitHub": True,
         "Review in VS Code": False,
         "Review in other IDE": False,
+        "Open worktree dir": False,
         "Remove local worktree": False,
         "Remove all local worktrees": False,
     }
@@ -285,13 +286,24 @@ def test_a_column_is_never_narrower_than_its_heading_even_when_dragged_narrower(
     assert view.table.columnWidth(window.column_of("wt")) == view.heading_width("WTree")
 
 
-def test_removing_worktrees_is_offered_once_a_review_has_made_one(build_window, qtbot, monkeypatch, tmp_path):
+def test_opening_and_removing_worktrees_is_offered_once_a_review_has_made_one(
+    build_window, qtbot, monkeypatch, tmp_path
+):
     page = "https://github.com/acme/widget/pull/7"
     view = build_window([replace(ROWS[0], url=page)])
     monkeypatch.setattr(window, "load_config", lambda: {config.CHECKOUT_FOLDER_KEY: str(tmp_path)})
+    shown = []
+    monkeypatch.setattr(window.QDesktopServices, "openUrl", lambda url: shown.append(Path(url.toLocalFile())) or True)
     offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[0]).actions()}
-    assert (offered["Remove local worktree"], offered["Remove all local worktrees"]) == (False, False)
+    assert [offered[text] for text in ("Open worktree dir", "Remove local worktree", "Remove all local worktrees")] == [
+        False,
+        False,
+        False,
+    ]
     make_review_worktree(tmp_path, "widget-pr7")
+    view.show()
+    choose(right_click_menu(view, qtbot, 0), "Open worktree dir")
+    assert shown == [tmp_path / "widget-pr7"]
     view.show()
     with qtbot.waitSignal(view.remove_asked) as asked:
         choose(right_click_menu(view, qtbot, 0), "Remove local worktree")

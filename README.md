@@ -75,11 +75,17 @@ if there is none. It adds a worktree named like `widget-pr7` beside it and check
 instead, wherever that worktree is. The **WTree** column ticks each pull request that has a worktree. If the IDE command
 or checkout folder has been cleared, the settings open at the one missing, and the review carries on once you save.
 
-**Remove local worktree** deletes a pull request's worktree in the checkout folder once you are done, and is greyed out
-until there is one. **Remove all local worktrees** does the same for every review worktree in the checkout folder: a
-folder named like `widget-pr7` on the branch of that name, so nothing else there is touched. Git refuses to remove a
-worktree holding uncommitted work, though an IDE's `.idea` folder does not count, and the pull request's branch stays in
-the clone.
+A small window shows each step while it runs. Each git or GitHub step gets 60 seconds; a clone cut short is cleared
+away, and a repository too big to clone in that time can be cloned into the checkout folder by hand. If the IDE command
+fails because its launcher, such as `idea64`, is not on your PATH, the message says so: add the launcher's folder to
+PATH, or give its full path in the settings.
+
+**Open worktree dir** shows a pull request's worktree in your file browser. **Remove local worktree** deletes it once
+you are done; both are greyed out until there is one. **Remove all local worktrees** does the same for every review
+worktree in the checkout folder: a folder named like `widget-pr7` on the branch of that name, so nothing else there is
+touched. Git refuses to remove a worktree holding uncommitted work, though an IDE's `.idea` folder does not count, and
+the pull request's branch stays in the clone. On Windows a removal fails part way if an IDE still has the worktree open;
+close the IDE, and the next removal or review clears what was left.
 
 No IDE can be told to open one pull request, so the tray opens the folder and lets the IDE find it:
 
