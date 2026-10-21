@@ -112,6 +112,7 @@ def test_the_menu_lists_the_expected_entries_in_order(build_tray):
         "Recent changes...",
         "Awaiting your review",
         "Mark all seen",
+        "Pop-up notifications",
         "Start at login",
         "Settings...",
         "Open log",
@@ -156,6 +157,27 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     progress = subject.progress
     assert progress is not None
     assert (progress.labelText(), progress.isVisible()) == ("Cloning acme/widget", False)
+
+
+def test_pop_up_notifications_turned_off_from_the_menu_stay_off_until_turned_on_again(build_tray, monkeypatch, qtbot):
+    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    monkeypatch.setattr(tray, "load_config", lambda: copy.deepcopy(stored))
+    monkeypatch.setattr(tray, "save_config", stored.update)
+    subject = build_tray()
+    notified: list[list[dict]] = []
+    monkeypatch.setattr(subject.notifier, "notify", lambda events, _toasts: notified.append(events))
+
+    def pop_ups():
+        return next(action for action in subject.menu.actions() if action.text() == "Pop-up notifications")
+
+    assert pop_ups().isChecked()
+    pop_ups().trigger()
+    assert (stored[config.NOTIFICATIONS_KEY], pop_ups().isChecked()) == (False, False)
+    subject.on_polled(PollResult(status=Status(), events=[{"kind": "ci_broken", "while": "off"}]))
+    pop_ups().trigger()
+    subject.on_polled(PollResult(status=Status(), events=[{"kind": "ci_broken", "while": "on"}]))
+    qtbot.waitUntil(lambda: bool(notified))
+    assert notified == [[{"kind": "ci_broken", "while": "on"}]]
 
 
 def test_open_log_hands_the_log_file_to_the_desktop(build_tray, monkeypatch):

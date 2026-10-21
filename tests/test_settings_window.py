@@ -106,6 +106,15 @@ def test_the_ide_command_offers_ready_made_commands_and_saves_what_is_typed_with
     )
 
 
+def test_saving_keeps_a_setting_changed_elsewhere_while_the_window_was_open(build_dialog):
+    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    dialog = build_dialog(stored)
+    # Pop-up notifications turned off from the tray menu after the window opened.
+    stored[config.NOTIFICATIONS_KEY] = False
+    dialog.save_and_close()
+    assert build_dialog.saved[-1][config.NOTIFICATIONS_KEY] is False
+
+
 def test_chosen_theme_follows_the_radio_buttons(build_dialog):
     dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG))
     dialog.style_buttons[theme.ALWAYS_DARK].setChecked(True)

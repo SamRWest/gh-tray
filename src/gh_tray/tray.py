@@ -21,8 +21,10 @@ from gh_tray.config import (
     CHECKOUT_FOLDER_KEY,
     IDE_COMMAND_KEY,
     LOG_PATH,
+    NOTIFICATIONS_KEY,
     OPACITY_KEY,
     load_config,
+    save_config,
 )
 from gh_tray.environment import autostart_enabled, hide_from_dock, on_console_interrupt, open_in_terminal, set_autostart
 from gh_tray.events import mark_seen
@@ -194,6 +196,9 @@ class Tray(QObject):
         self.menu.addMenu(self.reviews_menu())
         self.menu.addSeparator()
         self.menu.addAction("Mark all seen", self.on_mark_seen)
+        pop_ups = self.menu.addAction("Pop-up notifications", self.on_toggle_notifications)
+        pop_ups.setCheckable(True)
+        pop_ups.setChecked(load_config()[NOTIFICATIONS_KEY])
         login = self.menu.addAction("Start at login", self.on_toggle_autostart)
         login.setCheckable(True)
         login.setChecked(autostart_enabled())
@@ -247,8 +252,9 @@ class Tray(QObject):
             result.error,
         )
         self.repaint()
-        # Notifying runs on its own thread so a hang in the desktop's notification service cannot freeze the app.
-        if result.events:
+        # Notifying runs on its own thread so a hang in the desktop's notification service cannot freeze the app. The
+        # switch is read afresh, since the poll's own copy of the settings predates any flick of it during the poll.
+        if result.events and load_config()[NOTIFICATIONS_KEY]:
             threading.Thread(
                 target=self.notifier.notify,
                 args=(result.events, self.config["toasts"]),
@@ -409,6 +415,13 @@ class Tray(QObject):
     def on_toggle_autostart(self, *_) -> None:
         """Turn starting at login on or off."""
         set_autostart(not autostart_enabled())
+        self.build_menu()
+
+    def on_toggle_notifications(self, *_) -> None:
+        """Turn the desktop pop-ups about changes on or off, and remember the choice; changes are still listed."""
+        settings = load_config()
+        settings[NOTIFICATIONS_KEY] = not settings[NOTIFICATIONS_KEY]
+        save_config(settings)
         self.build_menu()
 
     def on_open_log(self, *_) -> None:

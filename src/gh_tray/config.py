@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict = {
     "watched_owners": [],
     "involved": False,
     "all_mine": True,
+    "notifications": True,
     "theme": "auto",
     "opacity": None,
     "blur": True,
@@ -66,6 +67,8 @@ WATCHED_OWNERS_KEY = "watched_owners"
 INVOLVED_KEY = "involved"
 # Whether the window lists every open pull request of the user's own, not only those that want something of them.
 ALL_MINE_KEY = "all_mine"
+# Whether changes raise desktop pop-ups at all; the switches under "toasts" choose which kinds, while this is on.
+NOTIFICATIONS_KEY = "notifications"
 THEME_KEY = "theme"
 # How solid the changes window's background is, in percent. Unset, it depends on whether the desktop blurs
 # what lies behind the window: a blurred background can be more see-through and still read.
@@ -123,6 +126,7 @@ def normalise(config: dict) -> dict:
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))
     config[INVOLVED_KEY] = bool(config.get(INVOLVED_KEY, DEFAULT_CONFIG[INVOLVED_KEY]))
     config[ALL_MINE_KEY] = bool(config.get(ALL_MINE_KEY, DEFAULT_CONFIG[ALL_MINE_KEY]))
+    config[NOTIFICATIONS_KEY] = bool(config.get(NOTIFICATIONS_KEY, DEFAULT_CONFIG[NOTIFICATIONS_KEY]))
     config[BLUR_KEY] = bool(config.get(BLUR_KEY, DEFAULT_CONFIG[BLUR_KEY]))
     config["toasts"] = {
         kind: bool(config["toasts"].get(kind, default)) for kind, default in DEFAULT_CONFIG["toasts"].items()

@@ -34,12 +34,12 @@ everything again at any time with `gh-tray setup` (with the `uvx` form above, pu
 The tray icon shows how many changes you have not seen yet. It is red when something of yours is broken or blocked,
 amber for anything else unread, green when there is nothing to do, and grey when the last poll failed.
 
-| On the icon  | Gets you                                                           |
-| ------------ | ------------------------------------------------------------------ |
-| Hover        | A short status summary                                             |
-| Click        | The changes window                                                 |
-| Right click  | The menu: dashboard, refresh, mark all seen, settings, log, quit   |
-| Middle click | The same menu, on desktops that keep the right click to themselves |
+| On the icon  | Gets you                                                                                  |
+| ------------ | ----------------------------------------------------------------------------------------- |
+| Hover        | A short status summary                                                                    |
+| Click        | The changes window                                                                        |
+| Right click  | The menu: dashboard, refresh, mark all seen, pop-up notifications, settings, log and quit |
+| Middle click | The same menu, on desktops that keep the right click to themselves                        |
 
 In the changes window:
 
@@ -58,7 +58,8 @@ In the changes window:
 You are notified when a review is requested of you, your checks break, a reviewer asks for changes, someone mentions
 you, or a pull request of yours becomes ready to merge. New comments and merge conflicts are listed but not announced
 unless you turn them on. Only changes are reported, never standing state, so an old backlog does not become a wall of
-notifications.
+notifications. Untick **Pop-up notifications** in the menu to stop the pop-ups altogether, say for a meeting; changes
+are still listed and counted, and ticking it again brings back the kinds chosen in the settings.
 
 ### Reviewing in an IDE
 

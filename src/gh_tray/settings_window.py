@@ -370,7 +370,12 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, APP_NAME, str(error))
 
     def save_and_close(self) -> None:
-        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
+        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked.
+
+        The stored settings are read again first, so a setting changed elsewhere while this window was open, such as
+        pop-up notifications from the tray menu, is not written back over with what it was when the window opened.
+        """
+        self.config = load_config()
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
