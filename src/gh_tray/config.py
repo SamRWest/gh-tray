@@ -35,6 +35,7 @@ DEFAULT_CONFIG: dict = {
     "poll_minutes": 10,
     "max_age_days": 365,
     "popup_rows": 20,
+    "hidden_accounts": [],
     "hidden_owners": [],
     "watch_others": True,
     "watched_owners": [],
@@ -60,6 +61,8 @@ DEFAULT_CONFIG: dict = {
 IDE_COMMAND_KEY = "ide_command"
 CHECKOUT_FOLDER_KEY = "checkout_folder"
 TEXT_KEYS = ("dashboard_command", IDE_COMMAND_KEY, CHECKOUT_FOLDER_KEY)
+# The GitHub CLI's accounts not to check. Only turned-off ones are stored, so an account signed in later is checked.
+HIDDEN_ACCOUNTS_KEY = "hidden_accounts"
 HIDDEN_OWNERS_KEY = "hidden_owners"
 # Recorded because the collector cannot see the owner list without asking GitHub.
 WATCH_OTHERS_KEY = "watch_others"
@@ -121,6 +124,7 @@ def normalise(config: dict) -> dict:
         except (TypeError, ValueError):
             logger.warning("setting {} is not a whole number, leaving it unset", OPACITY_KEY)
             config[OPACITY_KEY] = None
+    config[HIDDEN_ACCOUNTS_KEY] = login_list(config.get(HIDDEN_ACCOUNTS_KEY))
     config[HIDDEN_OWNERS_KEY] = login_list(config.get(HIDDEN_OWNERS_KEY))
     config[WATCHED_OWNERS_KEY] = login_list(config.get(WATCHED_OWNERS_KEY))
     config[WATCH_OTHERS_KEY] = bool(config.get(WATCH_OTHERS_KEY, DEFAULT_CONFIG[WATCH_OTHERS_KEY]))

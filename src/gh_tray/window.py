@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -70,6 +71,8 @@ from gh_tray.popup import (
     SEEN_STRENGTH,
     STATUS_COLOURS,
     Row,
+    account_matches,
+    accounts_of,
     age_colour,
     closed_matches,
     glyph_for,
@@ -124,7 +127,8 @@ TOGGLE_WITHIN_SECONDS = 0.5
 
 DATE_COLUMN = "when"
 STATUS_COLUMN = "status"
-NAMED_COLUMNS = ("org", "repo", "author", "who")
+NAMED_COLUMNS = ("org", "repo", "author", "who", "account")
+ALL_ACCOUNTS = "All accounts"
 
 # Layout-store keys for remembered widths, keyed by column name. Widths are stored in characters of the font,
 # not pixels, so they still match after a display-scale or zoom change.
@@ -189,6 +193,7 @@ def cells_of(entry: Row) -> list[str]:
         entry.title,
         entry.author,
         entry.who,
+        entry.account,
         entry.when,
     ]
 
@@ -198,8 +203,9 @@ class ChangesWindow(QWidget):
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
-    # Carries the page of the pull request to review, and the command that opens a folder in the chosen IDE.
-    review_asked = Signal(str, str)
+    # Carries the page of the pull request to review, the command that opens a folder in the chosen IDE, and the
+    # account that found it, which can see its repository.
+    review_asked = Signal(str, str, str)
     # Carries the page of the pull request whose review worktree is to go.
     remove_asked = Signal(str)
     remove_all_asked = Signal()
@@ -219,6 +225,8 @@ class ChangesWindow(QWidget):
         self.all_entries = list(entries)
         self.entries: list[Row] = []
         self.role_filter = "all"
+        # The account whose rows alone are shown, or empty for every account's.
+        self.account_filter = ""
         # Closed pull requests, and ones the user has reviewed, start hidden: they are done, and this window lists
         # what is not.
         self.show_closed = False
@@ -357,6 +365,10 @@ class ChangesWindow(QWidget):
             strip.addWidget(chip)
             self.chips[name] = chip
         strip.addSpacing(12)
+        self.account_choice = QComboBox(self)
+        self.account_choice.setToolTip("Show only what one of your GitHub accounts found")
+        self.account_choice.currentIndexChanged.connect(self.on_account_chosen)
+        strip.addWidget(self.account_choice)
         self.closed_chip = self.done_toggle("Show closed", self.set_show_closed, strip)
         self.reviewed_chip = self.done_toggle("Show reviewed", self.set_show_reviewed, strip)
         self.search = QLineEdit(self)
@@ -499,6 +511,7 @@ class ChangesWindow(QWidget):
             entry
             for entry in self.all_entries
             if role_matches(entry, self.role_filter)
+            and account_matches(entry, self.account_filter)
             and closed_matches(entry, self.show_closed)
             and reviewed_matches(entry, self.show_reviewed)
             and matches_search(entry, self.search_text)
@@ -534,7 +547,13 @@ class ChangesWindow(QWidget):
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
             owner, _name = org_and_name(entry.repo)
-            named = {"org": owner, "repo": entry.repo, "author": entry.author, "who": entry.who}
+            named = {
+                "org": owner,
+                "repo": entry.repo,
+                "author": entry.author,
+                "who": entry.who,
+                "account": entry.account,
+            }
             inks = {
                 date_column: age_colour(entry.at, self.inks),
                 column_of(STATUS_COLUMN): ink(self.inks, STATUS_COLOURS.get(entry.status, QUIET)),
@@ -605,13 +624,13 @@ class ChangesWindow(QWidget):
         menu.addAction("Mark unseen" if entry.seen else "Mark seen", lambda: self.toggle_seen(entry))
         menu.addAction("Open on GitHub", lambda: self.open(entry.url)).setEnabled(bool(entry.url))
         if default:
-            review = menu.addAction(f"Review in {ide_name(default)}", lambda: self.review(entry.url, default))
+            review = menu.addAction(f"Review in {ide_name(default)}", lambda: self.review(entry, default))
             review.setEnabled(reviewable)
         others = menu.addMenu("Review in other IDE" if default else "Review in IDE")
         others.setEnabled(reviewable)
         for name, command in ide_presets():
             if command != default:
-                others.addAction(name, lambda command=command: self.review(entry.url, command))
+                others.addAction(name, lambda command=command: self.review(entry, command))
         checkout_folder = str(settings.get(CHECKOUT_FOLDER_KEY, ""))
         worktree = existing_worktree(entry.url, checkout_folder)
         browse = menu.addAction("Open worktree dir", lambda: self.browse(worktree) if worktree else None)
@@ -750,8 +769,34 @@ class ChangesWindow(QWidget):
             replace(entry, worktree=existing_worktree(entry.url, checkout_folder) is not None)
             for entry in self.all_entries
         ]
+        self.offer_accounts()
         self.apply_filter()
         self.refill()
+
+    def offer_accounts(self) -> None:
+        """List the accounts that found some row in the account filter, hidden while fewer than two did.
+
+        A filter on an account that no longer finds anything, or is the only one left, goes back to every account.
+        """
+        found = accounts_of(self.all_entries)
+        if self.account_filter not in found or len(found) < 2:
+            self.account_filter = ""
+        self.account_choice.blockSignals(True)
+        self.account_choice.clear()
+        self.account_choice.addItem(ALL_ACCOUNTS, "")
+        for login in found:
+            self.account_choice.addItem(login, login)
+        self.account_choice.setCurrentIndex(max(0, self.account_choice.findData(self.account_filter)))
+        self.account_choice.blockSignals(False)
+        self.account_choice.setVisible(len(found) > 1)
+
+    def on_account_chosen(self, index: int) -> None:
+        """Keep only the rows the chosen account found, and redraw around whatever that leaves.
+
+        :param index: the chosen entry in the account filter
+        """
+        self.account_filter = str(self.account_choice.itemData(index) or "")
+        self.redraw_filtered()
 
     def usable_screen(self, near: QPoint) -> QRect:
         """Return how much of the screen holding a point a window may use, with any taskbar, dock or panel left out.
@@ -924,14 +969,14 @@ class ChangesWindow(QWidget):
             logger.error("the desktop refused to open {}", folder)
         self.hide()
 
-    def review(self, url: str, command: str) -> None:
+    def review(self, entry: Row, command: str) -> None:
         """Ask the tray to open a pull request in an IDE, and put the window away, since the IDE is about to cover it.
 
-        :param url: the pull request's page
+        :param entry: the pull request's row
         :param command: the command that opens a folder in the chosen IDE
         """
         self.hide()
-        self.review_asked.emit(url, command)
+        self.review_asked.emit(entry.url, command, entry.account)
 
     def open_dashboard(self) -> None:
         """Ask the tray to open the dashboard, and put the window away, since the dashboard is about to cover it."""

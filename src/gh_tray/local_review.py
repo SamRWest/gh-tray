@@ -20,7 +20,7 @@ from pathlib import Path
 from loguru import logger
 
 from gh_tray.environment import FOLDER_PLACEHOLDER, no_console_flag, run_quietly, shell_quote
-from gh_tray.github import GitHubError, first_error_line, run
+from gh_tray.github import HOST, GitHubError, first_error_line, run
 
 # How long each git or GitHub step may take. A repository too big to clone in that time can be cloned into the
 # checkout folder by hand, where a review finds it.
@@ -39,6 +39,9 @@ REMOTE_REPOSITORY = re.compile(r"[/:](?P<repository>[^/:]+/[^/]+?)(?:\.git)?/?$"
 IDE_SETTINGS_FOLDER = ".idea"
 # The name a review worktree and its branch share, as PullRequest.local_name makes it.
 REVIEW_NAME = re.compile(r".+-pr\d+")
+# Where review worktrees go inside the checkout folder: a folder of their own, so a worktree of the user's own that
+# happens to share a review worktree's name, such as ``widget-pr7`` beside the clones, is never taken for one.
+WORKTREES_FOLDER = "gh-tray-worktrees"
 BRANCH_REFERENCE = "ref: refs/heads/"
 
 
@@ -104,19 +107,19 @@ def find_clone(folder: Path, repository: str) -> Path | None:
 
 
 def worktree_folder(checkout_folder: Path, pull: PullRequest) -> Path:
-    """Return where a pull request's review worktree goes, such as ``<checkout folder>/widget-pr7``.
+    """Return where a pull request's review worktree goes, such as ``<checkout folder>/gh-tray-worktrees/widget-pr7``.
 
-    :param checkout_folder: the folder review worktrees go in
+    :param checkout_folder: the folder clones go in, review worktrees going in a folder inside it
     :param pull: the pull request
     """
-    return checkout_folder / pull.local_name
+    return checkout_folder / WORKTREES_FOLDER / pull.local_name
 
 
 def existing_worktree(url: str, checkout_folder: str) -> Path | None:
     """Return the review worktree of the pull request a page shows, or None when there is none.
 
     :param url: the pull request's page
-    :param checkout_folder: the folder review worktrees go in, from the settings
+    :param checkout_folder: the folder clones go in, from the settings
     """
     pull = pull_request_at(url)
     if pull is None or not checkout_folder:
@@ -140,13 +143,12 @@ def checked_out_branch(worktree: Path) -> str:
 
 
 def review_worktrees(checkout_folder: str) -> list[Path]:
-    """Return every review worktree in the checkout folder: a folder named like ``widget-pr7`` on that branch.
+    """Return every review worktree: a folder in the worktree folder named like ``widget-pr7``, on that branch.
 
-    The branch check passes over anything else of a similar name, since the checkout folder can be shared, as the
-    system's temporary folder is.
-    :param checkout_folder: the folder review worktrees go in, from the settings
+    The branch check passes over anything else of a similar name that was put there by hand.
+    :param checkout_folder: the folder clones go in, from the settings
     """
-    root = Path(checkout_folder).expanduser()
+    root = Path(checkout_folder).expanduser() / WORKTREES_FOLDER
     if not checkout_folder or not root.is_dir():
         return []
     named = (child for child in sorted(root.iterdir()) if REVIEW_NAME.fullmatch(child.name))
@@ -230,11 +232,12 @@ def clear_leftover(folder: Path) -> None:
         raise ReviewError(f"could not delete {folder.name}: {error.strerror or error}. {CLOSE_IDE_HINT}") from error
 
 
-def clone_into(folder: Path, repository: str) -> Path:
+def clone_into(folder: Path, repository: str, account: str = "") -> Path:
     """Clone a repository into a folder, in a folder named after it, and return the clone.
 
     :param folder: the folder to clone into
     :param repository: the repository as ``owner/name``
+    :param account: the GitHub account to clone as, or empty for the active one
     :raises ReviewError: when a folder of that name is in the way, or the clone takes too long
     :raises GitHubError: when the clone fails
     """
@@ -242,8 +245,11 @@ def clone_into(folder: Path, repository: str) -> Path:
     if clone.exists():
         raise ReviewError(f"{clone} is in the way of a clone of {repository}")
     logger.info("cloning {} into {}", repository, clone)
+    # Over HTTPS, git signs in with the account's token through the GitHub CLI; over SSH it would sign in as whichever
+    # account owns the SSH key, which may not see the repository.
+    address = f"https://{HOST}/{repository}.git"
     try:
-        run(["repo", "clone", repository, str(clone)], timeout=STEP_TIMEOUT_SECONDS)
+        run(["repo", "clone", address, str(clone)], timeout=STEP_TIMEOUT_SECONDS, account=account)
     except GitHubError as error:
         # A clone cut short leaves a folder that would pass for a whole one at the next review.
         try:
@@ -290,6 +296,7 @@ def add_worktree(clone: Path, folder: Path) -> None:
     :param clone: the clone to add the worktree to
     :param folder: where the worktree goes
     """
+    folder.parent.mkdir(parents=True, exist_ok=True)
     git(["worktree", "add", "--detach", str(folder)], clone)
 
 
@@ -347,14 +354,20 @@ def remove_worktree(folder: Path) -> None:
         raise
 
 
-def check_out(pull: PullRequest, folder: Path) -> None:
+def check_out(pull: PullRequest, folder: Path, account: str = "") -> None:
     """Check a pull request's branch out in a worktree, or bring it up to date, tracking the pull request's head.
 
     :param pull: the pull request
     :param folder: the worktree
+    :param account: the GitHub account to fetch it as, or empty for the active one
     :raises GitHubError: when the checkout fails, for instance over uncommitted changes in the way
     """
-    run(["pr", "checkout", pull.url, "--branch", pull.local_name], timeout=STEP_TIMEOUT_SECONDS, folder=folder)
+    run(
+        ["pr", "checkout", pull.url, "--branch", pull.local_name],
+        timeout=STEP_TIMEOUT_SECONDS,
+        folder=folder,
+        account=account,
+    )
 
 
 def ide_command_line(command: str, folder: Path) -> str:
@@ -394,15 +407,18 @@ def open_in_ide(command: str, folder: Path) -> None:
     raise ReviewError(f"the IDE command failed with exit code {code}: {line}.{missing}")
 
 
-def open_for_review(url: str, ide_command: str, checkout_folder: str, report: Callable[[str], None]) -> None:
+def open_for_review(
+    url: str, ide_command: str, checkout_folder: str, report: Callable[[str], None], account: str = ""
+) -> None:
     """Open a pull request in the IDE, finding or cloning its repository and adding or updating its worktree.
 
-    Clones and worktrees both live in the checkout folder. Slow, since a clone can take up to a minute, so meant for a
-    thread other than the toolkit's.
+    Clones live in the checkout folder, and worktrees in its worktree folder. Slow, since a clone can take up to a
+    minute, so meant for a thread other than the toolkit's.
     :param url: the pull request's page
     :param ide_command: the command that opens a folder in the IDE
     :param checkout_folder: the folder clones and review worktrees go in, from the settings
     :param report: told what each step is about to do, in a few words fit to show a user
+    :param account: the GitHub account that can see the repository, or empty for the active one
     :raises ReviewError: when the page or settings will not do, or git fails
     :raises GitHubError: when cloning or checking out fails
     """
@@ -421,14 +437,14 @@ def open_for_review(url: str, ide_command: str, checkout_folder: str, report: Ca
     clone = clone_of(planned) if planned.exists() else find_clone(root, pull.repository)
     if clone is None:
         report(f"Cloning {pull.repository}")
-        clone = clone_into(root, pull.repository)
+        clone = clone_into(root, pull.repository, account)
     # A worktree already on the pull request's branch is reused wherever it is, since git lets only one hold it.
     folder = worktree_on_branch(clone, pull.local_name) or planned
     if not folder.exists():
         report(f"Adding the worktree {folder.name}")
         add_worktree(clone, folder)
     report(f"Checking out pull request #{pull.number}")
-    check_out(pull, folder)
+    check_out(pull, folder, account)
     report("Opening the IDE")
     logger.info("opening {} for review in {}", pull.url, folder)
     open_in_ide(ide_command, folder)

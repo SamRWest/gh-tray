@@ -29,6 +29,10 @@ On first start it checks for the [GitHub CLI](https://cli.github.com/) and gh-da
 missing. Sign in with `gh auth login` if you have not already; answer HTTPS to the protocol question. You can check
 everything again at any time with `gh-tray setup` (with the `uvx` form above, put `setup` on the end).
 
+gh-tray checks every account the GitHub CLI is signed in to, say a work and a personal one, whichever one
+`gh auth switch` has made active. Run `gh auth login` again to add another account. Untick an account under **GitHub
+accounts to check** in the settings to stop checking it.
+
 ## Use
 
 The tray icon shows how many changes you have not seen yet. It is red when something of yours is broken or blocked,
@@ -46,6 +50,9 @@ In the changes window:
 - Double-click a row to open it on GitHub. Right-click a row to mark it seen or unseen, review it in an IDE, or remove
   the worktree a review made.
 - Click a heading to sort. Use the buttons at the bottom to filter, and Ctrl+F to search every column.
+- The **Account** column names which of your GitHub accounts found each row. With two or more accounts, a list at the
+  bottom shows just one account's rows. A review in an IDE clones and checks out as that account, so a private
+  repository only one of your accounts can see still works.
 - Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or
   **Show reviewed**; each sits on a tinted background so it reads as done.
 - Every open pull request of yours is listed, as an **Author** row already marked seen when it wants nothing of you.
@@ -70,13 +77,17 @@ WebStorm. Two settings shape it:
 - **IDE command** is the default IDE, VS Code unless you change it. Pick a ready-made command, such as
   `pycharm64 {folder}` on Windows, or type your own; `{folder}` stands for the worktree, and goes on the end if you
   leave it out.
-- **Checkout folder** is where clones and worktrees go. It starts as your system's temporary folder.
+- **Checkout folder** is where clones go, with worktrees in a `gh-tray-worktrees` folder inside it. It starts as your
+  system's temporary folder.
 
 The tray looks in the checkout folder for a clone with a remote for the pull request's repository, and clones it there
-if there is none. It adds a worktree named like `widget-pr7` beside it and checks the pull request out in it with
-`gh pr checkout`, on a branch of the same name. A later review of the same pull request brings its worktree up to date
-instead, wherever that worktree is. The **WTree** column ticks each pull request that has a worktree. If the IDE command
-or checkout folder has been cleared, the settings open at the one missing, and the review carries on once you save.
+over HTTPS if there is none, so git signs in as the account that found the pull request rather than your SSH key's. It
+adds a worktree named like `gh-tray-worktrees/widget-pr7` and checks the pull request out in it with `gh pr checkout`,
+on a branch of the same name. Keeping worktrees in their own folder means a worktree of your own beside the clones, even
+one named `widget-pr7`, is never mistaken for one of the tray's. A later review of the same pull request brings its
+worktree up to date instead, wherever that worktree is. The **WTree** column ticks each pull request that has a
+worktree. If the IDE command or checkout folder has been cleared, the settings open at the one missing, and the review
+carries on once you save.
 
 A small window shows each step while it runs. Each git or GitHub step gets 60 seconds; a clone cut short is cleared
 away, and a repository too big to clone in that time can be cloned into the checkout folder by hand. If the IDE command
@@ -85,7 +96,7 @@ PATH, or give its full path in the settings.
 
 **Open worktree dir** shows a pull request's worktree in your file browser. **Remove local worktree** deletes it once
 you are done; both are greyed out until there is one. **Remove all local worktrees** does the same for every review
-worktree in the checkout folder: a folder named like `widget-pr7` on the branch of that name, so nothing else there is
+worktree in `gh-tray-worktrees`: a folder named like `widget-pr7` on the branch of that name, so nothing else there is
 touched. Git refuses to remove a worktree holding uncommitted work, though an IDE's `.idea` folder does not count, and
 the pull request's branch stays in the clone. A worktree an IDE or other program has open is left alone, with a message
 to close it first, since deleting it would leave the IDE looking at half a repository. Should git still fail part way,

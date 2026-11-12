@@ -68,7 +68,7 @@ def test_the_account_found_ahead_of_time_fills_the_settings_window_at_once(build
     monkeypatch.setattr(settings_window, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
     monkeypatch.setattr(settings_window, "autostart_enabled", lambda: False)
     subject = build_tray()
-    subject.on_account_found(Account(login="tester", organisations=("acme",), signed_in=True, sign_in_summary="ok"))
+    subject.on_account_found(Account(logins=("tester",), organisations=("acme",), signed_in=True, sign_in_summary="ok"))
     subject.open_settings()
     qtbot.addWidget(subject.settings)
     assert list(subject.settings.owner_switches_by_login) == ["tester", "acme"]
@@ -135,15 +135,15 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     monkeypatch.setattr(settings_window.AccountLookup, "start", lambda _self: None)
     reviewed = []
 
-    def review(url: str, command: str, checkout_folder: str, report: Callable[[str], None]) -> None:
+    def review(url: str, command: str, checkout_folder: str, report: Callable[[str], None], account: str = "") -> None:
         report("Cloning acme/widget")
-        reviewed.append((url, command, checkout_folder))
+        reviewed.append((url, command, checkout_folder, account))
 
     monkeypatch.setattr(tray, "open_for_review", review)
     subject = build_tray()
     monkeypatch.setattr(subject.lookup, "start", lambda: None)
     page = "https://github.com/acme/widget/pull/7"
-    subject.window.review_asked.emit(page, "idea64 {folder}")
+    subject.window.review_asked.emit(page, "idea64 {folder}", "work")
     settings = subject.settings
     assert settings is not None
     qtbot.addWidget(settings)
@@ -153,7 +153,7 @@ def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_car
     # Waiting for the review thread's last signal, not just its call, keeps teardown from racing that thread.
     with qtbot.waitSignal(subject.review_ended):
         settings.save_and_close()
-    assert reviewed == [(page, "idea64 {folder}", str(tmp_path))]
+    assert reviewed == [(page, "idea64 {folder}", str(tmp_path), "work")]
     progress = subject.progress
     assert progress is not None
     assert (progress.labelText(), progress.isVisible()) == ("Cloning acme/widget", False)

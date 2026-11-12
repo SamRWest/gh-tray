@@ -1,10 +1,14 @@
-"""Talks to GitHub via the signed-in CLI; no token handling, and failures raise one error type sized for hover text."""
+"""Talks to GitHub through the CLI, as any account it is signed in to; failures raise one error type for hover text.
+
+A token is read from the CLI only to hand straight back to it, so one call can act as an account that is not active.
+"""
 
 from __future__ import annotations
 
 import json
 import subprocess
 import time
+from functools import cache
 from pathlib import Path
 
 from loguru import logger
@@ -17,18 +21,23 @@ RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 3
 PAGE_SIZE = 40
 MAX_PAGES = 5
+# The host whose accounts are checked; GitHub Enterprise hosts are not polled.
+HOST = "github.com"
 
 
 class GitHubError(RuntimeError):
     """A call to GitHub failed, carrying a description fit to show a user."""
 
 
-def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS, folder: Path | None = None) -> str:
+def run(
+    arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS, folder: Path | None = None, account: str = ""
+) -> str:
     """Run the GitHub command line tool and return what it printed.
 
     :param arguments: what to pass the tool, without the tool itself
     :param timeout: how long to wait before giving up
     :param folder: the folder to run in, such as a clone for commands that act on one
+    :param account: the signed-in account to act as, or empty for whichever one the tool has active
     :return: standard output
     :raises GitHubError: when the tool is missing, fails, or takes too long
     """
@@ -37,7 +46,12 @@ def run(arguments: list[str], timeout: int = CALL_TIMEOUT_SECONDS, folder: Path 
         raise GitHubError("GitHub CLI (gh) not found - install it and sign in")
     started = time.monotonic()
     try:
-        done = run_quietly([tool, *arguments], timeout=timeout, folder=folder)
+        done = run_quietly(
+            [tool, *arguments],
+            timeout=timeout,
+            folder=folder,
+            environment={"GH_TOKEN": account_token(account)} if account else None,
+        )
     except subprocess.TimeoutExpired as expiry:
         raise GitHubError(f"GitHub did not answer within {timeout}s") from expiry
     except OSError as error:
@@ -88,16 +102,38 @@ def looks_permanent(description: str) -> bool:
     return "HTTP 4" in description and "HTTP 429" not in description
 
 
-def api(path: str) -> object:
+@cache
+def account_token(login: str) -> str:
+    """Return the token the tool keeps for a signed-in account, cached since every call as that account needs it.
+
+    :param login: the account
+    :raises GitHubError: when the tool holds no token for it
+    """
+    return run(["auth", "token", "--hostname", HOST, "--user", login]).strip()
+
+
+def accounts() -> list[str]:
+    """Return every account the tool is signed in to on GitHub, the active one first.
+
+    :raises GitHubError: when the tool cannot say, as when nobody is signed in
+    """
+    found = parse(run(["auth", "status", "--hostname", HOST, "--json", "hosts"]), "the sign-in list")
+    entries = found.get("hosts", {}).get(HOST, []) if isinstance(found, dict) else []
+    usable = [entry for entry in entries if isinstance(entry, dict) and entry.get("login")]
+    return [str(entry["login"]) for entry in sorted(usable, key=lambda entry: not entry.get("active"))]
+
+
+def api(path: str, account: str = "") -> object:
     """Fetch one REST path, retrying while GitHub is unhappy (a client error, e.g. deleted, is raised at once).
 
     :param path: the path to fetch, such as ``notifications?all=false``
+    :param account: the signed-in account to ask as, or empty for the active one
     :raises GitHubError: when every attempt fails, or the failure is one retrying cannot fix
     """
     last = "GitHub returned nothing usable"
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
-            return parse(run(["api", path]), path)
+            return parse(run(["api", path], account=account), path)
         except GitHubError as error:
             last = str(error)
             if looks_permanent(last):
@@ -108,20 +144,12 @@ def api(path: str) -> object:
     raise GitHubError(last)
 
 
-def viewer() -> str:
-    """Return the login of the signed-in account, asked afresh each poll since it can change at any time.
-
-    :return: the login, or an empty string when it cannot be read
-    """
-    found = api("user")
-    return str(found.get("login", "")) if isinstance(found, dict) else ""
-
-
-def graphql(query: str, variables: dict[str, str]) -> dict:
+def graphql(query: str, variables: dict[str, str], account: str = "") -> dict:
     """Run one GraphQL query, retrying while GitHub is unhappy (an error arrives as JSON with no data).
 
     :param query: the query text
     :param variables: values for the query's variables
+    :param account: the signed-in account to ask as, or empty for the active one
     :return: the ``data`` object
     :raises GitHubError: when every attempt fails
     """
@@ -131,7 +159,7 @@ def graphql(query: str, variables: dict[str, str]) -> dict:
     last = "GitHub returned nothing usable"
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
-            answer = parse(run(arguments), "the search")
+            answer = parse(run(arguments, account=account), "the search")
         except GitHubError as error:
             last = str(error)
             answer = None
@@ -145,18 +173,19 @@ def graphql(query: str, variables: dict[str, str]) -> dict:
     raise GitHubError(last)
 
 
-def search_pull_requests(query: str, search: str) -> list[dict]:
+def search_pull_requests(query: str, search: str, account: str = "") -> list[dict]:
     """Run a paged pull request search and return every node it yields.
 
     :param query: the GraphQL query text, which must accept ``q`` and ``cursor``
     :param search: the GitHub search expression
+    :param account: the signed-in account to search as, which ``@me`` then means, or empty for the active one
     :return: the pull request nodes, in the order GitHub gave them
     """
     nodes: list[dict] = []
     cursor = ""
     for _page in range(MAX_PAGES):
         variables = {"q": search} | ({"cursor": cursor} if cursor else {})
-        data = graphql(query, variables)
+        data = graphql(query, variables, account)
         found = data.get("search") or {}
         nodes += [node for node in found.get("nodes", []) if node.get("number") is not None]
         page = found.get("pageInfo") or {}
@@ -168,16 +197,17 @@ def search_pull_requests(query: str, search: str) -> list[dict]:
     return nodes
 
 
-def organisations() -> list[str]:
-    """Return the signed-in account's organisations, alphabetically.
+def organisations(account: str = "") -> list[str]:
+    """Return a signed-in account's organisations, alphabetically.
 
     Membership is all this API can see. An account can have a hand in pull requests elsewhere, as an outside
     collaborator, which is why the settings turn organisations off rather than on.
 
+    :param account: the account, or empty for the active one
     :return: the logins, or an empty list when the account belongs to none
     :raises GitHubError: when GitHub cannot be asked
     """
-    found = api("user/orgs?per_page=100")
+    found = api("user/orgs?per_page=100", account)
     if not isinstance(found, list):
         return []
     logins = [str(item.get("login", "")) for item in found if isinstance(item, dict) and item.get("login")]

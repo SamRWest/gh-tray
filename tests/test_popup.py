@@ -247,6 +247,7 @@ def test_every_column_has_a_heading_and_a_width():
         "Title",
         "Author",
         "Who",
+        "Account",
         "When",
     ]
 
@@ -641,3 +642,10 @@ def test_an_involved_pull_request_the_user_has_reviewed_stands_as_theirs_to_revi
     (row,) = popup.rows_from_snapshot({"involved:acme/widget#9": entry}, set())
     assert (row.label, row.role, row.who) == ("Reviewer", "reviewer", "bob")
     assert popup.role_matches(row, "reviewer") and not popup.role_matches(row, "involved")
+
+
+def test_the_account_filter_matches_one_account_or_all_and_lists_only_those_that_found_rows():
+    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, account=name) for name in ("work", "Home", "")]
+    assert [popup.account_matches(row, "") for row in rows] == [True, True, True]
+    assert [popup.account_matches(row, "HOME") for row in rows] == [False, True, False]
+    assert popup.accounts_of(rows) == ["Home", "work"]

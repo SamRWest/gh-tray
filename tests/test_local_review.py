@@ -17,6 +17,11 @@ from gh_tray.local_review import PullRequest, ReviewError, open_for_review
 PAGE = "https://github.com/acme/widget/pull/7"
 
 
+def worktrees(checkout_folder: Path) -> Path:
+    """Return the folder review worktrees go in, inside a checkout folder."""
+    return checkout_folder / local_review.WORKTREES_FOLDER
+
+
 def run_git(folder: Path, *arguments: str) -> None:
     """Run git in a folder, failing the test if git fails."""
     git = shutil.which("git")
@@ -41,12 +46,14 @@ class FakeGitHub:
     def __init__(self) -> None:
         """Start with nothing asked."""
         self.calls: list[tuple[str, Path | None]] = []
+        self.accounts: list[str] = []
 
-    def __call__(self, arguments: list[str], timeout: int = 0, folder: Path | None = None) -> str:
+    def __call__(self, arguments: list[str], timeout: int = 0, folder: Path | None = None, account: str = "") -> str:
         """Record one command, making the clone a ``repo clone`` asks for or the branch a ``pr checkout`` names."""
         self.calls.append((" ".join(arguments[:2]), folder))
+        self.accounts.append(account)
         if arguments[:2] == ["repo", "clone"]:
-            make_clone(Path(arguments[3]), f"https://github.com/{arguments[2]}.git")
+            make_clone(Path(arguments[3]), arguments[2])
         if arguments[:2] == ["pr", "checkout"] and folder is not None:
             run_git(folder, "checkout", "-q", "-B", arguments[arguments.index("--branch") + 1])
         return ""
@@ -96,11 +103,18 @@ def review(page: str, ide: str, checkout_folder: Path) -> list[str]:
 
 def test_review_adds_a_worktree_to_a_clone_in_the_checkout_folder_and_a_second_review_only_updates_it(tmp_path, github):
     make_clone(tmp_path / "widget", "git@github.com:Acme/Widget.git")
-    worktree = tmp_path / "widget-pr7"
+    worktree = worktrees(tmp_path) / "widget-pr7"
     review(PAGE, RECORDING_IDE, tmp_path)
     assert (worktree / "opened").exists()
     review(PAGE, RECORDING_IDE, tmp_path)
     assert github.calls == [("pr checkout", worktree), ("pr checkout", worktree)]
+
+
+def test_every_github_call_of_a_review_is_made_as_the_account_that_found_the_pull_request(tmp_path, github):
+    open_for_review(PAGE, QUIET_IDE, str(tmp_path), lambda _stage: None, "work")
+    assert github.accounts and set(github.accounts) == {"work"}
+    # Over SSH, git would sign in as the SSH key's account rather than this one.
+    assert local_review.git(["remote", "get-url", "origin"], tmp_path / "widget").startswith("https://github.com/")
 
 
 def test_removing_a_worktree_keeps_the_clone_made_in_the_checkout_folder_for_the_next_review(tmp_path, github):
@@ -110,7 +124,7 @@ def test_removing_a_worktree_keeps_the_clone_made_in_the_checkout_folder_for_the
         "Checking out pull request #7",
         "Opening the IDE",
     ]
-    worktree = tmp_path / "widget-pr7"
+    worktree = worktrees(tmp_path) / "widget-pr7"
     assert local_review.existing_worktree(PAGE, str(tmp_path)) == worktree
     local_review.remove_worktree(worktree)
     assert not worktree.exists()
@@ -125,7 +139,18 @@ def test_a_worktree_already_on_the_pull_requests_branch_is_reused_wherever_it_is
     run_git(clone, "worktree", "add", "-q", "-b", "widget-pr7", str(elsewhere))
     review(PAGE, QUIET_IDE, tmp_path)
     assert github.calls == [("pr checkout", elsewhere)]
-    assert not (tmp_path / "widget-pr7").exists()
+    assert not (worktrees(tmp_path) / "widget-pr7").exists()
+
+
+def test_a_worktree_of_the_users_own_beside_the_clones_is_never_taken_for_a_review_worktree(tmp_path, github):
+    clone = make_clone(tmp_path / "widget", "https://github.com/acme/widget")
+    own = tmp_path / "widget-pr7"
+    run_git(clone, "worktree", "add", "-q", "-b", "pr-7", str(own))
+    assert local_review.existing_worktree(PAGE, str(tmp_path)) is None
+    review(PAGE, QUIET_IDE, tmp_path)
+    assert github.calls == [("pr checkout", worktrees(tmp_path) / "widget-pr7")]
+    assert local_review.checked_out_branch(own) == "pr-7"
+    assert local_review.review_worktrees(str(tmp_path)) == [worktrees(tmp_path) / "widget-pr7"]
 
 
 def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_removal(tmp_path, github):
@@ -134,7 +159,7 @@ def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_rem
         "pathlib.Path(sys.argv[1], '.idea', 'workspace.xml').touch()"
     )
     review(PAGE, jetbrains, tmp_path)
-    worktree = tmp_path / "widget-pr7"
+    worktree = worktrees(tmp_path) / "widget-pr7"
     assert (worktree / ".idea" / "workspace.xml").exists()
     local_review.remove_worktree(worktree)
     assert not worktree.exists()
@@ -143,42 +168,47 @@ def test_the_settings_folder_a_jetbrains_ide_makes_does_not_stop_a_worktrees_rem
 def test_only_worktrees_on_their_own_review_branch_count_as_review_worktrees(tmp_path, github):
     review(PAGE, QUIET_IDE, tmp_path)
     review(PAGE.replace("/7", "/8"), QUIET_IDE, tmp_path)
-    run_git(tmp_path / "widget", "worktree", "add", "-q", "-b", "someone-elses", str(tmp_path / "widget-pr9"))
-    (tmp_path / "notes-pr3").mkdir()
-    assert local_review.review_worktrees(str(tmp_path)) == [tmp_path / "widget-pr7", tmp_path / "widget-pr8"]
+    run_git(
+        tmp_path / "widget", "worktree", "add", "-q", "-b", "someone-elses", str(worktrees(tmp_path) / "widget-pr9")
+    )
+    (worktrees(tmp_path) / "notes-pr3").mkdir()
+    assert local_review.review_worktrees(str(tmp_path)) == [
+        worktrees(tmp_path) / "widget-pr7",
+        worktrees(tmp_path) / "widget-pr8",
+    ]
 
 
 def test_a_worktree_holding_uncommitted_work_is_not_removed(tmp_path, github):
     review(PAGE, RECORDING_IDE, tmp_path)
     with pytest.raises(ReviewError, match="untracked"):
-        local_review.remove_worktree(tmp_path / "widget-pr7")
-    assert (tmp_path / "widget-pr7" / "opened").exists()
+        local_review.remove_worktree(worktrees(tmp_path) / "widget-pr7")
+    assert (worktrees(tmp_path) / "widget-pr7" / "opened").exists()
 
 
 def make_leftover(folder: Path) -> None:
     """Leave what a removal that failed part way leaves of a worktree: its folder and a stray file, but no .git."""
-    folder.mkdir()
+    folder.mkdir(parents=True)
     (folder / "stray.txt").write_text("left behind", encoding="utf-8")
 
 
 def test_what_a_failed_removal_left_is_cleared_by_the_next_review_or_removal(tmp_path, github):
     make_clone(tmp_path / "widget", "https://github.com/acme/widget")
-    make_leftover(tmp_path / "widget-pr7")
+    make_leftover(worktrees(tmp_path) / "widget-pr7")
     assert review(PAGE, QUIET_IDE, tmp_path)[0] == "Clearing what an earlier removal left of widget-pr7"
-    assert (tmp_path / "widget-pr7" / ".git").is_file()
-    make_leftover(tmp_path / "widget-pr8")
-    local_review.remove_worktree(tmp_path / "widget-pr8")
-    assert not (tmp_path / "widget-pr8").exists()
+    assert (worktrees(tmp_path) / "widget-pr7" / ".git").is_file()
+    make_leftover(worktrees(tmp_path) / "widget-pr8")
+    local_review.remove_worktree(worktrees(tmp_path) / "widget-pr8")
+    assert not (worktrees(tmp_path) / "widget-pr8").exists()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="only Windows refuses to delete a file another program has open")
 def test_a_folder_held_open_is_reported_with_a_hint_to_close_the_ide(tmp_path):
-    make_leftover(tmp_path / "widget-pr7")
+    make_leftover(worktrees(tmp_path) / "widget-pr7")
     with (
-        (tmp_path / "widget-pr7" / "stray.txt").open(encoding="utf-8"),
+        (worktrees(tmp_path) / "widget-pr7" / "stray.txt").open(encoding="utf-8"),
         pytest.raises(ReviewError, match="Close any IDE"),
     ):
-        local_review.remove_worktree(tmp_path / "widget-pr7")
+        local_review.remove_worktree(worktrees(tmp_path) / "widget-pr7")
 
 
 def make_clone_with_a_file(folder: Path) -> Path:
@@ -194,7 +224,7 @@ def make_clone_with_a_file(folder: Path) -> Path:
 def test_a_worktree_a_program_is_working_in_is_left_whole(tmp_path, github):
     clone = make_clone_with_a_file(tmp_path / "widget")
     review(PAGE, QUIET_IDE, tmp_path)
-    worktree = tmp_path / "widget-pr7"
+    worktree = worktrees(tmp_path) / "widget-pr7"
     holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], cwd=worktree)
     try:
         with pytest.raises(ReviewError, match="open in another program"):
@@ -209,7 +239,7 @@ def test_a_worktree_a_program_is_working_in_is_left_whole(tmp_path, github):
 def test_a_worktree_git_unregistered_and_partly_deleted_is_put_back_whole(tmp_path, github):
     clone = make_clone_with_a_file(tmp_path / "widget")
     review(PAGE, QUIET_IDE, tmp_path)
-    worktree = tmp_path / "widget-pr7"
+    worktree = worktrees(tmp_path) / "widget-pr7"
     # What git leaves when it cannot delete the folder itself: its files gone, and the worktree unregistered.
     (worktree / "widget.txt").unlink()
     (worktree / ".git").unlink()
@@ -221,7 +251,7 @@ def test_a_worktree_git_unregistered_and_partly_deleted_is_put_back_whole(tmp_pa
 
 
 def test_a_clone_cut_short_is_cleared_away_so_the_next_review_clones_afresh(tmp_path, monkeypatch):
-    def slow_clone(arguments: list[str], timeout: int = 0, folder: Path | None = None) -> str:
+    def slow_clone(arguments: list[str], timeout: int = 0, folder: Path | None = None, account: str = "") -> str:
         (Path(arguments[3]) / ".git").mkdir(parents=True)
         raise GitHubError("GitHub did not answer") from subprocess.TimeoutExpired(arguments, timeout)
 

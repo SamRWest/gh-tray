@@ -64,6 +64,8 @@ COLUMNS: tuple[tuple[str, str, int, bool], ...] = (
     ("title", "Title", 44, True),
     ("author", "Author", 16, False),
     ("who", "Who", 16, False),
+    # Which of the user's GitHub accounts found it.
+    ("account", "Account", 14, False),
     ("when", "When", 10, False),
 )
 DEFAULT_SORT = "when"
@@ -79,6 +81,7 @@ SORT_KEYS = {
     "title": lambda row: row.title.casefold(),
     "author": lambda row: (not row.author, row.author.casefold()),
     "who": lambda row: (not row.who, row.who.casefold()),
+    "account": lambda row: (not row.account, row.account.casefold()),
     "when": lambda row: moment(row.at),
 }
 
@@ -112,6 +115,8 @@ class Row:
     reviewed: bool = False
     # Whether its pull request has a review worktree checked out locally; found by the window, not stored.
     worktree: bool = False
+    # The user's GitHub account that found it, which reviewing it locally acts as; empty when not recorded.
+    account: str = ""
 
 
 # A name's ink, from a stable digest of its spelling, so it is the same colour every time; an identity tag only.
@@ -253,6 +258,7 @@ def row_from_event(event: dict, seen: bool) -> Row:
         author=str(event.get("author", "")),
         # Rows recorded before roles were kept still say their kind, naming a mention outright; the rest fills in later.
         role=str(event.get("role", "")) or ("mention" if event.get("kind") == "mention" else ""),
+        account=str(event.get("account", "")),
     )
 
 
@@ -318,6 +324,7 @@ def rows_from_snapshot(
                     seen=has_been_seen(identity, touched, marks or {}, ALREADY_SEEN if label == AUTHOR_LABEL else None),
                     author=str(entry.get("author", "")),
                     role=role_of(entry),
+                    account=str(entry.get("account", "")),
                 ),
             )
         )
@@ -377,20 +384,20 @@ def rows_to_show(max_age_days: int = 0, all_mine: bool = False) -> list[Row]:
 
 
 def filled_in(row: Row, entries: dict) -> Row:
-    """Return a row with its author and hat filled in from the last poll's records, where it arrived without them.
+    """Return a row with its author, hat and account filled in from the last poll's records, where it lacks them.
 
     Only rows recorded before those fields were kept need this; a thread no longer polled stays blank until it ages out.
     :param row: the row as the log produced it
     :param entries: pull requests as the last poll recorded them
     """
-    if (row.author and row.role) or not row.url:
+    if (row.author and row.role and row.account) or not row.url:
         return row
     entry = next((candidate for candidate in entries.values() if candidate.get("url") == row.url), None)
     if entry is None:
         return row
     owner = row.author or str(entry.get("author", ""))
     hat = row.role or ("author" if entry.get("side") == "authored" else "reviewer")
-    return replace(row, author=owner, role=hat)
+    return replace(row, author=owner, role=hat, account=row.account or str(entry.get("account", "")))
 
 
 # Status column words and inks, following GitHub's own colours: green open, violet merged, red closed, quiet draft.
@@ -528,6 +535,23 @@ def role_matches(row: Row, wanted: str) -> bool:
     return wanted == "all" or row.role == wanted
 
 
+def account_matches(row: Row, wanted: str) -> bool:
+    """Return whether a row passes the account filter.
+
+    :param row: the row to judge
+    :param wanted: the account whose rows are wanted, or empty for every account's
+    """
+    return not wanted or row.account.casefold() == wanted.casefold()
+
+
+def accounts_of(rows: list[Row]) -> list[str]:
+    """Return the accounts that found some row, alphabetically, so the account filter offers only those.
+
+    :param rows: every row on offer
+    """
+    return sorted({row.account for row in rows if row.account}, key=str.casefold)
+
+
 def matches_search(row: Row, needle: str) -> bool:
     """Return whether a row has some text somewhere in its columns.
 
@@ -537,7 +561,9 @@ def matches_search(row: Row, needle: str) -> bool:
     """
     if not needle:
         return True
-    haystack = " ".join((row.label, row.repo, row.number, row.status, row.title, row.author, row.who, row.when))
+    haystack = " ".join(
+        (row.label, row.repo, row.number, row.status, row.title, row.author, row.who, row.account, row.when)
+    )
     return needle.casefold() in haystack.casefold()
 
 

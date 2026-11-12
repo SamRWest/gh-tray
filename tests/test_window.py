@@ -15,7 +15,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QMenu
 from pytestqt.qtbot import QtBot
 
-from gh_tray import config, environment, popup, theme, window
+from gh_tray import config, environment, local_review, popup, theme, window
 
 
 def row(
@@ -217,7 +217,7 @@ def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_sub
     build_window, qtbot, monkeypatch
 ):
     page = "https://github.com/acme/widget/pull/7"
-    view = build_window([replace(ROWS[0], url=page), ROWS[1]])
+    view = build_window([replace(ROWS[0], url=page, account="work"), ROWS[1]])
     monkeypatch.setattr(window, "load_config", lambda: {config.IDE_COMMAND_KEY: environment.DEFAULT_IDE_COMMAND})
     view.show()
     offered = {action.text(): action.isEnabled() for action in view.row_menu(view.entries[1]).actions()}
@@ -237,11 +237,11 @@ def test_review_in_the_default_ide_is_named_after_it_and_the_others_sit_in_a_sub
     with qtbot.waitSignal(view.review_asked) as asked:
         choose(others, "PyCharm")
     menu.close()
-    assert asked.args == [page, dict(environment.ide_presets())["PyCharm"]]
+    assert asked.args == [page, dict(environment.ide_presets())["PyCharm"], "work"]
     view.show()
     with qtbot.waitSignal(view.review_asked) as asked:
         choose(right_click_menu(view, qtbot, 0), "Review in VS Code")
-    assert asked.args == [page, environment.DEFAULT_IDE_COMMAND]
+    assert asked.args == [page, environment.DEFAULT_IDE_COMMAND, "work"]
     assert not view.isVisible()
 
 
@@ -254,8 +254,10 @@ def make_review_worktree(checkout_folder: Path, name: str) -> None:
     gitdir = checkout_folder / f"{name}-gitdir"
     gitdir.mkdir()
     (gitdir / "HEAD").write_text(f"ref: refs/heads/{name}\n", encoding="utf-8")
-    (checkout_folder / name).mkdir()
-    (checkout_folder / name / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    (checkout_folder / local_review.WORKTREES_FOLDER / name).mkdir(parents=True)
+    (checkout_folder / local_review.WORKTREES_FOLDER / name / ".git").write_text(
+        f"gitdir: {gitdir}\n", encoding="utf-8"
+    )
 
 
 def test_the_worktree_column_ticks_a_pull_request_until_its_worktree_folder_is_really_gone(
@@ -272,9 +274,9 @@ def test_the_worktree_column_ticks_a_pull_request_until_its_worktree_folder_is_r
     make_review_worktree(tmp_path, "widget-pr7")
     assert ticked()
     # A removal that fails part way, as on Windows when an IDE holds the folder, takes the .git file but not the folder.
-    (tmp_path / "widget-pr7" / ".git").unlink()
+    (tmp_path / local_review.WORKTREES_FOLDER / "widget-pr7" / ".git").unlink()
     assert ticked()
-    (tmp_path / "widget-pr7").rmdir()
+    (tmp_path / local_review.WORKTREES_FOLDER / "widget-pr7").rmdir()
     assert not ticked()
 
 
@@ -303,7 +305,7 @@ def test_opening_and_removing_worktrees_is_offered_once_a_review_has_made_one(
     make_review_worktree(tmp_path, "widget-pr7")
     view.show()
     choose(right_click_menu(view, qtbot, 0), "Open worktree dir")
-    assert shown == [tmp_path / "widget-pr7"]
+    assert shown == [tmp_path / local_review.WORKTREES_FOLDER / "widget-pr7"]
     view.show()
     with qtbot.waitSignal(view.remove_asked) as asked:
         choose(right_click_menu(view, qtbot, 0), "Remove local worktree")

@@ -48,7 +48,10 @@ def no_console_flag() -> int:
 
 
 def run_quietly(
-    command: list[str], timeout: float | None = None, folder: Path | None = None
+    command: list[str],
+    timeout: float | None = None,
+    folder: Path | None = None,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command without a console window and return what it printed.
 
@@ -56,6 +59,7 @@ def run_quietly(
     :param command: the program and its arguments
     :param timeout: how long to wait, or None to wait as long as it takes
     :param folder: the folder to run in, or None for this process's own
+    :param environment: variables to set for the command on top of this process's own, or None to add none
     :return: the finished command, with its output as text
     """
     return subprocess.run(
@@ -63,6 +67,7 @@ def run_quietly(
         check=False,
         timeout=timeout,
         cwd=folder,
+        env=os.environ | environment if environment else None,
         capture_output=True,
         text=True,
         encoding="utf-8",

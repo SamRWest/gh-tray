@@ -174,7 +174,7 @@ class Tray(QObject):
         self.zoom.changed.connect(self.window.on_font_changed)
         self.settings: SettingsDialog | None = None
         # The page and IDE command of a review waiting on the settings window, or None when none is.
-        self.pending_review: tuple[str, str] | None = None
+        self.pending_review: tuple[str, str, str] | None = None
         self.account: Account | None = None
         self.lookup = AccountLookup()
         self.lookup.found.connect(self.on_account_found)
@@ -302,29 +302,33 @@ class Tray(QObject):
         except RuntimeError as error:
             logger.error("could not open the dashboard: {}", error)
 
-    def on_review(self, url: str, command: str) -> None:
+    def on_review(self, url: str, command: str, account: str = "") -> None:
         """Open a pull request in an IDE, on a thread of its own since a first clone can take minutes.
 
         Without a command or checkout folder, the settings open at the one missing, and the review waits for them.
         :param url: the pull request's page
         :param command: the command that opens a folder in the chosen IDE
+        :param account: the GitHub account to fetch it as, or empty for the active one
         """
         if not (command and self.config[CHECKOUT_FOLDER_KEY]):
-            self.pending_review = (url, command)
+            self.pending_review = (url, command, account)
             self.open_settings().ask_for_review_settings()
             return
         self.reviews_running += 1
         self.show_progress()
-        threading.Thread(target=self.review, args=(url, command), daemon=True, name=f"{APP_NAME}-review").start()
+        threading.Thread(
+            target=self.review, args=(url, command, account), daemon=True, name=f"{APP_NAME}-review"
+        ).start()
 
-    def review(self, url: str, command: str) -> None:
+    def review(self, url: str, command: str, account: str = "") -> None:
         """Open a pull request in an IDE off the toolkit's thread, so report each step and any failure over signals.
 
         :param url: the pull request's page
         :param command: the command that opens a folder in the chosen IDE
+        :param account: the GitHub account to fetch it as, or empty for the active one
         """
         try:
-            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.review_stage.emit)
+            open_for_review(url, command, self.config[CHECKOUT_FOLDER_KEY], self.review_stage.emit, account)
         except (ReviewError, GitHubError) as error:
             logger.warning("could not open {} for review: {}", url, error)
             self.local_review_failed.emit(f"Could not review in the IDE: {error}")
@@ -465,10 +469,10 @@ class Tray(QObject):
         self.window.set_opacity(saved.get(OPACITY_KEY))
         waiting, self.pending_review = self.pending_review, None
         if waiting is not None:
-            url, command = waiting
+            url, command, account = waiting
             command = command or self.config[IDE_COMMAND_KEY]
             if command and self.config[CHECKOUT_FOLDER_KEY]:
-                self.on_review(url, command)
+                self.on_review(url, command, account)
 
     def on_opacity_moved(self, percent: int) -> None:
         """Follow the settings slider live, bringing the window up under the settings if it is hidden.

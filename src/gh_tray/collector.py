@@ -4,18 +4,20 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from itertools import repeat
 
 from loguru import logger
 
 from gh_tray.config import (
     ERROR_LOG_PATH,
+    HIDDEN_ACCOUNTS_KEY,
     HIDDEN_OWNERS_KEY,
     INVOLVED_KEY,
     STATE_PATH,
     WATCH_OTHERS_KEY,
     WATCHED_OWNERS_KEY,
 )
-from gh_tray.github import GitHubError, api, search_pull_requests, viewer
+from gh_tray.github import GitHubError, account_token, accounts, api, search_pull_requests
 from gh_tray.storage import read_json, write_json_atomic, write_text_atomic
 
 TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -36,6 +38,7 @@ CLOSED = "is:pr is:closed involves:@me archived:false sort:updated-desc"
 # changes; the look-back then reaches back to the oldest, since each of those rows needs to know how its pull request
 # ended. The search stops after a few pages, newest first, so only an unusually busy account loses the oldest.
 CLOSED_LOOKBACK_DAYS = 30
+SIDES = ("authored", "reviewing", "closed", "involved")
 
 
 def search_for(base: str, max_age_days: int, now: datetime, hidden_owners: list[str] | None = None) -> str:
@@ -134,17 +137,19 @@ def last_comment_answers(node: dict) -> str:
     return nested(node, "reviews", "nodes", "comments", "nodes", "replyTo", "author", "login")
 
 
-def normalise(node: dict, side: str) -> dict:
+def normalise(node: dict, side: str, account: str = "") -> dict:
     """Turn one pull request from GitHub's shape into the flat record the rest of the application reads.
 
     :param node: a pull request as GitHub returned it
     :param side: ``authored``, ``reviewing`` or ``closed``
+    :param account: the signed-in account whose search found it
     """
     repo = nested(node, "repository", "nameWithOwner")
     number = node.get("number")
     return {
         "key": f"{repo}#{number}",
         "side": side,
+        "account": account,
         "repo": repo,
         "number": number,
         "title": node.get("title") or "",
@@ -200,43 +205,46 @@ def page_url(api_url: str) -> str:
     return api_url.replace("api.github.com/repos", "github.com").replace("/pulls/", "/pull/")
 
 
-def comment_author(comment_url: str) -> str:
+def comment_author(comment_url: str, account: str = "") -> str:
     """Return who wrote one comment, or nothing if it cannot be read.
 
     :param comment_url: the comment's address on GitHub's interface
+    :param account: the signed-in account to ask as
     """
     if not comment_url:
         return ""
     try:
-        comment = api(comment_url.replace("https://api.github.com/", ""))
+        comment = api(comment_url.replace("https://api.github.com/", ""), account)
     except GitHubError as error:
         logger.warning("could not find out who wrote a mention: {}", error)
         return ""
     return nested(comment, "user", "login") if isinstance(comment, dict) else ""
 
 
-def thread_author(subject_url: str) -> str:
+def thread_author(subject_url: str, account: str = "") -> str:
     """Return whose thread a notification is about, or nothing if it cannot be read.
 
     :param subject_url: the thread's address on GitHub's interface
+    :param account: the signed-in account to ask as
     """
     if not subject_url:
         return ""
     try:
-        thread = api(subject_url.replace("https://api.github.com/", ""))
+        thread = api(subject_url.replace("https://api.github.com/", ""), account)
     except GitHubError as error:
         logger.warning("could not find out whose thread a mention is on: {}", error)
         return ""
     return nested(thread, "user", "login") if isinstance(thread, dict) else ""
 
 
-def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list[dict]:
+def collect_mentions(since: str, hidden_owners: list[str] | None = None, account: str = "") -> list[dict]:
     """Return the mentions raised since a moment, each named with whoever wrote it where that can be found.
 
     :param since: the earliest moment to report, as a GitHub timestamp
     :param hidden_owners: the owners, people or organisations, whose mentions are not wanted
+    :param account: the signed-in account whose notifications to read
     """
-    feed = api(f"notifications?all=false&since={since}&per_page=100")
+    feed = api(f"notifications?all=false&since={since}&per_page=100", account)
     if not isinstance(feed, list):
         return []
     left_out = {login.casefold() for login in hidden_owners or []}
@@ -252,8 +260,8 @@ def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list
     ]
     threads = [(notification.get("subject") or {}).get("url") or "" for notification in raised[:MENTION_LOOKUP_LIMIT]]
     with ThreadPoolExecutor(max_workers=CONCURRENT_LOOKUPS, thread_name_prefix="gh-tray-mentions") as pool:
-        authors = list(pool.map(comment_author, traced))
-        owners = list(pool.map(thread_author, threads))
+        authors = list(pool.map(comment_author, traced, repeat(account)))
+        owners = list(pool.map(thread_author, threads, repeat(account)))
     authors += [""] * (len(raised) - len(authors))
     owners += [""] * (len(raised) - len(owners))
 
@@ -275,6 +283,7 @@ def collect_mentions(since: str, hidden_owners: list[str] | None = None) -> list
                 "url": page_url(address),
                 "actor": actor,
                 "author": owner,
+                "account": account,
             }
         )
     return mentions
@@ -302,10 +311,64 @@ def closed_lookback_days(oldest_change: str, now: datetime) -> int:
     return max(CLOSED_LOOKBACK_DAYS, (now - oldest).days + 1)
 
 
-def collect(config: dict, oldest_change: str = "") -> tuple[dict | None, str]:
-    """Gather everything the application needs from GitHub.
+def checked_accounts(config: dict) -> list[str]:
+    """Return the accounts to check: every one the GitHub CLI is signed in to, less those turned off in the settings.
 
-    :param config: current settings, supplying the age cutoff
+    :param config: current settings
+    :raises GitHubError: when the CLI cannot list its accounts
+    """
+    hidden = {login.casefold() for login in config.get(HIDDEN_ACCOUNTS_KEY) or []}
+    return [login for login in accounts() if login.casefold() not in hidden]
+
+
+def collect_as(account: str, searches: dict[str, str], since: str, hidden_owners: list[str]) -> dict[str, list[dict]]:
+    """Run every search and read the mention feed as one account, marking each record with that account.
+
+    :param account: the signed-in account to ask as
+    :param searches: the search expression for each side wanted
+    :param since: the earliest mention to report, as a GitHub timestamp
+    :param hidden_owners: the owners, people or organisations, whose mentions are not wanted
+    :return: each side's records, and the mentions under ``mentions``
+    :raises GitHubError: when GitHub cannot be asked, naming the account
+    """
+    try:
+        with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
+            asked = {
+                side: pool.submit(search_pull_requests, SEARCH_QUERY, search, account)
+                for side, search in searches.items()
+            }
+            mentioning = pool.submit(collect_mentions, since, hidden_owners, account)
+            found = {
+                side: [normalise(node, side, account) for node in future.result()] for side, future in asked.items()
+            }
+            return found | {"mentions": mentioning.result()}
+    except GitHubError as error:
+        raise GitHubError(f"{account}: {error}") from error
+
+
+def first_of_each(found: list[dict[str, list[dict]]], field: str, identity: str) -> list[dict]:
+    """Join every account's records of one kind, keeping only the first of any that more than one account found.
+
+    :param found: each account's records, as :func:`collect_as` returns them, in the order the accounts are checked
+    :param field: which records: a side, or ``mentions``
+    :param identity: the field naming what a record is about; a record without one is always kept
+    """
+    kept: list[dict] = []
+    known: set[str] = set()
+    for record in (record for records in found for record in records.get(field, [])):
+        name = str(record.get(identity) or "")
+        if name in known:
+            continue
+        if name:
+            known.add(name)
+        kept.append(record)
+    return kept
+
+
+def collect(config: dict, oldest_change: str = "") -> tuple[dict | None, str]:
+    """Gather everything the application needs from GitHub, as every account the settings leave ticked.
+
+    :param config: current settings, supplying the age cutoff and the accounts and owners not wanted
     :param oldest_change: when the oldest change in the event log happened, or an empty string when it holds none
     :return: the digest and an empty string on success, or None and a description of the failure
     """
@@ -313,37 +376,27 @@ def collect(config: dict, oldest_change: str = "") -> tuple[dict | None, str]:
     since = read_last_run() or (started - FIRST_RUN_WINDOW).strftime(TIMESTAMP_FORMAT)
     cutoff = config.get("max_age_days", 0)
     hidden = config.get(HIDDEN_OWNERS_KEY) or []
-    authored_search = search_for(AUTHORED, cutoff, started, hidden)
-    reviewing_search = search_for(REVIEWING, cutoff, started, hidden)
-    closed_search = search_for(CLOSED, closed_lookback_days(oldest_change, started), started, hidden)
-    involved_search = search_for(INVOLVED, cutoff, started, hidden) if config.get(INVOLVED_KEY) else ""
-    logger.debug(
-        "searching for {!r}, {!r}, {!r} and {!r}, and mentions since {}",
-        authored_search,
-        reviewing_search,
-        closed_search,
-        involved_search or "nothing else",
-        since,
-    )
+    searches = {
+        "authored": search_for(AUTHORED, cutoff, started, hidden),
+        "reviewing": search_for(REVIEWING, cutoff, started, hidden),
+        "closed": search_for(CLOSED, closed_lookback_days(oldest_change, started), started, hidden),
+    } | ({"involved": search_for(INVOLVED, cutoff, started, hidden)} if config.get(INVOLVED_KEY) else {})
+    # Signing in again replaces an account's token, so none is kept from one poll to the next.
+    account_token.cache_clear()
     try:
-        with ThreadPoolExecutor(max_workers=CONCURRENT_ASKINGS, thread_name_prefix="gh-tray-collect") as pool:
-            signed_in = pool.submit(viewer)
-            own = pool.submit(search_pull_requests, SEARCH_QUERY, authored_search)
-            to_review = pool.submit(search_pull_requests, SEARCH_QUERY, reviewing_search)
-            finished = pool.submit(search_pull_requests, SEARCH_QUERY, closed_search)
-            also = pool.submit(search_pull_requests, SEARCH_QUERY, involved_search) if involved_search else None
-            mentioning = pool.submit(collect_mentions, since, hidden)
-            signed_in_as = signed_in.result()
-            authored = [normalise(node, "authored") for node in own.result()]
-            reviewing = [normalise(node, "reviewing") for node in to_review.result()]
-            closed = [normalise(node, "closed") for node in finished.result()]
-            involved = [normalise(node, "involved") for node in also.result()] if also is not None else []
-            mentions = mentioning.result()
+        logins = checked_accounts(config)
+        if not logins:
+            raise GitHubError("no GitHub account is ticked in the settings")
+        logger.debug("searching as {} for {}, and mentions since {}", ", ".join(logins), searches, since)
+        with ThreadPoolExecutor(max_workers=len(logins), thread_name_prefix="gh-tray-accounts") as pool:
+            found = list(pool.map(collect_as, logins, repeat(searches), repeat(since), repeat(hidden)))
     except GitHubError as error:
         write_text_atomic(ERROR_LOG_PATH, f"{started.isoformat()}\n{error}\n")
         logger.error("collection failed: {}", error)
         return None, str(error)[:120]
 
+    authored, reviewing, closed, involved = (first_of_each(found, side, "key") for side in SIDES)
+    mentions = first_of_each(found, "mentions", "url")
     authored, hidden_authored = drop_stale(authored, cutoff, started)
     reviewing, hidden_reviewing = drop_stale(reviewing, cutoff, started)
     on_a_side_already = {entry["key"] for entry in authored + reviewing}
@@ -367,7 +420,7 @@ def collect(config: dict, oldest_change: str = "") -> tuple[dict | None, str]:
     return {
         "window": {"since": since, "until": started.strftime(TIMESTAMP_FORMAT)},
         "staleFilter": {"maxAgeDays": cutoff, "hiddenAuthored": hidden_authored, "hiddenReviewing": hidden_reviewing},
-        "viewer": signed_in_as,
+        "viewers": logins,
         "authored": authored,
         "reviewing": reviewing,
         "closed": closed,
