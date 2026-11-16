@@ -50,6 +50,7 @@ SNAPSHOT_DEFAULTS: dict = {
     "lastCommentBy": "",
     "lastCommentAnswers": "",
     "reviewedByMe": False,
+    "account": "",
 }
 
 # Actor field named per rule; conflict names the author, since GitHub does not record who caused it.
@@ -228,27 +229,30 @@ def _event(kind: str, pull_request: dict, detail: str, at: str) -> dict:
         "actor": pull_request.get(ACTOR_FIELDS.get(kind, ""), ""),
         "author": pull_request.get("author", ""),
         "role": role_of(pull_request),
+        "account": pull_request.get("account", ""),
     }
 
 
-def comment_concerns_user(pull_request: dict, login: str) -> bool:
+def comment_concerns_user(pull_request: dict, logins: frozenset[str]) -> bool:
     """Return whether a comment is worth telling the user about (own: always; reviewed: only a reply to them).
 
     :param pull_request: the pull request as the snapshot records it
-    :param login: the signed-in account, or empty when it is not known
+    :param logins: the user's checked accounts, none when they are not known
     """
     if pull_request.get("side") == "authored":
         return True
-    return bool(login) and pull_request.get("lastCommentAnswers") == login
+    return pull_request.get("lastCommentAnswers") in logins
 
 
-def detect_pull_request_events(previous: dict, current: dict, at: str, login: str = "") -> list[dict]:
+def detect_pull_request_events(
+    previous: dict, current: dict, at: str, logins: frozenset[str] = frozenset()
+) -> list[dict]:
     """Compare two pull request snapshots and return one event per change worth reporting.
 
     :param previous: the snapshot written by the last poll
     :param current: the snapshot just built
     :param at: timestamp to stamp on every event
-    :param login: the signed-in account, which decides whose comments are worth reporting
+    :param logins: the user's checked accounts, which decide whose comments are worth reporting
     :return: events, in no particular order
     """
     events: list[dict] = []
@@ -279,7 +283,7 @@ def detect_pull_request_events(previous: dict, current: dict, at: str, login: st
             if pull_request.get("mergeable") == "CONFLICTING" and was.get("mergeable") != "CONFLICTING":
                 events.append(_event("conflict", pull_request, "needs a rebase", at))
         if (pull_request.get("comments") or 0) > (was.get("comments") or 0) and comment_concerns_user(
-            pull_request, login
+            pull_request, logins
         ):
             events.append(
                 _event("new_comment", pull_request, f"{pull_request['comments'] - (was.get('comments') or 0)} new", at)
@@ -312,6 +316,7 @@ def detect_mention_events(digest: dict, seen_urls: set[str], at: str) -> list[di
                 "actor": mention.get("actor", ""),
                 "author": mention.get("author", ""),
                 "role": "mention",
+                "account": mention.get("account", ""),
             }
         )
     return events
@@ -322,24 +327,24 @@ def detect_events(previous: dict, current: dict, digest: dict, seen_urls: set[st
 
     :param previous: the snapshot written by the last poll
     :param current: the snapshot just built
-    :param digest: the full collector result, read for mentions and for who is signed in
+    :param digest: the full collector result, read for mentions and for which accounts were checked
     :param seen_urls: mention addresses already recorded, so a still-unread mention is not reported twice
     """
     at = utc_now()
-    login = str(digest.get("viewer", ""))
-    found = detect_pull_request_events(previous, current, at, login) + detect_mention_events(
+    logins = frozenset(str(login) for login in digest.get("viewers", []) if login)
+    found = detect_pull_request_events(previous, current, at, logins) + detect_mention_events(
         digest, seen_urls or set(), at
     )
-    return [event for event in found if not caused_by(event, login)]
+    return [event for event in found if not caused_by(event, logins)]
 
 
-def caused_by(event: dict, login: str) -> bool:
-    """Return whether a change is one the user brought about themselves.
+def caused_by(event: dict, logins: frozenset[str]) -> bool:
+    """Return whether a change is one the user brought about themselves, from any of their accounts.
 
     :param event: the change to judge
-    :param login: the signed-in account, or empty when it is not known
+    :param logins: the user's checked accounts, none when they are not known
     """
-    return bool(login) and event["kind"] in SELF_CAUSED_KINDS and event.get("actor") == login
+    return event["kind"] in SELF_CAUSED_KINDS and event.get("actor") in logins
 
 
 def read_events(limit: int | None = None) -> list[dict]:

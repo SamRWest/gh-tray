@@ -7,11 +7,11 @@ import copy
 import pytest
 from pytestqt.qtbot import QtBot
 
-from gh_tray import config, settings_window, theme
+from gh_tray import config, environment, settings_window, theme
 from gh_tray.settings_window import Account, SettingsDialog
 
 TESTER = Account(
-    login="tester", organisations=("acme", "widgets"), signed_in=True, sign_in_summary="Signed in as tester"
+    logins=("tester",), organisations=("acme", "widgets"), signed_in=True, sign_in_summary="Signed in as tester"
 )
 
 
@@ -77,13 +77,42 @@ def test_save_and_close_writes_the_settings_through_save_config_and_toggles_auto
     dialog.toggles["mention"].setChecked(False)
     dialog.style_buttons[theme.ALWAYS_LIGHT].setChecked(True)
     dialog.autostart.setChecked(True)
+    assert dialog.all_mine.isChecked(), "every PR of the user's own is listed unless they say otherwise"
+    dialog.all_mine.setChecked(False)
     dialog.save_and_close()
     written = build_dialog.saved[-1]
     assert written["poll_minutes"] == 30
     assert written["dashboard_command"] == "gh dash --repo acme/gadget"
     assert written["toasts"]["mention"] is False
     assert written[config.THEME_KEY] == theme.ALWAYS_LIGHT
+    assert written[config.ALL_MINE_KEY] is False
     assert build_dialog.autostart_calls == [True]
+
+
+def test_the_ide_command_offers_ready_made_commands_and_saves_what_is_typed_with_the_checkout_folder(
+    build_dialog, tmp_path
+):
+    dialog = build_dialog({**config.DEFAULT_CONFIG, config.IDE_COMMAND_KEY: "idea64 {folder}"})
+    assert dialog.ide.currentText() == "idea64 {folder}"
+    offered = [dialog.ide.itemText(index) for index in range(dialog.ide.count())]
+    assert offered == [command for _name, command in environment.ide_presets()]
+    dialog.ide.setCurrentText("code --new-window {folder}")
+    dialog.checkout_folder.setText(str(tmp_path))
+    dialog.save_and_close()
+    written = build_dialog.saved[-1]
+    assert (written[config.IDE_COMMAND_KEY], written[config.CHECKOUT_FOLDER_KEY]) == (
+        "code --new-window {folder}",
+        str(tmp_path),
+    )
+
+
+def test_saving_keeps_a_setting_changed_elsewhere_while_the_window_was_open(build_dialog):
+    stored = copy.deepcopy(config.DEFAULT_CONFIG)
+    dialog = build_dialog(stored)
+    # Pop-up notifications turned off from the tray menu after the window opened.
+    stored[config.NOTIFICATIONS_KEY] = False
+    dialog.save_and_close()
+    assert build_dialog.saved[-1][config.NOTIFICATIONS_KEY] is False
 
 
 def test_chosen_theme_follows_the_radio_buttons(build_dialog):
@@ -114,7 +143,7 @@ def test_a_failure_to_list_organisations_is_said_rather_than_raised(build_dialog
     refused = Account(signed_in=False, sign_in_summary="Not signed in to GitHub", trouble="GitHub did not answer")
     dialog = build_dialog({**config.DEFAULT_CONFIG, "hidden_owners": ["widgets"]}, account=refused)
     assert list(dialog.owner_switches_by_login) == ["widgets"]
-    assert dialog.owner_note.text() == "Could not list your organisations: GitHub did not answer"
+    assert dialog.owner_note.text() == "Could not ask GitHub: GitHub did not answer"
 
 
 def test_the_dialog_comes_up_waiting_and_fills_in_when_the_account_arrives(build_dialog):
@@ -129,9 +158,13 @@ def test_the_dialog_comes_up_waiting_and_fills_in_when_the_account_arrives(build
 
 def test_look_up_account_gathers_the_sign_in_state_login_and_organisations(monkeypatch):
     monkeypatch.setattr(settings_window, "github_auth_state", lambda: (True, "Logged in as tester"))
-    monkeypatch.setattr(settings_window, "viewer", lambda: "tester")
-    monkeypatch.setattr(settings_window, "organisations", lambda: ["acme"])
-    assert settings_window.look_up_account() == Account("tester", ("acme",), True, "Logged in as tester", "")
+    monkeypatch.setattr(settings_window, "accounts", lambda: ["tester", "other"])
+    monkeypatch.setattr(
+        settings_window, "organisations", lambda login: {"tester": ["acme"], "other": ["Beta", "acme"]}[login]
+    )
+    assert settings_window.look_up_account() == Account(
+        ("tester", "other"), ("acme", "Beta"), True, "Logged in as tester", ""
+    )
 
 
 def test_the_involved_switch_and_the_catch_all_are_shown_and_saved(build_dialog):
@@ -171,3 +204,13 @@ def test_the_opacity_slider_shows_the_stored_value_reports_moves_live_and_is_sav
     assert dialog.opacity_value.text() == "65%"
     dialog.save_and_close()
     assert build_dialog.saved[-1]["opacity"] == 65
+
+
+def test_each_account_has_a_switch_and_turning_one_off_is_saved_as_hidden(build_dialog):
+    two = Account(logins=("tester", "other"), signed_in=True, sign_in_summary="Signed in")
+    dialog = build_dialog(copy.deepcopy(config.DEFAULT_CONFIG), account=two)
+    assert list(dialog.account_switches_by_login) == ["tester", "other"]
+    assert dialog.account_note.isHidden()
+    dialog.account_switches_by_login["other"].setChecked(False)
+    dialog.save_and_close()
+    assert build_dialog.saved[-1]["hidden_accounts"] == ["other"]

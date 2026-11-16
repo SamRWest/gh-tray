@@ -36,7 +36,10 @@ def start_logging(to_console: bool, verbose: bool = False) -> None:
         level = "DEBUG" if verbose else "INFO"
         logger.add(sys.stderr, level=level, format="{time:HH:mm:ss} {level: <7} {message}")
     APP_DIR.mkdir(parents=True, exist_ok=True)
-    logger.add(LOG_PATH, level="DEBUG", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8")
+    # Without diagnose, a logged traceback leaves out variable values, which can hold a GitHub token.
+    logger.add(
+        LOG_PATH, level="DEBUG", rotation=LOG_ROTATION, retention=LOG_RETENTION, encoding="utf-8", diagnose=False
+    )
 
 
 class LinesToLog(io.TextIOBase):

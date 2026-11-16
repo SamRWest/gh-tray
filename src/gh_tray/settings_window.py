@@ -1,8 +1,9 @@
-"""The settings window: polling, notifications, dashboard command, owners, colours, login start and sign-in."""
+"""The settings window: polling, notifications, commands, accounts, owners, colours, login start and sign-in."""
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from loguru import logger
@@ -11,14 +12,17 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QRadioButton,
     QSlider,
     QSpinBox,
@@ -28,9 +32,13 @@ from PySide6.QtWidgets import (
 
 from gh_tray import APP_NAME
 from gh_tray.config import (
+    ALL_MINE_KEY,
     APP_ICON_PATH,
     BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
+    HIDDEN_ACCOUNTS_KEY,
     HIDDEN_OWNERS_KEY,
+    IDE_COMMAND_KEY,
     INVOLVED_KEY,
     NUMBER_RANGES,
     OPACITY_KEY,
@@ -42,9 +50,17 @@ from gh_tray.config import (
     load_config,
     save_config,
 )
-from gh_tray.environment import autostart_enabled, github_auth_state, hide_from_dock, open_in_terminal, set_autostart
+from gh_tray.environment import (
+    autostart_enabled,
+    github_auth_state,
+    hide_from_dock,
+    ide_presets,
+    open_in_terminal,
+    set_autostart,
+)
 from gh_tray.events import RULE_LABELS
-from gh_tray.github import GitHubError, organisations, viewer
+from gh_tray.github import GitHubError, accounts, organisations
+from gh_tray.local_review import WORKTREES_FOLDER
 from gh_tray.status import write_app_icon
 from gh_tray.theme import ALWAYS_DARK, ALWAYS_LIGHT, FOLLOW_DESKTOP, chosen_style, ink, palette
 from gh_tray.toolkit import FontZoom, application, compositing_available, follow_theme_setting, layout_store
@@ -60,31 +76,37 @@ UNBOUNDED = 100_000
 
 THEME_CHOICES = ((FOLLOW_DESKTOP, "Follow the desktop"), (ALWAYS_DARK, "Dark"), (ALWAYS_LIGHT, "Light"))
 
+LOOKING_UP_ACCOUNTS = "Looking up your accounts..."
 LOOKING_UP_OWNERS = "Looking up your organisations..."
 CHECKING_SIGN_IN = "Checking GitHub sign-in..."
+NO_ACCOUNTS = "The GitHub CLI is signed in to no account. Sign in below."
 NO_OWNERS = "GitHub named no owner. Everything you have a hand in is watched."
 
 
 @dataclass(frozen=True)
 class Account:
-    """What the window shows about the signed-in account, each part learned from GitHub."""
+    """What the window shows about the GitHub CLI's accounts, each part learned from GitHub."""
 
-    login: str = ""
+    # Every account the CLI is signed in to, the active one first.
+    logins: tuple[str, ...] = ()
+    # Every organisation any of those accounts belongs to.
     organisations: tuple[str, ...] = ()
     signed_in: bool = False
     sign_in_summary: str = ""
-    # Why the organisations could not be listed, when they could not.
+    # Why the accounts or organisations could not be listed, when they could not.
     trouble: str = ""
 
 
 def look_up_account() -> Account:
-    """Ask GitHub about the account. Slow, so called off the toolkit's thread."""
+    """Ask GitHub about the accounts and their organisations. Slow, so called off the toolkit's thread."""
     signed_in, summary = github_auth_state()
     try:
-        login, listed, trouble = viewer(), tuple(organisations()), ""
+        logins = tuple(accounts())
+        listed = tuple(sorted({name for login in logins for name in organisations(login)}, key=str.casefold))
+        trouble = ""
     except GitHubError as error:
-        login, listed, trouble = "", (), str(error)
-    return Account(login, listed, signed_in, summary, trouble)
+        logins, listed, trouble = (), (), str(error)
+    return Account(logins, listed, signed_in, summary, trouble)
 
 
 class AccountLookup(QObject):
@@ -128,10 +150,12 @@ class SettingsDialog(QDialog):
         except OSError as error:
             logger.debug("could not set the settings window's icon: {}", error)
         self.config = load_config()
+        self.account_switches_by_login: dict[str, QCheckBox] = {}
         self.owner_switches_by_login: dict[str, QCheckBox] = {}
         column = QVBoxLayout(self)
         column.addLayout(self.fields())
         column.addWidget(self.notification_switches())
+        column.addWidget(self.account_switches())
         column.addWidget(self.owner_switches())
         column.addWidget(self.colour_choices())
         self.autostart = QCheckBox("Start automatically at login", self)
@@ -147,7 +171,7 @@ class SettingsDialog(QDialog):
             self.take_account(account)
 
     def fields(self) -> QFormLayout:
-        """Lay out the numbers, the dashboard command and the window's blur and opacity."""
+        """Lay out the numbers, which PRs to list, the dashboard and IDE commands, the checkout folder, and the blur."""
         form = QFormLayout()
         self.numbers: dict[str, QSpinBox] = {}
         for key, label in NUMBER_FIELDS.items():
@@ -157,12 +181,60 @@ class SettingsDialog(QDialog):
             spin.setValue(int(self.config[key]))
             form.addRow(label, spin)
             self.numbers[key] = spin
+        self.all_mine = QCheckBox("Show all my PRs, not only those waiting on me", self)
+        self.all_mine.setToolTip("Lists the rest as Author rows, already marked seen, so they never count as news.")
+        self.all_mine.setChecked(bool(self.config.get(ALL_MINE_KEY, True)))
+        form.addRow(self.all_mine)
         self.dashboard = QLineEdit(str(self.config["dashboard_command"]), self)
         self.dashboard.setPlaceholderText("gh dash")
         form.addRow("Dashboard command", self.dashboard)
+        form.addRow("IDE command", self.ide_choice())
+        self.checkout_folder = QLineEdit(str(self.config[CHECKOUT_FOLDER_KEY]), self)
+        self.checkout_folder.setPlaceholderText("Where clones and review worktrees go")
+        self.checkout_folder.setToolTip(
+            f"Clones are found or made here, and review worktrees go inside it, like {WORKTREES_FOLDER}/widget-pr7."
+        )
+        form.addRow("Checkout folder", self.with_browse_button(self.checkout_folder))
         form.addRow("Blur background", self.blur_switch())
         form.addRow("Window opacity", self.opacity_slider())
         return form
+
+    def ide_choice(self) -> QComboBox:
+        """Lay out the IDE command: one of the ready-made commands, or one typed in."""
+        self.ide = QComboBox(self)
+        self.ide.setEditable(True)
+        self.ide.addItems([command for _name, command in ide_presets()])
+        self.ide.setCurrentText(str(self.config[IDE_COMMAND_KEY]))
+        self.ide.setToolTip("The IDE a row's menu reviews in with one click; {folder} stands for the folder to open.")
+        return self.ide
+
+    def with_browse_button(self, box: QLineEdit) -> QHBoxLayout:
+        """Lay out a folder's box with a button beside it that picks the folder from the desktop's folder dialog.
+
+        :param box: the folder's box, which the dialog starts from and fills
+        """
+        browse = QPushButton("Browse...", self)
+        browse.clicked.connect(lambda: self.browse_into(box))
+        row = QHBoxLayout()
+        row.addWidget(box, 1)
+        row.addWidget(browse)
+        return row
+
+    def browse_into(self, box: QLineEdit) -> None:
+        """Pick a folder from the desktop's folder dialog, keeping the typed one if the dialog is cancelled.
+
+        :param box: the folder's box
+        """
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a folder", box.text())
+        if chosen:
+            box.setText(chosen)
+
+    def ask_for_review_settings(self) -> None:
+        """Point at the missing review setting: drop the IDE command's list open, or else focus the checkout folder."""
+        if not self.ide.currentText().strip():
+            self.ide.showPopup()
+        else:
+            self.checkout_folder.setFocus()
 
     def blur_switch(self) -> QCheckBox:
         """Lay out the switch for the desktop's blur behind the changes window, greyed where there is none."""
@@ -232,6 +304,15 @@ class SettingsDialog(QDialog):
         column.addWidget(self.involved)
         return group
 
+    def account_switches(self) -> QGroupBox:
+        """Lay out the group of the GitHub CLI's accounts to check, filled in once they are known."""
+        group = QGroupBox("GitHub accounts to check", self)
+        self.account_column = QVBoxLayout(group)
+        self.account_note = QLabel(LOOKING_UP_ACCOUNTS, group)
+        self.account_note.setWordWrap(True)
+        self.account_column.addWidget(self.account_note)
+        return group
+
     def owner_switches(self) -> QGroupBox:
         """Lay out the owner switches. Only turned-off owners are stored, so new orgs are watched and old repos kept."""
         group = QGroupBox("Repository owners to watch", self)
@@ -244,26 +325,61 @@ class SettingsDialog(QDialog):
         self.owner_column.addWidget(self.owner_note)
         return group
 
+    def add_switches(
+        self, column: QVBoxLayout, known: list[str], hidden_key: str, label: Callable[[str], str]
+    ) -> dict[str, QCheckBox]:
+        """Add a switch per login, on unless the settings turned it off; one turned off stays listed, to turn back on.
+
+        :param column: the column of the group to add them to
+        :param known: the logins GitHub reported
+        :param hidden_key: the setting listing the logins turned off
+        :param label: the text a login's switch shows
+        :return: the switches, by login
+        """
+        hidden = [str(login) for login in self.config.get(hidden_key) or []]
+        named = {login.casefold() for login in known}
+        off = {login.casefold() for login in hidden}
+        switches: dict[str, QCheckBox] = {}
+        for login in known + [login for login in hidden if login.casefold() not in named]:
+            switch = QCheckBox(label(login), column.parentWidget())
+            switch.setChecked(login.casefold() not in off)
+            column.addWidget(switch)
+            switches[login] = switch
+        return switches
+
+    @staticmethod
+    def settle_note(note: QLabel, filled: bool, trouble: str, empty: str) -> None:
+        """Say why a group of switches is empty, or put its note away once the group has switches.
+
+        :param note: the group's note
+        :param filled: whether the group has switches
+        :param trouble: why GitHub could not be asked, or empty when it could
+        :param empty: what to say when GitHub named nothing
+        """
+        if trouble:
+            note.setText(f"Could not ask GitHub: {trouble}")
+        elif filled:
+            note.hide()
+        else:
+            note.setText(empty)
+
     def take_account(self, account: Account) -> None:
-        """Fill in what GitHub reported: an owner switch (kept after leaving, to re-enable) and the sign-in state.
+        """Fill in what GitHub reported: a switch per account and per owner, and the sign-in state.
 
         :param account: what GitHub reported
         """
-        hidden = [str(login) for login in self.config.get(HIDDEN_OWNERS_KEY) or []]
-        known = ([account.login] if account.login else []) + list(account.organisations)
-        listed = known + [login for login in hidden if login.casefold() not in {name.casefold() for name in known}]
-        for login in listed:
-            text = f"{login} (your own repositories)" if login == account.login else login
-            switch = QCheckBox(text, self.owner_note.parentWidget())
-            switch.setChecked(login.casefold() not in {name.casefold() for name in hidden})
-            self.owner_column.addWidget(switch)
-            self.owner_switches_by_login[login] = switch
-        if account.trouble:
-            self.owner_note.setText(f"Could not list your organisations: {account.trouble}")
-        elif listed:
-            self.owner_note.hide()
-        else:
-            self.owner_note.setText(NO_OWNERS)
+        own = {login.casefold() for login in account.logins}
+        self.account_switches_by_login = self.add_switches(
+            self.account_column, list(account.logins), HIDDEN_ACCOUNTS_KEY, str
+        )
+        self.owner_switches_by_login = self.add_switches(
+            self.owner_column,
+            list(account.logins + account.organisations),
+            HIDDEN_OWNERS_KEY,
+            lambda login: f"{login} (your own repositories)" if login.casefold() in own else login,
+        )
+        self.settle_note(self.account_note, bool(self.account_switches_by_login), account.trouble, NO_ACCOUNTS)
+        self.settle_note(self.owner_note, bool(self.owner_switches_by_login), account.trouble, NO_OWNERS)
         inks = palette(chosen_style())
         self.sign_in.setText(account.sign_in_summary)
         self.sign_in.setStyleSheet(f"color: {ink(inks, 'green' if account.signed_in else 'red')}")
@@ -311,18 +427,28 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, APP_NAME, str(error))
 
     def save_and_close(self) -> None:
-        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked."""
+        """Write the settings and close. Spin boxes admit only whole numbers in range, so nothing is checked.
+
+        The stored settings are read again first, so a setting changed elsewhere while this window was open, such as
+        pop-up notifications from the tray menu, is not written back over with what it was when the window opened.
+        """
+        self.config = load_config()
         for key, spin in self.numbers.items():
             self.config[key] = spin.value()
         self.config["dashboard_command"] = self.dashboard.text().strip()
+        self.config[IDE_COMMAND_KEY] = self.ide.currentText().strip()
+        self.config[CHECKOUT_FOLDER_KEY] = self.checkout_folder.text().strip()
         self.config[OPACITY_KEY] = self.opacity.value()
         self.config[BLUR_KEY] = self.blur.isChecked()
         self.config["toasts"] = {kind: switch.isChecked() for kind, switch in self.toggles.items()}
+        checked = self.account_switches_by_login.items()
+        self.config[HIDDEN_ACCOUNTS_KEY] = [login for login, switch in checked if not switch.isChecked()]
         switches = self.owner_switches_by_login.items()
         self.config[HIDDEN_OWNERS_KEY] = [login for login, switch in switches if not switch.isChecked()]
         self.config[WATCHED_OWNERS_KEY] = [login for login, switch in switches if switch.isChecked()]
         self.config[WATCH_OTHERS_KEY] = self.others.isChecked()
         self.config[INVOLVED_KEY] = self.involved.isChecked()
+        self.config[ALL_MINE_KEY] = self.all_mine.isChecked()
         self.config[THEME_KEY] = self.chosen_theme()
         save_config(self.config)
         set_autostart(self.autostart.isChecked())

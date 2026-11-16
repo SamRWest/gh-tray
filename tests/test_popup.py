@@ -242,10 +242,12 @@ def test_every_column_has_a_heading_and_a_width():
         "Org",
         "Repo",
         "PR",
+        "WTree",
         "Status",
         "Title",
         "Author",
         "Who",
+        "Account",
         "When",
     ]
 
@@ -615,8 +617,35 @@ def test_an_involved_pull_request_stands_as_a_quiet_row_under_its_own_filter():
     assert ("involved", "Involved") in popup.FILTER_CHOICES
 
 
+def test_a_quiet_pull_request_of_the_users_own_is_listed_as_already_seen_only_when_all_theirs_are_wanted():
+    entry = {
+        "side": "authored",
+        "repo": "acme/widget",
+        "number": 7,
+        "isDraft": True,
+        "ci": "SUCCESS",
+        "url": "https://example.test/7",
+        "author": "me",
+        "updatedAt": "2026-01-01T00:00:00Z",
+    }
+    assert popup.rows_from_snapshot({"authored:acme/widget#7": entry}, set()) == []
+    (row,) = popup.rows_from_snapshot({"authored:acme/widget#7": entry}, set(), all_mine=True)
+    assert (row.label, row.role, row.seen) == ("Author", "author", True)
+    assert popup.role_matches(row, "author")
+    # Something that does want the user, such as broken checks, is still listed that way, and as news.
+    (broken,) = popup.rows_from_snapshot({"authored:acme/widget#7": entry | {"ci": "FAILURE"}}, set(), all_mine=True)
+    assert (broken.label, broken.seen) == ("Checks failing", False)
+
+
 def test_an_involved_pull_request_the_user_has_reviewed_stands_as_theirs_to_review():
     entry = {"side": "involved", "reviewedByMe": True, "repo": "acme/widget", "number": 9, "author": "bob"}
     (row,) = popup.rows_from_snapshot({"involved:acme/widget#9": entry}, set())
     assert (row.label, row.role, row.who) == ("Reviewer", "reviewer", "bob")
     assert popup.role_matches(row, "reviewer") and not popup.role_matches(row, "involved")
+
+
+def test_the_account_filter_matches_one_account_or_all_and_lists_only_those_that_found_rows():
+    rows = [popup.Row("", "", "", "", "", "", "", popup.URGENT, account=name) for name in ("work", "Home", "")]
+    assert [popup.account_matches(row, "") for row in rows] == [True, True, True]
+    assert [popup.account_matches(row, "HOME") for row in rows] == [False, True, False]
+    assert popup.accounts_of(rows) == ["Home", "work"]

@@ -27,10 +27,12 @@ def pull_request(**overrides) -> dict:
     return record
 
 
-def detect(before: dict | None, after: dict, login: str = "") -> list[str]:
+def detect(before: dict | None, after: dict, *logins: str) -> list[str]:
     """Return the kinds of event produced by moving one pull request from one state to another."""
     previous = {} if before is None else {"acme/widget#7": before}
-    found = events.detect_pull_request_events(previous, {"acme/widget#7": after}, "2026-01-01T00:00:00Z", login)
+    found = events.detect_pull_request_events(
+        previous, {"acme/widget#7": after}, "2026-01-01T00:00:00Z", frozenset(logins)
+    )
     return [event["kind"] for event in found]
 
 
@@ -251,14 +253,14 @@ def test_a_comment_the_user_wrote_themselves_is_not_reported_to_them():
     # Their own comment is not news to them, and it was cluttering the list with rows they had just caused.
     previous = {"authored:acme/widget#7": pull_request(comments=1, lastCommentBy="them")}
     current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="them")}
-    digest = {"viewer": "them", "mentions": []}
+    digest = {"viewers": ["them"], "mentions": []}
     assert events.detect_events(previous, current, digest) == []
 
 
 def test_a_comment_somebody_else_wrote_is_still_reported():
     previous = {"authored:acme/widget#7": pull_request(comments=1, lastCommentBy="them")}
     current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="somebody")}
-    digest = {"viewer": "them", "mentions": []}
+    digest = {"viewers": ["them"], "mentions": []}
     assert [event["kind"] for event in events.detect_events(previous, current, digest)] == ["new_comment"]
 
 
@@ -266,7 +268,7 @@ def test_the_users_own_commit_breaking_the_checks_is_still_reported():
     # They caused it, but they still need to know: doing it and knowing about it are not the same act.
     previous = {"authored:acme/widget#7": pull_request(ci="SUCCESS", lastCommitBy="them")}
     current = {"authored:acme/widget#7": pull_request(ci="FAILURE", lastCommitBy="them")}
-    digest = {"viewer": "them", "mentions": []}
+    digest = {"viewers": ["them"], "mentions": []}
     assert [event["kind"] for event in events.detect_events(previous, current, digest)] == ["ci_broken"]
 
 
@@ -277,7 +279,10 @@ def test_nothing_is_suppressed_when_who_is_signed_in_is_unknown():
 
 
 def test_a_mention_the_user_wrote_themselves_is_not_reported():
-    digest = {"viewer": "them", "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "them"}]}
+    digest = {
+        "viewers": ["them"],
+        "mentions": [{"repo": "acme/widget", "url": "https://example.test/1", "actor": "them"}],
+    }
     assert events.detect_events({}, {}, digest) == []
 
 
@@ -353,24 +358,24 @@ def test_a_conflict_on_someone_else_s_pull_request_is_left_to_them():
 
 
 def test_a_comment_on_your_own_pull_request_is_reported():
-    assert detect(pull_request(comments=1), pull_request(comments=2), login="me") == ["new_comment"]
+    assert detect(pull_request(comments=1), pull_request(comments=2), "me") == ["new_comment"]
 
 
 def test_a_comment_on_a_pull_request_you_merely_review_is_left_to_its_author():
     reviewing = {"side": "reviewing"}
-    assert detect(pull_request(comments=1, **reviewing), pull_request(comments=2, **reviewing), login="me") == []
+    assert detect(pull_request(comments=1, **reviewing), pull_request(comments=2, **reviewing), "me") == []
 
 
 def test_an_answer_to_one_of_your_review_comments_is_reported_wherever_it_is():
     reviewing = {"side": "reviewing"}
     answered = pull_request(comments=2, lastCommentAnswers="me", **reviewing)
-    assert detect(pull_request(comments=1, **reviewing), answered, login="me") == ["new_comment"]
+    assert detect(pull_request(comments=1, **reviewing), answered, "me") == ["new_comment"]
 
 
 def test_an_answer_to_somebody_else_is_not_yours_to_hear_about():
     reviewing = {"side": "reviewing"}
     answered = pull_request(comments=2, lastCommentAnswers="them", **reviewing)
-    assert detect(pull_request(comments=1, **reviewing), answered, login="me") == []
+    assert detect(pull_request(comments=1, **reviewing), answered, "me") == []
 
 
 def test_an_involved_pull_request_is_snapshotted_but_raises_nothing_on_arrival():
@@ -389,3 +394,17 @@ def test_each_side_lands_on_one_of_the_users_hats_and_a_review_given_makes_a_rev
         "reviewer",
     ]
     assert events.role_of({"side": "involved", "reviewedByMe": True}) == "reviewer"
+
+
+def test_an_answer_to_any_of_the_users_accounts_is_reported():
+    reviewing = {"side": "reviewing"}
+    answered = pull_request(comments=2, lastCommentAnswers="work", **reviewing)
+    assert detect(pull_request(comments=1, **reviewing), answered, "me", "work") == ["new_comment"]
+
+
+def test_a_comment_or_mention_by_any_of_the_users_accounts_is_their_own_doing():
+    previous = {"authored:acme/widget#7": pull_request(comments=1)}
+    current = {"authored:acme/widget#7": pull_request(comments=2, lastCommentBy="work")}
+    mention = {"repo": "acme/widget", "url": "https://example.test/1", "actor": "work"}
+    digest = {"viewers": ["me", "work"], "mentions": [mention]}
+    assert events.detect_events(previous, current, digest) == []

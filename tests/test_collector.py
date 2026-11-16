@@ -7,6 +7,8 @@ reply that is missing something, which is the normal case rather than the except
 
 from __future__ import annotations
 
+import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -92,10 +94,10 @@ def test_the_state_of_a_pull_request_travels_through():
 def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkeypatch, tmp_path):
     searches: list[str] = []
     monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
-    monkeypatch.setattr(collector, "viewer", lambda: "me")
-    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
+    monkeypatch.setattr(collector, "accounts", lambda: ["me"])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden, _account="": [])
 
-    def fake_search(_query: str, q: str) -> list[dict]:
+    def fake_search(_query: str, q: str, _account: str = "") -> list[dict]:
         searches.append(q)
         return [node(state="MERGED")] if "is:closed" in q else []
 
@@ -111,6 +113,13 @@ def test_collecting_asks_for_closed_pull_requests_within_a_bounded_window(monkey
     assert window <= timedelta(days=collector.CLOSED_LOOKBACK_DAYS + 1)
     assert [entry["side"] for entry in digest["closed"]] == ["closed"]
     assert digest["closed"][0]["state"] == "MERGED"
+
+
+def test_closed_pull_requests_are_looked_for_back_to_the_oldest_change_still_logged():
+    now = datetime(2026, 10, 22, tzinfo=UTC)
+    assert collector.closed_lookback_days("", now) == collector.CLOSED_LOOKBACK_DAYS
+    assert collector.closed_lookback_days("2026-10-20T00:00:00Z", now) == collector.CLOSED_LOOKBACK_DAYS
+    assert collector.closed_lookback_days("2026-08-26T03:36:21.662863Z", now) == 57
 
 
 def test_whichever_of_the_two_came_last_is_the_one_named():
@@ -249,7 +258,7 @@ def test_unreadable_output_is_reported_as_such():
 def test_a_reply_carrying_only_errors_is_retried_and_then_reported(monkeypatch):
     attempts = []
 
-    def failing(_arguments, timeout=0):
+    def failing(_arguments, timeout=0, account=""):
         attempts.append(1)
         return '{"errors": [{"message": "something was too expensive"}]}'
 
@@ -264,7 +273,7 @@ def test_a_plain_fetch_that_works_on_the_second_attempt_is_accepted(monkeypatch)
     # A failed lookup used to be swallowed after one attempt, which is how a mention lost its author for good.
     answers = [github.GitHubError("something transient"), '{"user": {"login": "someone"}}']
 
-    def flaky(_arguments, timeout=0):
+    def flaky(_arguments, timeout=0, account=""):
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -279,7 +288,7 @@ def test_a_fetch_of_something_deleted_is_not_retried(monkeypatch):
     # Asking again for a deleted comment gets the same answer, and each retry would sleep between attempts.
     attempts = []
 
-    def gone(_arguments, timeout=0):
+    def gone(_arguments, timeout=0, account=""):
         attempts.append(1)
         raise github.GitHubError("gh: Not Found (HTTP 404)")
 
@@ -297,7 +306,7 @@ def test_being_asked_to_slow_down_is_the_one_client_error_worth_retrying():
 
 def test_a_reply_that_works_on_the_second_attempt_is_accepted(monkeypatch):
     replies = ['{"errors": [{"message": "busy"}]}', '{"data": {"search": {"nodes": []}}}']
-    monkeypatch.setattr(github, "run", lambda _arguments, timeout=0: replies.pop(0))
+    monkeypatch.setattr(github, "run", lambda _arguments, timeout=0, account="": replies.pop(0))
     monkeypatch.setattr(github.time, "sleep", lambda _seconds: None)
     assert github.graphql("query", {"q": "is:pr"}) == {"search": {"nodes": []}}
 
@@ -307,19 +316,19 @@ def test_every_page_of_results_is_collected(monkeypatch):
         {"search": {"nodes": [node(number=1)], "pageInfo": {"hasNextPage": True, "endCursor": "a"}}},
         {"search": {"nodes": [node(number=2)], "pageInfo": {"hasNextPage": False, "endCursor": ""}}},
     ]
-    monkeypatch.setattr(github, "graphql", lambda _query, _variables: pages.pop(0))
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables, _account="": pages.pop(0))
     assert [found["number"] for found in github.search_pull_requests("query", "is:pr")] == [1, 2]
 
 
 def test_paging_stops_rather_than_running_forever(monkeypatch):
     endless = {"search": {"nodes": [node()], "pageInfo": {"hasNextPage": True, "endCursor": "always"}}}
-    monkeypatch.setattr(github, "graphql", lambda _query, _variables: endless)
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables, _account="": endless)
     assert len(github.search_pull_requests("query", "is:pr")) == github.MAX_PAGES
 
 
 def test_something_that_is_not_a_pull_request_is_ignored(monkeypatch):
     mixed = {"search": {"nodes": [node(), {}], "pageInfo": {"hasNextPage": False}}}
-    monkeypatch.setattr(github, "graphql", lambda _query, _variables: mixed)
+    monkeypatch.setattr(github, "graphql", lambda _query, _variables, _account="": mixed)
     assert len(github.search_pull_requests("query", "is:pr")) == 1
 
 
@@ -346,8 +355,8 @@ def test_a_mention_carries_the_number_its_thread_address_ends_in(monkeypatch):
             "updated_at": "2026-01-01T00:00:00Z",
         },
     ]
-    monkeypatch.setattr(collector, "api", lambda _path: feed)
-    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
+    monkeypatch.setattr(collector, "api", lambda _path, _account="": feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url, _account="": "")
     found = collector.collect_mentions("2026-01-01T00:00:00Z")
     assert found[0]["number"] == "217"
     assert found[1]["number"] == ""
@@ -373,31 +382,31 @@ def test_mentions_from_a_hidden_organisation_are_left_out(monkeypatch):
             "subject": {"url": "", "title": "b"},
         },
     ]
-    monkeypatch.setattr(collector, "api", lambda _path: feed)
-    monkeypatch.setattr(collector, "comment_author", lambda _url: "")
-    monkeypatch.setattr(collector, "thread_author", lambda _url: "")
+    monkeypatch.setattr(collector, "api", lambda _path, _account="": feed)
+    monkeypatch.setattr(collector, "comment_author", lambda _url, _account="": "")
+    monkeypatch.setattr(collector, "thread_author", lambda _url, _account="": "")
     found = collector.collect_mentions("2026-01-01T00:00:00Z", ["other"])
     assert [mention["repo"] for mention in found] == ["acme/widget"]
 
 
 def test_the_organisations_an_account_belongs_to_are_listed_alphabetically(monkeypatch):
     monkeypatch.setattr(
-        github, "api", lambda _path: [{"login": "Widgets"}, {"login": "acme"}, {"nope": 1}, {"login": ""}]
+        github, "api", lambda _path, _account="": [{"login": "Widgets"}, {"login": "acme"}, {"nope": 1}, {"login": ""}]
     )
     assert github.organisations() == ["acme", "Widgets"]
 
 
 def test_no_organisations_reads_as_an_empty_list(monkeypatch):
-    monkeypatch.setattr(github, "api", lambda _path: {"message": "odd"})
+    monkeypatch.setattr(github, "api", lambda _path, _account="": {"message": "odd"})
     assert github.organisations() == []
 
 
 def test_the_involved_search_goes_out_only_when_asked_for(monkeypatch, tmp_path):
     searches: list[str] = []
     monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
-    monkeypatch.setattr(collector, "viewer", lambda: "me")
-    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
-    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: searches.append(q) or [])
+    monkeypatch.setattr(collector, "accounts", lambda: ["me"])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden, _account="": [])
+    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q, _account="": searches.append(q) or [])
     digest, _error = collector.collect({"max_age_days": 365, "involved": True})
     assert digest is not None and digest["involved"] == []
     assert any("is:open involves:@me" in q for q in searches)
@@ -408,9 +417,11 @@ def test_the_involved_search_goes_out_only_when_asked_for(monkeypatch, tmp_path)
 
 def test_an_involved_pull_request_already_on_another_side_is_not_listed_twice(monkeypatch, tmp_path):
     monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
-    monkeypatch.setattr(collector, "viewer", lambda: "me")
-    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden: [])
-    monkeypatch.setattr(collector, "search_pull_requests", lambda _query, q: [node(number=7)] if "is:open" in q else [])
+    monkeypatch.setattr(collector, "accounts", lambda: ["me"])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden, _account="": [])
+    monkeypatch.setattr(
+        collector, "search_pull_requests", lambda _query, q, _account="": [node(number=7)] if "is:open" in q else []
+    )
     digest, _error = collector.collect({"max_age_days": 0, "involved": True})
     assert digest is not None
     assert [entry["key"] for entry in digest["authored"]] == ["acme/widget#7"]
@@ -425,3 +436,66 @@ def test_switching_off_everything_else_keeps_only_the_owners_ticked():
 def test_a_review_by_the_signed_in_user_is_recorded_even_once_the_request_for_it_is_withdrawn():
     assert collector.normalise(node(viewerLatestReview={"state": "COMMENTED"}), "involved")["reviewedByMe"] is True
     assert collector.normalise(node(viewerLatestReview=None), "involved")["reviewedByMe"] is False
+
+
+def test_collecting_as_two_accounts_tags_each_record_and_lists_a_shared_pull_request_once(monkeypatch, tmp_path):
+    asked: list[str] = []
+    found = {"a": [node(number=1), node(number=2)], "b": [node(number=2), node(number=3)]}
+
+    def fake_search(_query: str, q: str, account: str = "") -> list[dict]:
+        asked.append(account)
+        return found[account] if "is:open" in q else []
+
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "accounts", lambda: ["a", "b", "c"])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden, account="": [])
+    monkeypatch.setattr(collector, "search_pull_requests", fake_search)
+    digest, error = collector.collect({"max_age_days": 0, "hidden_accounts": ["C"]})
+    assert error == "" and digest is not None
+    assert digest["viewers"] == ["a", "b"]
+    assert {entry["key"]: entry["account"] for entry in digest["authored"]} == {
+        "acme/widget#1": "a",
+        "acme/widget#2": "a",
+        "acme/widget#3": "b",
+    }
+    assert "c" not in asked
+
+
+def test_a_failure_for_one_account_is_reported_naming_it(monkeypatch, tmp_path):
+    def fake_search(_query: str, _q: str, account: str = "") -> list[dict]:
+        raise github.GitHubError("bad credentials")
+
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "ERROR_LOG_PATH", tmp_path / "error.log")
+    monkeypatch.setattr(collector, "accounts", lambda: ["a"])
+    monkeypatch.setattr(collector, "collect_mentions", lambda _since, _hidden, account="": [])
+    monkeypatch.setattr(collector, "search_pull_requests", fake_search)
+    assert collector.collect({"max_age_days": 0}) == (None, "a: bad credentials")
+
+
+def test_collecting_with_every_account_unticked_says_so(monkeypatch, tmp_path):
+    monkeypatch.setattr(collector, "STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(collector, "ERROR_LOG_PATH", tmp_path / "error.log")
+    monkeypatch.setattr(collector, "accounts", lambda: ["a"])
+    assert collector.collect({"hidden_accounts": ["a"]}) == (None, "no GitHub account is ticked in the settings")
+
+
+def test_a_call_as_an_account_carries_that_accounts_token_and_otherwise_none(monkeypatch):
+    seen: list[dict | None] = []
+
+    def fake_run_quietly(command, timeout=None, folder=None, environment=None):
+        seen.append(environment)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(github, "github_cli", lambda: "gh")
+    monkeypatch.setattr(github, "run_quietly", fake_run_quietly)
+    monkeypatch.setattr(github, "account_token", lambda login: f"token-for-{login}")
+    github.run(["api", "user"])
+    github.run(["api", "user"], account="work")
+    assert seen == [None, {"GH_TOKEN": "token-for-work"}]
+
+
+def test_the_accounts_the_tool_is_signed_in_to_are_listed_active_first(monkeypatch):
+    hosts = {"hosts": {"github.com": [{"active": False, "login": "b"}, {"active": True, "login": "a"}, {"active": 0}]}}
+    monkeypatch.setattr(github, "run", lambda _arguments: json.dumps(hosts))
+    assert github.accounts() == ["a", "b"]

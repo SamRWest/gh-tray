@@ -40,7 +40,9 @@ def poll(config: dict) -> PollResult:
     :param config: current settings
     :return: the status, the changes detected this cycle, and any error
     """
-    digest, error = collect(config)
+    logged = read_events()
+    # Closed pull requests are looked for back to the oldest change still logged, so each row learns how it ended.
+    digest, error = collect(config, str(logged[0].get("at", "")) if logged else "")
     if digest is None or error:
         return PollResult(status=status_from({}, unread_events(), error), error=error)
 
@@ -50,7 +52,7 @@ def poll(config: dict) -> PollResult:
     events: list[dict] = []
     if previous is not None:
         current = carry_known_values(previous, current)
-        events = detect_events(previous, current, digest, mention_urls(read_events()))
+        events = detect_events(previous, current, digest, mention_urls(logged))
     append_events(events)
     write_snapshot(carry_forward(previous or {}, current))
     if baseline_only and not damaged:

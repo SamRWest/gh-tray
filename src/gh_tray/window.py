@@ -11,13 +11,15 @@ import time
 import webbrowser
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 from loguru import logger
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QBrush,
     QCloseEvent,
     QColor,
+    QDesktopServices,
     QGuiApplication,
     QHideEvent,
     QIcon,
@@ -33,6 +35,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -48,7 +51,18 @@ from PySide6.QtWidgets import (
 )
 
 from gh_tray import APP_NAME
-from gh_tray.config import APP_ICON_PATH, BLUR_KEY, OPACITY_KEY, default_opacity, load_config
+from gh_tray.config import (
+    ALL_MINE_KEY,
+    APP_ICON_PATH,
+    BLUR_KEY,
+    CHECKOUT_FOLDER_KEY,
+    IDE_COMMAND_KEY,
+    OPACITY_KEY,
+    default_opacity,
+    load_config,
+)
+from gh_tray.environment import FOLDER_PLACEHOLDER, ide_presets
+from gh_tray.local_review import existing_worktree, pull_request_at, review_worktrees
 from gh_tray.popup import (
     COLUMNS,
     DEFAULT_SORT,
@@ -57,6 +71,8 @@ from gh_tray.popup import (
     SEEN_STRENGTH,
     STATUS_COLOURS,
     Row,
+    account_matches,
+    accounts_of,
     age_colour,
     closed_matches,
     glyph_for,
@@ -111,7 +127,8 @@ TOGGLE_WITHIN_SECONDS = 0.5
 
 DATE_COLUMN = "when"
 STATUS_COLUMN = "status"
-NAMED_COLUMNS = ("org", "repo", "author", "who")
+NAMED_COLUMNS = ("org", "repo", "author", "who", "account")
+ALL_ACCOUNTS = "All accounts"
 
 # Layout-store keys for remembered widths, keyed by column name. Widths are stored in characters of the font,
 # not pixels, so they still match after a display-scale or zoom change.
@@ -121,7 +138,9 @@ COLUMN_KEY = "columns/{}/characters"
 # How strongly the clicked row is tinted towards the desktop's highlight colour.
 HIGHLIGHT_STRENGTH = 0.3
 
-HINT = "Double-click: open PR, right-click: mark seen, ctrl+scroll: resize"
+HINT = "Double-click: open PR, right-click: menu, ctrl+scroll: resize"
+# A tick, marking a row whose pull request has a review worktree.
+WORKTREE_MARK = "✓"
 
 
 def table_overlay_alpha(opacity: int, offset: int) -> int:
@@ -149,6 +168,15 @@ def column_of(key: str) -> int:
     return next(index for index, (name, *_rest) in enumerate(COLUMNS) if name == key)
 
 
+def ide_name(command: str) -> str:
+    """Return what to call an IDE command in a menu: a ready-made command's IDE, or else the command itself.
+
+    :param command: the IDE command, which may be one typed in rather than a ready-made one
+    """
+    names = {preset: name for name, preset in ide_presets()}
+    return names.get(command) or command.replace(FOLDER_PLACEHOLDER, "").strip()
+
+
 def cells_of(entry: Row) -> list[str]:
     """Return one row's text, in column order.
 
@@ -160,19 +188,27 @@ def cells_of(entry: Row) -> list[str]:
         owner,
         name,
         entry.number,
+        WORKTREE_MARK if entry.worktree else "",
         entry.status,
         entry.title,
         entry.author,
         entry.who,
+        entry.account,
         entry.when,
     ]
 
 
 class ChangesWindow(QWidget):
-    """The window itself. Emits refresh_asked and dashboard_asked; only the tray polls or opens the dashboard."""
+    """The window itself. It only asks, over its signals; the tray polls, opens and reviews, and removes worktrees."""
 
     refresh_asked = Signal()
     dashboard_asked = Signal()
+    # Carries the page of the pull request to review, the command that opens a folder in the chosen IDE, and the
+    # account that found it, which can see its repository.
+    review_asked = Signal(str, str, str)
+    # Carries the page of the pull request whose review worktree is to go.
+    remove_asked = Signal(str)
+    remove_all_asked = Signal()
 
     def __init__(self, entries: list[Row], layout: QSettings | None = None) -> None:
         """Build the window, hidden.
@@ -189,6 +225,8 @@ class ChangesWindow(QWidget):
         self.all_entries = list(entries)
         self.entries: list[Row] = []
         self.role_filter = "all"
+        # The account whose rows alone are shown, or empty for every account's.
+        self.account_filter = ""
         # Closed pull requests, and ones the user has reviewed, start hidden: they are done, and this window lists
         # what is not.
         self.show_closed = False
@@ -234,8 +272,7 @@ class ChangesWindow(QWidget):
         except OSError as error:
             logger.debug("could not set the window icon: {}", error)
         self.build()
-        self.apply_filter()
-        self.refill()
+        self.refresh_worktrees()
         QGuiApplication.styleHints().colorSchemeChanged.connect(self.on_scheme_changed)
 
     def build(self) -> None:
@@ -328,6 +365,10 @@ class ChangesWindow(QWidget):
             strip.addWidget(chip)
             self.chips[name] = chip
         strip.addSpacing(12)
+        self.account_choice = QComboBox(self)
+        self.account_choice.setToolTip("Show only what one of your GitHub accounts found")
+        self.account_choice.currentIndexChanged.connect(self.on_account_chosen)
+        strip.addWidget(self.account_choice)
         self.closed_chip = self.done_toggle("Show closed", self.set_show_closed, strip)
         self.reviewed_chip = self.done_toggle("Show reviewed", self.set_show_reviewed, strip)
         self.search = QLineEdit(self)
@@ -390,14 +431,27 @@ class ChangesWindow(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(self.fontMetrics().height() + ROW_PADDING)
 
     def size_columns(self) -> None:
-        """Give each column the width the user last dragged it to, or its starting size, then fit them to the table."""
+        """Give each column the width the user last dragged it to, or its starting size, then fit them to the table.
+
+        A column is never set narrower than its heading needs, so a heading is not cut short at any text size.
+        """
         self.fitting = True
         try:
-            for index, (key, _heading, width, _fills) in enumerate(COLUMNS):
-                self.table.setColumnWidth(index, self.characters(self.remembered(COLUMN_KEY.format(key)) or width))
+            for index, (key, heading, width, _fills) in enumerate(COLUMNS):
+                wanted = self.characters(self.remembered(COLUMN_KEY.format(key)) or width)
+                self.table.setColumnWidth(index, max(wanted, self.heading_width(heading)))
         finally:
             self.fitting = False
         self.fit_columns(shrink_all=True)
+
+    def heading_width(self, heading: str) -> int:
+        """Return how wide a column must be to show its heading whole, in pixels.
+
+        :param heading: the column's heading
+        """
+        header = self.table.horizontalHeader()
+        margin = header.style().pixelMetric(QStyle.PixelMetric.PM_HeaderMargin, None, header)
+        return header.fontMetrics().horizontalAdvance(heading) + 2 * margin
 
     def fit_columns(self, shrink_all: bool) -> None:
         """Fit the columns exactly to the table: the filling column takes any leftover width, and shrinks first.
@@ -457,6 +511,7 @@ class ChangesWindow(QWidget):
             entry
             for entry in self.all_entries
             if role_matches(entry, self.role_filter)
+            and account_matches(entry, self.account_filter)
             and closed_matches(entry, self.show_closed)
             and reviewed_matches(entry, self.show_reviewed)
             and matches_search(entry, self.search_text)
@@ -492,7 +547,13 @@ class ChangesWindow(QWidget):
         date_column = column_of(DATE_COLUMN)
         for row, entry in enumerate(self.entries):
             owner, _name = org_and_name(entry.repo)
-            named = {"org": owner, "repo": entry.repo, "author": entry.author, "who": entry.who}
+            named = {
+                "org": owner,
+                "repo": entry.repo,
+                "author": entry.author,
+                "who": entry.who,
+                "account": entry.account,
+            }
             inks = {
                 date_column: age_colour(entry.at, self.inks),
                 column_of(STATUS_COLUMN): ink(self.inks, STATUS_COLOURS.get(entry.status, QUIET)),
@@ -529,7 +590,7 @@ class ChangesWindow(QWidget):
             self.open(self.entries[row].url)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        """Mark a row seen when right-clicked and fit the columns on resize; every other event is the table's own.
+        """Offer a row's menu when right-clicked and fit the columns on resize; every other event is the table's own.
 
         :param watched: whatever the event was sent to
         :param event: the event
@@ -543,11 +604,50 @@ class ChangesWindow(QWidget):
         ):
             row = self.table.rowAt(int(event.position().y()))
             if 0 <= row < len(self.entries):
-                self.set_seen(row, not self.entries[row].seen)
+                self.row_menu(self.entries[row]).popup(event.globalPosition().toPoint())
             return True
         if event.type() == QEvent.Type.Resize:
             self.size_columns()
         return super().eventFilter(watched, event)
+
+    def row_menu(self, entry: Row) -> QMenu:
+        """Return a row's menu: mark it seen or unseen, open it on GitHub, review it in an IDE, or remove worktrees.
+
+        Reviewing in the default IDE, named after the settings, takes one click; the other IDEs sit in a submenu.
+        :param entry: the row that was right-clicked
+        """
+        settings = load_config()
+        default = str(settings.get(IDE_COMMAND_KEY, ""))
+        reviewable = pull_request_at(entry.url) is not None
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        menu.addAction("Mark unseen" if entry.seen else "Mark seen", lambda: self.toggle_seen(entry))
+        menu.addAction("Open on GitHub", lambda: self.open(entry.url)).setEnabled(bool(entry.url))
+        if default:
+            review = menu.addAction(f"Review in {ide_name(default)}", lambda: self.review(entry, default))
+            review.setEnabled(reviewable)
+        others = menu.addMenu("Review in other IDE" if default else "Review in IDE")
+        others.setEnabled(reviewable)
+        for name, command in ide_presets():
+            if command != default:
+                others.addAction(name, lambda command=command: self.review(entry, command))
+        checkout_folder = str(settings.get(CHECKOUT_FOLDER_KEY, ""))
+        worktree = existing_worktree(entry.url, checkout_folder)
+        browse = menu.addAction("Open worktree dir", lambda: self.browse(worktree) if worktree else None)
+        browse.setEnabled(worktree is not None)
+        remove = menu.addAction("Remove local worktree", lambda: self.remove_asked.emit(entry.url))
+        remove.setEnabled(worktree is not None)
+        remove_all = menu.addAction("Remove all local worktrees", self.remove_all_asked.emit)
+        remove_all.setEnabled(bool(review_worktrees(checkout_folder)))
+        return menu
+
+    def toggle_seen(self, entry: Row) -> None:
+        """Mark a row seen, or unseen again, wherever it now sits; a row gone since its menu opened is left alone.
+
+        :param entry: the row to mark
+        """
+        if entry in self.entries:
+            self.set_seen(self.entries.index(entry), not entry.seen)
 
     def set_seen(self, row: int, seen: bool) -> None:
         """Mark one row seen or unseen, remember it for next time, and redraw.
@@ -655,9 +755,48 @@ class ChangesWindow(QWidget):
         """Read the stored data again and redraw the table in the order and filter currently chosen."""
         settings = load_config()
         self.rows_in_view = settings["popup_rows"]
-        self.all_entries = rows_to_show(settings["max_age_days"])
+        self.all_entries = rows_to_show(settings["max_age_days"], bool(settings.get(ALL_MINE_KEY, True)))
+        self.refresh_worktrees()
+
+    def refresh_worktrees(self) -> None:
+        """Mark the rows whose pull requests have a review worktree folder in the checkout folder, and redraw the table.
+
+        The folder is what counts, so a removal that fails part way, as git's does when another program holds the
+        folder open, leaves the mark in place until the folder is really gone.
+        """
+        checkout_folder = str(load_config().get(CHECKOUT_FOLDER_KEY, ""))
+        self.all_entries = [
+            replace(entry, worktree=existing_worktree(entry.url, checkout_folder) is not None)
+            for entry in self.all_entries
+        ]
+        self.offer_accounts()
         self.apply_filter()
         self.refill()
+
+    def offer_accounts(self) -> None:
+        """List the accounts that found some row in the account filter, hidden while fewer than two did.
+
+        A filter on an account that no longer finds anything, or is the only one left, goes back to every account.
+        """
+        found = accounts_of(self.all_entries)
+        if self.account_filter not in found or len(found) < 2:
+            self.account_filter = ""
+        self.account_choice.blockSignals(True)
+        self.account_choice.clear()
+        self.account_choice.addItem(ALL_ACCOUNTS, "")
+        for login in found:
+            self.account_choice.addItem(login, login)
+        self.account_choice.setCurrentIndex(max(0, self.account_choice.findData(self.account_filter)))
+        self.account_choice.blockSignals(False)
+        self.account_choice.setVisible(len(found) > 1)
+
+    def on_account_chosen(self, index: int) -> None:
+        """Keep only the rows the chosen account found, and redraw around whatever that leaves.
+
+        :param index: the chosen entry in the account filter
+        """
+        self.account_filter = str(self.account_choice.itemData(index) or "")
+        self.redraw_filtered()
 
     def usable_screen(self, near: QPoint) -> QRect:
         """Return how much of the screen holding a point a window may use, with any taskbar, dock or panel left out.
@@ -820,6 +959,24 @@ class ChangesWindow(QWidget):
         """
         webbrowser.open(url)
         self.hide()
+
+    def browse(self, folder: Path) -> None:
+        """Show a folder in the desktop's file browser, and put the window away, since the browser is about to cover it.
+
+        :param folder: the folder to show
+        """
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+            logger.error("the desktop refused to open {}", folder)
+        self.hide()
+
+    def review(self, entry: Row, command: str) -> None:
+        """Ask the tray to open a pull request in an IDE, and put the window away, since the IDE is about to cover it.
+
+        :param entry: the pull request's row
+        :param command: the command that opens a folder in the chosen IDE
+        """
+        self.hide()
+        self.review_asked.emit(entry.url, command, entry.account)
 
     def open_dashboard(self) -> None:
         """Ask the tray to open the dashboard, and put the window away, since the dashboard is about to cover it."""
