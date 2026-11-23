@@ -426,7 +426,7 @@ def test_refit_height_after_a_filter_change_keeps_the_bottom_edge(build_window, 
     assert view.geometry().bottom() == bottom
 
 
-def test_a_dragged_window_keeps_its_size_through_a_toggle_until_it_is_next_shown(build_window, qapp):
+def test_a_dragged_window_keeps_its_size_through_a_toggle_and_the_next_showing(build_window, qapp):
     view = build_window([*ROWS, row("#9", status="merged", at="2026-01-03T00:00:00.000000Z")])
     usable = view.usable_screen(QPoint(0, 0))
     view.show_by(QPoint(usable.right() - 10, usable.bottom() - 10))
@@ -439,10 +439,51 @@ def test_a_dragged_window_keeps_its_size_through_a_toggle_until_it_is_next_shown
     view.hide()
     view.show_by(QPoint(usable.right() - 10, usable.bottom() - 10))
     qapp.processEvents()
-    assert view.height() == view.wanted_height(usable) != dragged.height()
     view.closed_chip.setChecked(False)
     qapp.processEvents()
-    assert view.height() == view.wanted_height(usable)
+    assert view.size() == dragged.size()
+
+
+def test_a_window_dragged_elsewhere_opens_there_rather_than_by_the_click(view, qapp):
+    usable = view.usable_screen(QPoint(0, 0))
+    by_the_tray = QPoint(usable.right() - 10, usable.bottom() - 10)
+    view.show_by(by_the_tray)
+    qapp.processEvents()
+    assert view.remembered_position() is None, "show_by's own placing is not the user's"
+    # The offscreen platform refuses to move the window on the application's behalf, so the drag is stood in for.
+    view.desktop_dragging = True
+    # Against the left edge, since the offscreen screen is narrower than the window and holds it there anyway.
+    dropped = QPoint(usable.left() + window.EDGE_MARGIN, usable.top() + 80)
+    view.move(dropped)
+    qapp.processEvents()
+    view.hide()
+    view.show_by(by_the_tray)
+    qapp.processEvents()
+    assert view.geometry().topLeft() == dropped
+
+
+def test_resetting_the_layout_brings_back_the_default_place_size_and_columns(build_window, qapp):
+    view = build_window()
+    usable = view.usable_screen(QPoint(0, 0))
+    by_the_tray = QPoint(usable.right() - 10, usable.bottom() - 10)
+    repo = window.column_of("repo")
+    # A window that is never shown keeps its columns as stated, rather than squeezed onto the small offscreen screen.
+    default_repo = build_window().table.columnWidth(repo)
+    view.show_by(by_the_tray)
+    qapp.processEvents()
+    default_place = view.geometry()
+    view.table.horizontalHeader().resizeSection(repo, view.table.columnWidth(repo) + 80)
+    view.resize(view.width() + 40, view.height() + 60)
+    view.desktop_dragging = True
+    view.move(usable.left() + window.EDGE_MARGIN, usable.top() + 80)
+    qapp.processEvents()
+    view.reset_layout()
+    view.hide()
+    view.show_by(by_the_tray)
+    qapp.processEvents()
+    assert view.geometry() == default_place
+    view.layout_store.sync()
+    assert build_window().table.columnWidth(repo) == default_repo
 
 
 def test_refresh_emits_refresh_asked_and_disables_the_button(view, qtbot):

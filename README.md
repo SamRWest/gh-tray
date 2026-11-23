@@ -38,12 +38,12 @@ accounts to check** in the settings to stop checking it.
 The tray icon shows how many changes you have not seen yet. It is red when something of yours is broken or blocked,
 amber for anything else unread, green when there is nothing to do, and grey when the last poll failed.
 
-| On the icon  | Gets you                                                                                  |
-| ------------ | ----------------------------------------------------------------------------------------- |
-| Hover        | A short status summary                                                                    |
-| Click        | The changes window                                                                        |
-| Right click  | The menu: dashboard, refresh, mark all seen, pop-up notifications, settings, log and quit |
-| Middle click | The same menu, on desktops that keep the right click to themselves                        |
+| On the icon  | Gets you                                                                                          |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| Hover        | A short status summary                                                                            |
+| Click        | The changes window                                                                                |
+| Right click  | The menu: dashboard, refresh, mark all seen, pop-ups, settings, reset window layout, log and quit |
+| Middle click | The same menu, on desktops that keep the right click to themselves                                |
 
 In the changes window:
 
@@ -53,11 +53,14 @@ In the changes window:
 - The **Account** column names which of your GitHub accounts found each row. With two or more accounts, a list at the
   bottom shows just one account's rows. A review in an IDE clones and checks out as that account, so a private
   repository only one of your accounts can see still works.
-- Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or
-  **Show reviewed**; each sits on a tinted background so it reads as done.
+- Closed pull requests, and ones you have already reviewed, are hidden until you press **Show closed** or **Show
+  reviewed**; each sits on a tinted background so it reads as done.
 - Every open pull request of yours is listed, as an **Author** row already marked seen when it wants nothing of you.
   Turn **Show all my PRs** off in the settings to list only those waiting on you.
 - Hold Ctrl and scroll to change the text size. Drag the title to move the window and an edge to resize it.
+- The window opens where you last moved it, at the size and column widths you last dragged. Until it is moved it opens
+  beside the tray icon, sized to fit its rows. **Reset window layout** in the menu goes back to that, and to the
+  standard text size.
 - **Open dashboard** opens gh-dash in a terminal. **Menu** opens the tray menu, for desktops that offer no other way.
 - The window has rounded corners and a see-through background where the desktop can draw them, blurred behind on Windows
   11, macOS and KDE. The blur switch and opacity slider in the settings show their effect as you move them.
