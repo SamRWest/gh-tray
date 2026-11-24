@@ -26,6 +26,7 @@ from PySide6.QtGui import (
     QKeyEvent,
     QKeySequence,
     QMouseEvent,
+    QMoveEvent,
     QPainter,
     QPaintEvent,
     QResizeEvent,
@@ -130,10 +131,15 @@ STATUS_COLUMN = "status"
 NAMED_COLUMNS = ("org", "repo", "author", "who", "account")
 ALL_ACCOUNTS = "All accounts"
 
-# Layout-store keys for remembered widths, keyed by column name. Widths are stored in characters of the font,
-# not pixels, so they still match after a display-scale or zoom change.
-WIDTH_KEY = "window/characters"
-COLUMN_KEY = "columns/{}/characters"
+# Layout-store groups and keys for the window's remembered place and size, and each column's width by name. Sizes
+# are stored in characters of the font, not pixels, so they still match after a display-scale or zoom change; the
+# place is a point on the desktop, so it stays in pixels.
+WINDOW_GROUP = "window"
+COLUMNS_GROUP = "columns"
+WIDTH_KEY = f"{WINDOW_GROUP}/characters"
+HEIGHT_KEY = f"{WINDOW_GROUP}/height/characters"
+POSITION_KEY = f"{WINDOW_GROUP}/position"
+COLUMN_KEY = f"{COLUMNS_GROUP}/{{}}/characters"
 
 # How strongly the clicked row is tinted towards the desktop's highlight colour.
 HIGHLIGHT_STRENGTH = 0.3
@@ -236,6 +242,7 @@ class ChangesWindow(QWidget):
         self.search_text = ""
         self.inks: Palette = palette(chosen_style())
         self.layout_store = layout if layout is not None else layout_store()
+        self.placed_at = QPoint()
         self.placed_width = 0
         self.placed_height = 0
         # Whether the user has dragged an edge since the window came up; a hand-sized window is not re-fitted.
@@ -425,6 +432,19 @@ class ChangesWindow(QWidget):
         :param pixels: the width as the window has it
         """
         self.layout_store.setValue(key, round(pixels / self.advance(), 2))
+
+    def remembered_position(self) -> QPoint | None:
+        """Return where the user last moved the window to, or None when it has not been moved."""
+        stored = self.layout_store.value(POSITION_KEY)
+        return stored if isinstance(stored, QPoint) else None
+
+    def reset_layout(self) -> None:
+        """Forget the remembered place, size and column widths, and size the window afresh from the defaults."""
+        for group in (WINDOW_GROUP, COLUMNS_GROUP):
+            self.layout_store.remove(group)
+        self.hand_sized = False
+        self.size_columns()
+        self.refit(resize_width=True)
 
     def size_rows(self) -> None:
         """Make every row as tall as a line of the window's text wants, with room around it."""
@@ -836,14 +856,17 @@ class ChangesWindow(QWidget):
         return headings + rows + 2 * self.table.frameWidth()
 
     def wanted_height(self, usable: QRect) -> int:
-        """Return how tall the window should be: snug around a few rows, and no more than its ceiling over many.
+        """Return how tall the window should be: the height last dragged to, else snug around a few rows.
 
+        A snug window is no taller than its ceiling over many rows, and either kind is clamped to this screen.
         :param usable: how much of the screen a window may use
         """
+        dragged = self.remembered(HEIGHT_KEY)
         around = self.sizeHint().height() - self.table.sizeHint().height()
-        tallest = int(usable.height() * TALLEST_SHARE_OF_SCREEN)
+        snug = min(around + self.table_height(), int(usable.height() * TALLEST_SHARE_OF_SCREEN))
+        wanted = self.characters(dragged) if dragged else snug
         least = max(MINIMUM_HEIGHT, self.minimumSizeHint().height())
-        return max(min(around + self.table_height(), tallest), least)
+        return max(min(wanted, usable.height() - 2 * EDGE_MARGIN), least)
 
     def settle_layout(self) -> None:
         """Force layout to compute sizes now; the minimum size is stale until this runs, else that reads as a resize."""
@@ -856,26 +879,44 @@ class ChangesWindow(QWidget):
 
         :param geometry: where the window's contents should sit
         """
+        self.placed_at = geometry.topLeft()
         self.placed_width, self.placed_height = geometry.width(), geometry.height()
         self.setGeometry(geometry)
 
+    @staticmethod
+    def held_on(usable: QRect, left: int, top: int, width: int, height: int) -> QRect:
+        """Return a window's place, moved just far enough to sit on the usable screen clear of its edges.
+
+        Held to the screen's left and top edges first, so a window bigger than the screen keeps its start on it.
+        :param usable: how much of the screen a window may use
+        :param left: where the window's left edge is wanted
+        :param top: where the window's top edge is wanted
+        :param width: how wide the window is
+        :param height: how tall the window is
+        """
+        return QRect(
+            max(usable.left() + EDGE_MARGIN, min(left, usable.right() - width - EDGE_MARGIN)),
+            max(usable.top() + EDGE_MARGIN, min(top, usable.bottom() - height - EDGE_MARGIN)),
+            width,
+            height,
+        )
+
     def show_by(self, spot: QPoint) -> None:
-        """Show the window beside a click, sized to its current rows so a quiet day gets a small window.
+        """Show the window where the user last moved it, or else beside a click, at its remembered or snug size.
 
         :param spot: where on screen the click was
         """
         self.reload()
         self.settle_layout()
-        usable = self.usable_screen(spot)
+        moved_to = self.remembered_position()
+        # The screen the window was left on, falling back to the main one when that screen is gone.
+        usable = self.usable_screen(moved_to if moved_to is not None else spot)
         width, height = self.wanted_width(usable), self.wanted_height(usable)
-        # Held to the screen's left and top edges first: a window wider than the screen keeps its start on it.
-        left = max(
-            usable.left() + EDGE_MARGIN, min(spot.x() - width + POINTER_OFFSET, usable.right() - width - EDGE_MARGIN)
-        )
-        top = max(
-            usable.top() + EDGE_MARGIN, min(spot.y() - height - POINTER_GAP, usable.bottom() - height - EDGE_MARGIN)
-        )
-        self.bring_up(QRect(left, top, width, height))
+        if moved_to is not None:
+            left, top = moved_to.x(), moved_to.y()
+        else:
+            left, top = spot.x() - width + POINTER_OFFSET, spot.y() - height - POINTER_GAP
+        self.bring_up(self.held_on(usable, left, top, width, height))
         logger.debug(
             "showing {} rows in the {} theme at {}",
             len(self.entries),
@@ -887,7 +928,7 @@ class ChangesWindow(QWidget):
         """Re-fit the window's height to its current rows, growing or shrinking from the top edge.
 
         The bottom edge stays fixed, since growing downward would push rows off the screen. A window the user has
-        dragged keeps its size until it is next shown, and its rows scroll instead.
+        resized keeps its size, and its rows scroll instead.
         :param resize_width: whether to also re-fit the width, needed when the text has been zoomed
         """
         if not self.isVisible() or self.hand_sized:
@@ -897,11 +938,7 @@ class ChangesWindow(QWidget):
         usable = self.usable_screen(now.center())
         width = self.wanted_width(usable) if resize_width else now.width()
         height = self.wanted_height(usable)
-        left = max(usable.left() + EDGE_MARGIN, min(now.x(), usable.right() - width - EDGE_MARGIN))
-        top = max(
-            usable.top() + EDGE_MARGIN, min(now.y() + now.height() - height, usable.bottom() - height - EDGE_MARGIN)
-        )
-        self.place(QRect(left, top, width, height))
+        self.place(self.held_on(usable, now.x(), now.y() + now.height() - height, width, height))
 
     def show_below(self, other: QRect) -> None:
         """Show the window under another one without taking the focus, so a settings change is seen at once.
@@ -988,8 +1025,21 @@ class ChangesWindow(QWidget):
         self.inks = palette(chosen_style())
         self.paint()
 
+    def moveEvent(self, event: QMoveEvent) -> None:
+        """Remember where the user drags the window to, so it opens there next time.
+
+        Only a move during a drag the desktop does for the user counts, so this code's own placing, or the desktop
+        rounding that placing to its pixel grid, is not mistaken for one.
+        :param event: the move
+        """
+        super().moveEvent(event)
+        moved_to = self.geometry().topLeft()
+        if self.desktop_dragging and moved_to != self.placed_at:
+            self.placed_at = moved_to
+            self.layout_store.setValue(POSITION_KEY, moved_to)
+
     def resizeEvent(self, event: QResizeEvent) -> None:
-        """Note a resize by the user: the width is remembered, and the window keeps its size while it stays up.
+        """Note a resize by the user: the size is remembered, and the window keeps it while it stays up.
 
         Sizes this code set are not worth keeping, and a side equal to the window's minimum was the toolkit
         enforcing its floor as text grew, not a resize.
@@ -1003,6 +1053,8 @@ class ChangesWindow(QWidget):
         taller = height != self.placed_height and height != self.minimumSize().height()
         if wider:
             self.remember(WIDTH_KEY, width)
+        if taller:
+            self.remember(HEIGHT_KEY, height)
         if wider or taller:
             self.placed_width, self.placed_height = width, height
             self.hand_sized = True

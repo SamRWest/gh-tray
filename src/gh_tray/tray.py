@@ -203,6 +203,7 @@ class Tray(QObject):
         login.setCheckable(True)
         login.setChecked(autostart_enabled())
         self.menu.addAction("Settings...", self.open_settings)
+        self.menu.addAction("Reset window layout", self.on_reset_layout)
         self.menu.addAction("Open log", self.on_open_log)
         self.menu.addAction("Quit", self.on_quit)
 
@@ -427,6 +428,11 @@ class Tray(QObject):
         settings[NOTIFICATIONS_KEY] = not settings[NOTIFICATIONS_KEY]
         save_config(settings)
         self.build_menu()
+
+    def on_reset_layout(self, *_) -> None:
+        """Put the changes window's place, size, column widths and text size back to their defaults."""
+        self.window.reset_layout()
+        self.zoom.reset()
 
     def on_open_log(self, *_) -> None:
         """Open the log file in whatever the desktop opens text files with."""

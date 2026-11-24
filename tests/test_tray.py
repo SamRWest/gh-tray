@@ -10,9 +10,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QPoint, QSettings
 from PySide6.QtWidgets import QSystemTrayIcon
 
-from gh_tray import config, tray, window
+from gh_tray import config, toolkit, tray, window
 from gh_tray.service import PollResult
 from gh_tray.settings_window import Account
 from gh_tray.status import GREEN, GREY, RED, Status, summary_line
@@ -20,9 +21,12 @@ from gh_tray.tray import Tray
 
 
 @pytest.fixture
-def build_tray(qtbot, monkeypatch):
+def build_tray(qtbot, monkeypatch, tmp_path):
     """Return a function that builds a real Tray with every outside file access stubbed."""
     monkeypatch.setattr(tray, "load_config", lambda: copy.deepcopy(config.DEFAULT_CONFIG))
+    monkeypatch.setattr(
+        tray, "layout_store", lambda: QSettings(str(tmp_path / "layout.ini"), QSettings.Format.IniFormat)
+    )
     monkeypatch.setattr(tray, "rows_to_show", lambda *_args: [])
     monkeypatch.setattr(window, "rows_to_show", lambda *_args: [])
     monkeypatch.setattr(window, "load_config", lambda: {"popup_rows": 20, "max_age_days": 0})
@@ -115,9 +119,21 @@ def test_the_menu_lists_the_expected_entries_in_order(build_tray):
         "Pop-up notifications",
         "Start at login",
         "Settings...",
+        "Reset window layout",
         "Open log",
         "Quit",
     ]
+
+
+def test_reset_window_layout_in_the_menu_forgets_the_place_size_columns_and_zoom(build_tray):
+    subject = build_tray()
+    subject.zoom.step(2)
+    subject.layout.setValue(window.POSITION_KEY, QPoint(50, 60))
+    subject.layout.setValue(window.HEIGHT_KEY, 40.0)
+    subject.layout.setValue(window.COLUMN_KEY.format("repo"), 40.0)
+    next(action for action in subject.menu.actions() if action.text() == "Reset window layout").trigger()
+    assert subject.zoom.steps == 0
+    assert subject.layout.allKeys() == [toolkit.ZOOM_KEY]
 
 
 def test_asking_to_review_without_the_settings_opens_the_ide_list_and_saving_carries_on(
